@@ -11,8 +11,9 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
 - **Real-time Metering**: Forward power, reflected power, SWR, band detection
 - **Web Interface**: Responsive browser UI with Server-Sent Events (SSE) for live updates
 - **MQTT Integration**: Telemetry publishing and command subscription
-- **Optional Display**: BTT TFT35-SPI with custom cross-needle meter and touchscreen
-- **Two Build Targets**:
+- **Touchscreen Display**: Sunton ESP32-3248S035C or BTT TFT35-SPI with custom cross-needle meter
+- **Three Firmware Targets**:
+  - `esp32-3248s035c` (default): Sunton 3.5-inch ST7796 + GT911 capacitive touchscreen
   - `esp32-display`: Full unit with touchscreen (shack controller)
   - `esp32-remote`: Headless unit (web UI, MQTT, optional remote client capability)
 - **Zero-Config Setup**: WiFi captive portal + web-based configuration — no recompiling needed
@@ -21,7 +22,7 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
 ## Hardware
 
 ### Required
-- ESP32 WROOM development board
+- Sunton ESP32-3248S035C, or ESP32 WROOM development board for the BTT/headless variants
 - 4-pin mini-DIN connector for tuner interface (Kycon KMDLAX-4P)
 - **WARNING**: Do NOT use S-Video cables — pins are wired differently and one carries +12V
 
@@ -31,6 +32,9 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
 - LM7805 linear regulator + TO-220 heatsink (powers ESP32 + display from 12V supply)
 
 ### Wiring
+
+For the Sunton board, follow [ESP32-3248S035C wiring and installation](docs/boards/esp32-3248s035c.md).
+Its tuner UART uses **RX GPIO35 / TX GPIO22 on P3**. The table and diagram below apply to the separate ESP32 + BTT hardware.
 
 See [WIRING.md](WIRING.md) for complete details. Quick reference:
 
@@ -71,11 +75,20 @@ No software installation required. Works in Chrome, Edge, or Opera.
 
 ### Option 2: Download Pre-built Firmware
 
-Download `.bin` files from the [latest release](https://github.com/ben-kuhn/Remote-LDGControl/releases), then flash:
+Download the matching image parts from the [latest release](https://github.com/ben-kuhn/Remote-LDGControl/releases).
+For Sunton, flash all five parts at their specified offsets:
 
 ```bash
-esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x0 ldg-tuner-display.bin
+esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash \
+  --flash_mode dio --flash_freq 40m --flash_size 4MB \
+  0x1000 ldg-tuner-3248s035c-bootloader.bin \
+  0x8000 ldg-tuner-3248s035c-partitions.bin \
+  0xe000 boot_app0.bin \
+  0x10000 ldg-tuner-3248s035c.bin \
+  0x390000 ldg-tuner-3248s035c-littlefs.bin
 ```
+
+For the BTT/headless variants, use `display`/`remote` image filenames at the same offsets.
 
 ### Option 3: Build from Source
 
@@ -84,8 +97,15 @@ pip install platformio
 
 pio run -e esp32-display -t upload   # Display unit
 pio run -e esp32-remote -t upload    # Remote/headless unit
+pio run -e esp32-3248s035c -t upload # Sunton integrated touchscreen (default)
+pio run -e esp32-3248s035c -t uploadfs # Web UI in LittleFS (required on first install)
 pio device monitor                   # Serial console
 ```
+
+The build pins PlatformIO Espressif32 6.12.0 (Arduino ESP32 2.0.17), matching the
+existing TLS code. Run `pio test -e native` for the GT911 protocol tests.
+See the [Sunton board guide](docs/boards/esp32-3248s035c.md) for pins, power,
+flash offsets, and checks that still require a physical board.
 
 ## Configuration
 
@@ -292,10 +312,13 @@ This device will inevitably be exposed to networks by people who shouldn't. Defe
 | MQTT | Yes | Yes |
 | Remote Link | Server | Optional Client |
 
+`esp32-3248s035c` provides the display variant's features using the onboard
+ST7796/GT911, 4 MB flash and internal RAM (no PSRAM required).
+
 ## CI/CD
 
 This project uses GitHub Actions for automated builds:
-- Every push to `main` builds both firmware variants
+- Every push to `main` runs native touch tests and builds all three firmware variants and their LittleFS images
 - Tags (e.g., `v1.0.0`) create a GitHub Release with pre-built binaries
 - The `main` branch deploys the web flasher to GitHub Pages
 

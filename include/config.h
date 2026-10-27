@@ -52,8 +52,14 @@
 // Serial (Tuner) Configuration
 // ============================================================
 #define TUNER_SERIAL_BAUD       38400
+#ifdef BOARD_ESP32_3248S035C
+// P3 exposes GPIO35 (input only) and GPIO22. GPIO16/17 drive the RGB LED.
+#define TUNER_RX_PIN            35
+#define TUNER_TX_PIN            22
+#else
 #define TUNER_RX_PIN            16  // UART2 RX - connect to tuner TX
 #define TUNER_TX_PIN            17  // UART2 TX - connect to tuner RX
+#endif
 #define TUNER_UART_NUM          UART_NUM_2
 #define TUNER_CMD_DELAY_MS      250
 #define TUNER_WAKE_DELAY_MS     1
@@ -62,23 +68,28 @@
 // Display Configuration (WITH_DISPLAY builds)
 // ============================================================
 #ifdef WITH_DISPLAY
+#include "User_Setup.h"
 #define DISPLAY_WIDTH           480
 #define DISPLAY_HEIGHT          320
+
+#ifdef BOARD_ESP32_3248S035C
+// ST7796 MADCTL MY|MV: matches the GT911 raw-to-landscape transform.
+#define DISPLAY_ROTATION        7
+#define TOUCH_GT911
+#define TOUCH_SDA               33
+#define TOUCH_SCL               32
+#define TOUCH_RST               25
+// Poll over I2C; do not drive INT (grounded on some stock revisions).
+#else
 #define DISPLAY_ROTATION        1
 
 // BTT TFT35-SPI V2.1 (ILI9488 display + NS2009 I2C touch)
 // JST-XH 10-pin: IORQ, SCL, SDA, RS, NSS, SCK, MOSI, MISO, GND, +5V
-#define TFT_MOSI                23    // Pin 7 - MOSI
-#define TFT_MISO                19    // Pin 8 - MISO
-#define TFT_SCLK                18    // Pin 6 - SCK
-#define TFT_CS                  5     // Pin 5 - NSS (chip select)
-#define TFT_DC                  15    // Pin 4 - RS (data/command)
-#define TFT_BL                  32    // Backlight (always on via resistor, or PWM)
-
 // Touch (NS2009) - uses I2C, not SPI
 #define TOUCH_SDA               21    // Pin 3 - SDA (I2C data)
 #define TOUCH_SCL               22    // Pin 2 - SCL (I2C clock)
 #define TOUCH_IRQ               39    // Pin 1 - IORQ (touch interrupt, optional)
+#endif
 #endif
 
 // ============================================================
@@ -120,7 +131,12 @@
 #define METER_LOW_SCALE         100   // Low range scale (100W for both models)
 
 // Voltage Sense (ADC) - auto-detect PSU voltage
+#ifdef BOARD_ESP32_3248S035C
+// GPIO34 belongs to the onboard light sensor; no free ADC for PSU sensing.
+#define VOLTAGE_SENSE_PIN       -1
+#else
 #define VOLTAGE_SENSE_PIN       34    // GPIO 34 (ADC1_CH6, input-only)
+#endif
 #define VOLTAGE_DIVIDER_RATIO   5.545 // (R1+R2)/R2 = (100k+22k)/22k
 #define VOLTAGE_SAMPLES         32    // Number of ADC samples to average
 

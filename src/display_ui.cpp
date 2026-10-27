@@ -6,13 +6,17 @@
 #include <Wire.h>
 #include <math.h>
 
+DisplayUI* DisplayUI::s_instance = nullptr;
+
+#ifdef TOUCH_GT911
+#include "gt911_touch.h"
+static Gt911Touch<TwoWire> touch(Wire);
+#else
 // NS2009 I2C touch controller (BTT TFT35-SPI V2.1)
 // I2C address: 0x48
 #define NS2009_ADDR 0x48
 #define NS2009_CMD_READ_X 0xC0
 #define NS2009_CMD_READ_Y 0xD0
-
-DisplayUI* DisplayUI::s_instance = nullptr;
 
 static bool ns2009Read(uint16_t* x, uint16_t* y) {
     Wire.requestFrom(NS2009_ADDR, (uint8_t)5);
@@ -32,6 +36,7 @@ static bool tsTouched() {
     Wire.write(NS2009_CMD_READ_X);
     return (Wire.endTransmission() == 0);
 }
+#endif
 
 DisplayUI::DisplayUI()
     : m_tft(nullptr), m_tuner(nullptr),
@@ -56,13 +61,23 @@ DisplayUI::~DisplayUI() {
 
 bool DisplayUI::begin(TunerProtocol* tuner) {
     m_tuner = tuner;
+#ifdef BOARD_ESP32_3248S035C
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, LOW);
+    pinMode(5, OUTPUT);
+    digitalWrite(5, HIGH);  // Deselect the onboard microSD.
+    const uint8_t ledPins[] = {4, 16, 17};
+    for (uint8_t pin : ledPins) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, HIGH);  // Active-low RGB LED off.
+    }
+#endif
     m_tft = new TFT_eSPI();
     m_tft->init();
     m_tft->setRotation(DISPLAY_ROTATION);
     m_tft->fillScreen(TFT_BLACK);
 
     lv_init();
-    Wire.begin(TOUCH_SDA, TOUCH_SCL);
 
     static lv_disp_draw_buf_t draw_buf;
     // 5-line draw buffers (~4.8 KB each). LVGL recommends ~1/10 of the
@@ -214,6 +229,11 @@ bool DisplayUI::begin(TunerProtocol* tuner) {
     lv_obj_add_event_cb(m_btnBypass,   btnBypassEvent,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(m_btnAuto,     btnAutoEvent,     LV_EVENT_CLICKED, NULL);
 
+#ifdef BOARD_ESP32_3248S035C
+    lv_refr_now(NULL);
+    digitalWrite(TFT_BL, HIGH);
+    Serial.println("Display: Sunton ST7796 480x320 ready");
+#endif
     return true;
 }
 
@@ -266,6 +286,25 @@ void DisplayUI::updateAntButtons() {
 }
 
 void DisplayUI::setupTouch() {
+#ifdef WITH_TOUCH
+#ifdef TOUCH_GT911
+    pinMode(TOUCH_RST, OUTPUT);
+    digitalWrite(TOUCH_RST, LOW);
+    delay(10);
+    digitalWrite(TOUCH_RST, HIGH);
+    delay(100);
+    // INT is grounded on some stock boards. Reset without driving INT,
+    // probe both addresses, and use bounded polling instead of interrupts.
+    Wire.setTimeOut(10);
+    const bool busReady = Wire.begin(TOUCH_SDA, TOUCH_SCL, 100000);
+    if (busReady && touch.begin()) {
+        Serial.printf("Touch: GT911 ready at 0x%02x\n", touch.address());
+    } else {
+        Serial.println("Touch: GT911 unavailable; retrying during polling");
+    }
+#else
+    Wire.begin(TOUCH_SDA, TOUCH_SCL);
+#endif
     static lv_indev_drv_t indev_drv;
     lv_indev_drv_init(&indev_drv);
     indev_drv.type = LV_INDEV_TYPE_POINTER;
@@ -273,9 +312,16 @@ void DisplayUI::setupTouch() {
         if (s_instance) s_instance->readTouch(drv, data);
     };
     lv_indev_drv_register(&indev_drv);
+#endif
 }
 
 void DisplayUI::readTouch(lv_indev_drv_t* drv, lv_indev_data_t* data) {
+#ifdef TOUCH_GT911
+    const auto point = touch.poll(millis());
+    data->point.x = point.x;
+    data->point.y = point.y;
+    data->state = point.pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+#else
     if (tsTouched()) {
         uint16_t x, y;
         if (ns2009Read(&x, &y)) {
@@ -288,6 +334,7 @@ void DisplayUI::readTouch(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
+#endif
 }
 
 void DisplayUI::drawMeterEvent(lv_event_t* e) {

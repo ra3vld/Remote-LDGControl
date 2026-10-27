@@ -24,8 +24,9 @@ jobs:
 
       - name: Build all environments
         run: |
-          pio run -e esp32-display
-          pio run -e esp32-remote
+          pio test -e native
+          pio run -e esp32-display -e esp32-remote -e esp32-3248s035c
+          pio run -e esp32-display -e esp32-remote -e esp32-3248s035c -t buildfs
 
       - name: Copy firmware binaries
         run: |
@@ -34,10 +35,11 @@ jobs:
           # only the application as firmware.bin; the others live alongside
           # in .pio/build and in the framework's tools/partitions/ directory.
           mkdir -p firmware
-          for variant in display remote; do
+          for variant in display remote 3248s035c; do
             cp .pio/build/esp32-${variant}/bootloader.bin firmware/ldg-tuner-${variant}-bootloader.bin
             cp .pio/build/esp32-${variant}/partitions.bin firmware/ldg-tuner-${variant}-partitions.bin
             cp .pio/build/esp32-${variant}/firmware.bin   firmware/ldg-tuner-${variant}.bin
+            cp .pio/build/esp32-${variant}/littlefs.bin   firmware/ldg-tuner-${variant}-littlefs.bin
           done
           # boot_app0.bin is identical across builds; ship one copy.
           cp ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin firmware/boot_app0.bin
@@ -101,13 +103,15 @@ jobs:
           #   0x8000  partitions.bin   (partition table)
           #   0xe000  boot_app0.bin    (OTA selector seed)
           #   0x10000 firmware.bin     (application)
+          #   0x390000 littlefs.bin    (web UI)
           # Previously the manifest listed only firmware.bin at offset 0,
           # which clobbered the bootloader and left the chip unbootable
           # after a long erase.
-          for variant in display remote; do
+          for variant in display remote 3248s035c; do
             case $variant in
               display)   pretty="LDG Tuner Controller (Display)" ;;
               remote)    pretty="LDG Tuner Controller (Remote)" ;;
+              3248s035c) pretty="LDG Tuner Controller (Sunton ESP32-3248S035C)" ;;
             esac
             cat > dist/manifest-${variant}.json << EOF
           {
@@ -120,7 +124,8 @@ jobs:
                   { "path": "ldg-tuner-${variant}-bootloader.bin", "offset": 4096 },
                   { "path": "ldg-tuner-${variant}-partitions.bin", "offset": 32768 },
                   { "path": "boot_app0.bin",                       "offset": 57344 },
-                  { "path": "ldg-tuner-${variant}.bin",            "offset": 65536 }
+                  { "path": "ldg-tuner-${variant}.bin",            "offset": 65536 },
+                  { "path": "ldg-tuner-${variant}-littlefs.bin",   "offset": 3735552 }
                 ]
               }
             ]

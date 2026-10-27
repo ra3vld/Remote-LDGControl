@@ -1,5 +1,11 @@
 # Wiring Diagram
 
+## Sunton ESP32-3248S035C
+
+The integrated Sunton board has different pins from the external BTT display
+below. Use the [Sunton board guide](docs/boards/esp32-3248s035c.md): tuner RX is
+GPIO35, tuner TX is GPIO22, both on P3. The onboard display/touch are already wired.
+
 ![Wiring Diagram](wiring-diagram.svg)
 
 ## ESP32 NodeMCU Pin Assignment
@@ -28,7 +34,7 @@ The graphical diagram above shows the complete wiring. For quick reference, here
 
 **Serial**: 38400 baud, 8N1, TTL (5V)
 
-**Note**: If your ESP32 is 3.3V logic only, use a level shifter (e.g., TXS0108E or 74HCT245) between the ESP32 and tuner for reliable communication. Many ESP32 dev boards have 5V-tolerant GPIO.
+**Note**: ESP32 GPIO use 3.3V logic and are not 5V-tolerant. Use a suitable TTL level interface; the tuner's 5V TX must be converted to 3.3V before reaching the ESP32 RX input.
 
 ## Connection 2: Power Supply
 
@@ -161,7 +167,7 @@ Connect to it — a captive portal will open for your home WiFi setup. Once conn
 2. **Power supply**: Use a separate 12V DC supply (13.8V typical, 2A minimum). The LM7805 regulator requires a heatsink (~3.1W dissipation at 350mA).
 3. **Regulator capacitors**: Place the 100nF ceramic close to the regulator input, and the 10µF close to the output. These are required for stability.
 4. **Tuner connection**: The mini-DIN carries only GND, TX, and RX. Pin 1 is not connected.
-5. **Level shifting**: The AT-1000ProII uses 5V TTL. Most ESP32 GPIO are 5V-tolerant, but if you get serial errors, add a level shifter.
+5. **Level shifting**: The AT-1000ProII uses 5V TTL. ESP32 GPIO are not 5V-tolerant; use a suitable level interface between the tuner and ESP32.
 6. **Display bus**: The display uses SPI (MOSI/MISO/SCK/CS/DC) and touch uses I2C (SDA/SCL/IRQ) — these are separate buses sharing only the ESP32.
 7. **Backlight**: GPIO 32 controls backlight via PWM. Set to HIGH for full brightness.
 8. **Touch IRQ**: GPIO 39 is input-only, which is fine for the touch interrupt line.

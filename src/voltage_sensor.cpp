@@ -1,9 +1,13 @@
 #include "voltage_sensor.h"
+#include "config_manager.h"
+#include <math.h>
 
 VoltageSensor voltageSensor;
 
-void VoltageSensor::begin(uint8_t pin) {
+void VoltageSensor::begin(int8_t pin) {
     m_pin = pin;
+    m_valid = false;
+    if (m_pin < 0) return;
     pinMode(m_pin, INPUT);
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
@@ -11,7 +15,13 @@ void VoltageSensor::begin(uint8_t pin) {
 }
 
 double VoltageSensor::readVoltage() {
-    if (!m_valid) return METER_PSU_VOLTAGE;
+    // Sunton has no free PSU ADC. Use the configured tuner supply voltage
+    // both there and when an optional external voltage sensor is unavailable.
+    double fallback = configManager.get().meterPsuVoltage;
+    if (fallback < 8.0 || fallback > 18.0 || !isfinite(fallback)) {
+        fallback = METER_PSU_VOLTAGE;
+    }
+    if (!m_valid) return fallback;
 
     uint32_t sum = 0;
     for (int i = 0; i < VOLTAGE_SAMPLES; i++) {
@@ -28,7 +38,7 @@ double VoltageSensor::readVoltage() {
 
     // Sanity check: if reading is unreasonable, fall back to default
     if (supplyVoltage < 8.0 || supplyVoltage > 18.0) {
-        return METER_PSU_VOLTAGE;
+        return fallback;
     }
 
     return supplyVoltage;
