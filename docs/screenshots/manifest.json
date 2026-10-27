@@ -1,0 +1,46 @@
+{
+  "commit": "7532da7c773852eb01f68df2c8cf3f79588d76ef",
+  "sourcesUnchanged": true,
+  "sourceSha256": {
+    "src/display_ui.cpp": "159b75c15701b0e3f6c1dda9cf47633983845b88ce245d1e1eccfb4d9a01259e",
+    "include/display_ui.h": "beda44b4423fe79429dc7f745f6604840f8449e0fbb8a8974329acf56b072999",
+    "include/config.h": "a63daa347c4eea93c42273e4d5400e30320f56cce4c67cf6efb5086c00fade6f",
+    "include/User_Setup.h": "08085d3f5989c2e55c9b98d6c02e427590d5411b4bc5dc4a6990d6fe3a733f16",
+    "include/lv_conf.h": "2ec159f2a59699cb50a11e77f60716aa9bfd58e9f03bcd5e949e45969b795d9a",
+    "data/index.html": "5bcc14d945aeb953e6a6e01b2055002464f2784be263c922ab20eb822f58e30d"
+  },
+  "images": {
+    "sunton-idle.png": {
+      "width": 480,
+      "height": 320,
+      "sha256": "ebd923614e6484767cbfbb57271a97e704b7351a5a679c67a7a73ec6dfa3c9e1"
+    },
+    "sunton-transmit.png": {
+      "width": 480,
+      "height": 320,
+      "sha256": "3b5b648cc0d086e15a195fe8a61e730f31e7ac9ffc524eac0f04078eb9e14bae"
+    },
+    "web-control-desktop.png": {
+      "width": 1100,
+      "height": 800,
+      "sha256": "957089ff3e44d6ccb61175a15f0ca6897d9797812cdcba51c18b7161d8909db6"
+    },
+    "web-control-mobile.png": {
+      "width": 390,
+      "height": 844,
+      "sha256": "f6ed5f92fe25b7ed2e85946c417dfac88ca9dd6d9bd2619fd1647ffd5a511a05"
+    },
+    "web-settings.png": {
+      "width": 1100,
+      "height": 992,
+      "sha256": "5d44b1711a408e962ad413463525cccf4e79e9eba474b9d460f82f73d636df0c"
+    }
+  },
+  "suntonCapture": "Actual src/display_ui.cpp and LVGL 8.4.0 compiled for host; UART, WiFi, touch and TFT transport stubbed; framebuffer saved at 480x320.",
+  "webCapture": "Unchanged data/index.html in Chromium, using intercepted API and WebSocket demo fixtures; external requests blocked.",
+  "hardwareCapture": false,
+  "observations": [
+    "Sunton bottom band/scale labels are partially outside the screen.",
+    "Sunton network text is clipped at the right edge."
+  ]
+}

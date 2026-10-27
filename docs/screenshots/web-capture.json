@@ -1,0 +1,29 @@
+{
+  "source": "data/index.html",
+  "demoTelemetry": {
+    "fwd_power": 250,
+    "ref_power": 10,
+    "swr": 1.5,
+    "band": "20m",
+    "mode": 1,
+    "antenna": 1
+  },
+  "demoConfig": {
+    "build": "display",
+    "wifiSSID": "RadioShack",
+    "mqttBroker": "",
+    "mqttPort": 1883,
+    "webUsername": "admin",
+    "meterPsuVoltage": 13.8,
+    "ant1Name": "20m Dipole",
+    "ant2Name": "Vertical",
+    "useStaticIP": false,
+    "currentIP": "192.168.1.50",
+    "currentNetmask": "255.255.255.0",
+    "currentGateway": "192.168.1.1",
+    "currentDNS": "192.168.1.1",
+    "remoteHost": "ldgcontrol-remote.local"
+  },
+  "externalRequestsAllowed": false,
+  "pageErrors": []
+}

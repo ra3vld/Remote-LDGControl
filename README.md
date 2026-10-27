@@ -19,6 +19,34 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
 - **Zero-Config Setup**: WiFi captive portal + web-based configuration — no recompiling needed
 - **Security**: HTTP Basic Auth, rate limiting, login lockout
 
+## Screenshots
+
+Software previews rendered from the current UI code with demo data, not photos
+from a physical board. The transmit example shows 250 W forward, 10 W reflected,
+SWR 1.5, and the 20m band. Network details and antenna names are fictional.
+
+### Sunton ESP32-3248S035C — 480×320
+
+| Idle | Transmitting |
+|---|---|
+| ![Sunton display at idle](docs/screenshots/sunton-idle.png) | ![Sunton display with transmit telemetry](docs/screenshots/sunton-transmit.png) |
+
+The current Sunton layout clips the bottom band/scale labels and the right edge
+of the network text. These previews preserve that layout for inspection.
+
+### Web interface
+
+![Desktop tuner controls](docs/screenshots/web-control-desktop.png)
+
+<details>
+<summary>Mobile controls and settings</summary>
+
+![Mobile tuner controls](docs/screenshots/web-control-mobile.png)
+
+![Web settings](docs/screenshots/web-settings.png)
+
+</details>
+
 ## Hardware
 
 ### Required
