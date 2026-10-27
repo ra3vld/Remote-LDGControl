@@ -30,23 +30,9 @@
 #define MQTT_PASSWORD           "change_me"
 #define MQTT_QOS                1
 #define MQTT_RETAIN_TELEMETRY   false
-#define MQTT_KEEPALIVE          60
+#define LDG_MQTT_KEEPALIVE      60
 
-// MQTT Topics (base path)
-#define MQTT_TOPIC_BASE         "ldg/tuner"
-#define MQTT_TOPIC_FWD_POWER    MQTT_TOPIC_BASE "/telemetry/fwd_power"
-#define MQTT_TOPIC_REF_POWER    MQTT_TOPIC_BASE "/telemetry/ref_power"
-#define MQTT_TOPIC_SWR          MQTT_TOPIC_BASE "/telemetry/swr"
-#define MQTT_TOPIC_BAND         MQTT_TOPIC_BASE "/telemetry/band"
-#define MQTT_TOPIC_STATUS       MQTT_TOPIC_BASE "/status"
-#define MQTT_TOPIC_CMD          MQTT_TOPIC_BASE "/command"
-#define MQTT_TOPIC_CMD_RESPONSE MQTT_TOPIC_BASE "/command/response"
-
-// Remote unit MQTT topics (prefixed with unit ID)
-#define MQTT_REMOTE_TOPIC_BASE  "ldg/tuner/remote"
-#define MQTT_REMOTE_TELEMETRY   MQTT_REMOTE_TOPIC_BASE "/telemetry"
-#define MQTT_REMOTE_STATUS      MQTT_REMOTE_TOPIC_BASE "/status"
-#define MQTT_REMOTE_CMD         MQTT_REMOTE_TOPIC_BASE "/command"
+// MQTT topics and Home Assistant identities are generated per-device from MAC.
 
 // ============================================================
 // Serial (Tuner) Configuration

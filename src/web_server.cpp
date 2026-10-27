@@ -2,6 +2,7 @@
 #include "config_manager.h"
 #include "portal_cert.h"
 #include "config.h"
+#include "mqtt_protocol.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <WiFi.h>
@@ -213,21 +214,10 @@ static void sendJson(hsv::HTTPResponse* res, int code, const String& body) {
     res->print(body.c_str());
 }
 
-static const char* bandToString(tuner_band_t band) {
-    return TunerProtocol::bandToString(band);
-}
-
-// Convert a meter to the JSON payload we ship over SSE / /api/status.
-static String serializeMeter(const tuner_meter_t* meter, TunerProtocol* tuner) {
+// Web/SSE retain numeric enums; MQTT uses text labels from the same snapshot.
+static String serializeState(const tuner_state_t& state) {
     JsonDocument doc;
-    doc["fwd_power"] = meter->forward_power_watts;
-    doc["ref_power"] = meter->reflected_power_watts;
-    doc["swr"]       = meter->swr;
-    doc["band"]      = bandToString(meter->band);
-    if (tuner) {
-        doc["mode"]    = tuner->getMode();
-        doc["antenna"] = tuner->getAntenna();
-    }
+    ldg::writeState(doc, state, false);
     String out;
     serializeJson(doc, out);
     return out;
@@ -271,22 +261,11 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     LdgWebServer* self = s_instance;
     if (!self) { sendJson(res, 500, "{\"error\":\"no instance\"}"); return; }
 
-    const tuner_meter_t* meter = nullptr;
-    if (self->getMeterGetter()) meter = self->getMeterGetter()();
-    else if (self->getTuner())  meter = self->getTuner()->getMeterData();
-
-    if (!meter) { sendJson(res, 500, "{\"error\":\"no meter data\"}"); return; }
-
+    const tuner_state_t state = self->getStateGetter() ? self->getStateGetter()() :
+        self->getTuner() ? self->getTuner()->getState() : tuner_state_t{};
     JsonDocument doc;
-    doc["fwd_power"] = meter->forward_power_watts;
-    doc["ref_power"] = meter->reflected_power_watts;
-    doc["swr"]       = meter->swr;
-    doc["band"]      = bandToString(meter->band);
-    if (self->getTuner()) {
-        doc["mode"]      = self->getTuner()->getMode();
-        doc["antenna"]   = self->getTuner()->getAntenna();
-        doc["connected"] = self->getTuner()->isConnected();
-    }
+    ldg::writeState(doc, state, false);
+    doc["connected"] = state.remote || (self->getTuner() && self->getTuner()->isConnected());
     String out;
     serializeJson(doc, out);
     sendJson(res, 200, out);
@@ -300,6 +279,8 @@ static void h_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     doc["mqttBroker"]      = cfg.mqttBroker;
     doc["mqttPort"]        = cfg.mqttPort;
     doc["mqttUsername"]    = cfg.mqttUsername;
+    doc["mqttDiscoveryEnabled"] = cfg.mqttDiscoveryEnabled;
+    doc["mqttBaseTopic"] = ldg::mqttIdentity(WiFi.macAddress().c_str()).base;
     doc["webUsername"]     = cfg.webUsername;
     doc["meterPsuVoltage"] = cfg.meterPsuVoltage;
     doc["ant1Name"]        = cfg.ant1Name;
@@ -343,12 +324,19 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     }
 
     DeviceConfig cfg = configManager.get();
-    if (doc["mqttBroker"])      strncpy(cfg.mqttBroker,   doc["mqttBroker"],   sizeof(cfg.mqttBroker)   - 1);
+    if (doc["mqttBroker"].is<const char*>())
+        strlcpy(cfg.mqttBroker, doc["mqttBroker"], sizeof(cfg.mqttBroker));
     if (doc["mqttPort"])        cfg.mqttPort = doc["mqttPort"];
-    if (doc["mqttUsername"])    strncpy(cfg.mqttUsername, doc["mqttUsername"], sizeof(cfg.mqttUsername) - 1);
-    if (doc["mqttPassword"])    strncpy(cfg.mqttPassword, doc["mqttPassword"], sizeof(cfg.mqttPassword) - 1);
+    if (doc["mqttUsername"].is<const char*>())
+        strlcpy(cfg.mqttUsername, doc["mqttUsername"], sizeof(cfg.mqttUsername));
+    // Passwords are never returned by GET; an empty form field preserves the secret.
+    if (doc["mqttPassword"].is<const char*>() && doc["mqttPassword"].as<const char*>()[0])
+        strlcpy(cfg.mqttPassword, doc["mqttPassword"], sizeof(cfg.mqttPassword));
+    if (doc["mqttDiscoveryEnabled"].is<bool>())
+        cfg.mqttDiscoveryEnabled = doc["mqttDiscoveryEnabled"].as<bool>();
     if (doc["webUsername"])     strncpy(cfg.webUsername,  doc["webUsername"],  sizeof(cfg.webUsername)  - 1);
-    if (doc["webPassword"])     strncpy(cfg.webPassword,  doc["webPassword"],  sizeof(cfg.webPassword)  - 1);
+    if (doc["webPassword"].is<const char*>() && doc["webPassword"].as<const char*>()[0])
+        strlcpy(cfg.webPassword, doc["webPassword"], sizeof(cfg.webPassword));
     if (doc["meterPsuVoltage"]) cfg.meterPsuVoltage = doc["meterPsuVoltage"];
     if (doc["ant1Name"])        strncpy(cfg.ant1Name, doc["ant1Name"], sizeof(cfg.ant1Name) - 1);
     if (doc["ant2Name"])        strncpy(cfg.ant2Name, doc["ant2Name"], sizeof(cfg.ant2Name) - 1);
@@ -420,33 +408,13 @@ static void h_telemetry(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     DeserializationError err = deserializeJson(doc, body);
     if (err) { sendJson(res, 400, "{\"error\":\"invalid json\"}"); return; }
 
-    tuner_meter_t meter{};
-    meter.forward_power_watts   = doc["fwd_power"] | 0.0;
-    meter.reflected_power_watts = doc["ref_power"] | 0.0;
-    meter.swr                   = doc["swr"]       | 1.0;
-    meter.forward_power_raw     = doc["fwd_raw"]   | 0;
-    meter.reflected_power_raw   = doc["ref_raw"]   | 0;
-
-    const char* b = doc["band"];
-    if (b) {
-        if      (!strcmp(b, "160m")) meter.band = BAND_160M;
-        else if (!strcmp(b, "80m"))  meter.band = BAND_80M;
-        else if (!strcmp(b, "60m"))  meter.band = BAND_60M;
-        else if (!strcmp(b, "40m"))  meter.band = BAND_40M;
-        else if (!strcmp(b, "30m"))  meter.band = BAND_30M;
-        else if (!strcmp(b, "20m"))  meter.band = BAND_20M;
-        else if (!strcmp(b, "17m"))  meter.band = BAND_17M;
-        else if (!strcmp(b, "15m"))  meter.band = BAND_15M;
-        else if (!strcmp(b, "12m"))  meter.band = BAND_12M;
-        else if (!strcmp(b, "10m"))  meter.band = BAND_10M;
-        else if (!strcmp(b, "6m"))   meter.band = BAND_6M;
-        else                         meter.band = BAND_UNKNOWN;
-    }
-
+    tuner_state_t state = ldg::readWebState(doc.as<JsonVariantConst>());
+    state.remote = true;
     if (s_instance) {
-        s_instance->pushMeterEvent(&meter);
         if (s_instance->getRemoteTelemetryHandler()) {
-            s_instance->getRemoteTelemetryHandler()(&meter);
+            s_instance->getRemoteTelemetryHandler()(state);
+        } else {
+            s_instance->pushMeterEvent(state);
         }
     }
     sendJson(res, 200, "{\"result\":\"ok\"}");
@@ -459,7 +427,7 @@ static void h_telemetry(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
 
 LdgWebServer::LdgWebServer()
     : m_server(nullptr), m_sslCert(nullptr), m_tuner(nullptr),
-      m_cmdHandler(nullptr), m_meterGetter(nullptr),
+      m_cmdHandler(nullptr), m_stateGetter(nullptr),
       m_remoteTelemetryHandler(nullptr), m_lastMeterUpdate(0) {
     s_instance = this;
 }
@@ -471,11 +439,11 @@ LdgWebServer::~LdgWebServer() {
 }
 
 bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
-                         meter_getter_t meterGetter,
+                         state_getter_t stateGetter,
                          remote_telemetry_handler_t remoteTelemetryHandler) {
     m_tuner = tuner;
     m_cmdHandler = cmdHandler;
-    m_meterGetter = meterGetter;
+    m_stateGetter = stateGetter;
     m_remoteTelemetryHandler = remoteTelemetryHandler;
     s_instance = this;
 
@@ -529,10 +497,8 @@ void LdgWebServer::loop() {
     // Mirror the meter into SSE state every 500ms so polling subscribers see
     // updates without us needing an explicit push from every meter source.
     if (millis() - m_lastMeterUpdate > 500) {
-        const tuner_meter_t* meter = nullptr;
-        if (m_meterGetter)   meter = m_meterGetter();
-        else if (m_tuner)    meter = m_tuner->getMeterData();
-        if (meter) pushMeterEvent(meter);
+        if (m_stateGetter) pushMeterEvent(m_stateGetter());
+        else if (m_tuner) pushMeterEvent(m_tuner->getState());
         m_lastMeterUpdate = millis();
     }
 
@@ -556,8 +522,8 @@ void LdgWebServer::loop() {
     }
 }
 
-void LdgWebServer::pushMeterEvent(const tuner_meter_t* meter) {
-    String payload = serializeMeter(meter, m_tuner);
+void LdgWebServer::pushMeterEvent(const tuner_state_t& state) {
+    String payload = serializeState(state);
     portENTER_CRITICAL(&s_sse.mux);
     strncpy(s_sse.meterJson, payload.c_str(), sizeof(s_sse.meterJson));
     s_sse.meterJson[sizeof(s_sse.meterJson) - 1] = '\0';

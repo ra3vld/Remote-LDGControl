@@ -404,9 +404,23 @@
                     </div>
                     <div class="form-group">
                         <label>Password</label>
-                        <input type="password" id="mqttPass" placeholder="change_me">
+                        <input type="password" id="mqttPass" placeholder="Leave blank to keep password" autocomplete="new-password">
                     </div>
                 </div>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:0.5rem">
+                        <input type="checkbox" id="mqttDiscoveryEnabled" checked style="width:auto">
+                        Home Assistant auto discovery
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>Device topic (generated from MAC)</label>
+                    <input type="text" id="mqttBaseTopic" readonly>
+                </div>
+                <p style="font-size:0.7rem;color:var(--text-secondary)">
+                    Leave Broker empty to disable MQTT. Discovery uses the homeassistant prefix.
+                    State updates every 1 second during significant changes, otherwise every 30 seconds.
+                </p>
             </div>
             <div class="settings-section">
                 <h3>Web Authentication</h3>
@@ -814,6 +828,8 @@
                 if (data.mqttBroker) document.getElementById('mqttBroker').value = data.mqttBroker;
                 if (data.mqttPort) document.getElementById('mqttPort').value = data.mqttPort;
                 if (data.mqttUsername) document.getElementById('mqttUser').value = data.mqttUsername;
+                document.getElementById('mqttDiscoveryEnabled').checked = data.mqttDiscoveryEnabled !== false;
+                document.getElementById('mqttBaseTopic').value = data.mqttBaseTopic || '';
                 if (data.webUsername) document.getElementById('webUser').value = data.webUsername;
                 if (data.meterPsuVoltage) document.getElementById('psuVoltage').value = data.meterPsuVoltage;
                 if (data.ant1Name) document.getElementById('ant1Name').value = data.ant1Name;
@@ -851,6 +867,7 @@
                 mqttPort: parseInt(document.getElementById('mqttPort').value),
                 mqttUsername: document.getElementById('mqttUser').value,
                 mqttPassword: document.getElementById('mqttPass').value,
+                mqttDiscoveryEnabled: document.getElementById('mqttDiscoveryEnabled').checked,
                 webUsername: document.getElementById('webUser').value,
                 webPassword: document.getElementById('webPass').value,
                 meterPsuVoltage: parseFloat(document.getElementById('psuVoltage').value),

@@ -245,6 +245,18 @@ const tuner_meter_t* TunerProtocol::getMeterData() const {
     return &m_meterData;
 }
 
+tuner_state_t TunerProtocol::getState() const {
+    TunerLock lock(m_mutex);
+    tuner_state_t state;
+    if (lock) {
+        state.meter = m_meterData;
+        state.meterValid = m_hasMeterData;
+        state.mode = m_mode;
+        state.antenna = m_antenna;
+    }
+    return state;
+}
+
 tuner_mode_t TunerProtocol::getMode() const {
     return m_mode;
 }
@@ -342,6 +354,7 @@ void TunerProtocol::publishMeterData() {
 
     m_meterData.band = decodeBand(band_raw);
 
+    m_hasMeterData = true;
     if (m_meterCallback) {
         m_meterCallback(&m_meterData);
     }

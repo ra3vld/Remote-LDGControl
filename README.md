@@ -10,7 +10,7 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
   - Antenna A/B switching
 - **Real-time Metering**: Forward power, reflected power, SWR, band detection
 - **Web Interface**: Responsive browser UI with Server-Sent Events (SSE) for live updates
-- **MQTT Integration**: Telemetry publishing and command subscription
+- **MQTT Integration**: Per-device telemetry, adaptive 1/30-second updates, and Home Assistant auto discovery (six sensors and six command buttons)
 - **Touchscreen Display**: Sunton ESP32-3248S035C or BTT TFT35-SPI with custom cross-needle meter
 - **Three Firmware Targets**:
   - `esp32-3248s035c` (default): Sunton 3.5-inch ST7796 + GT911 capacitive touchscreen
@@ -154,7 +154,9 @@ Go to **Settings** (or `GET /api/config`) to configure:
 | WiFi SSID / Password | Your network credentials |
 | MQTT Broker | Hostname or IP of your MQTT broker |
 | MQTT Port | Broker port (default 1883) |
-| MQTT Username / Password | Broker authentication |
+| MQTT Username / Password | Broker authentication; leave password blank to preserve it |
+| Home Assistant auto discovery | Enabled by default; discovery prefix is `homeassistant` |
+| Device topic | Read-only base topic generated from the board's full MAC address |
 | Web Username / Password | Web UI authentication |
 | Meter PSU Voltage | Tuner's power supply voltage for accurate power calculation (default 13.8V). This is the voltage at the tuner's 12V input, not the ESP32's supply. |
 | Remote Unit ID | ID for remote unit (default 1) |
@@ -189,27 +191,106 @@ All endpoints require HTTP Basic Auth.
 
 Connect to `http://<esp32-ip>/api/events` for real-time meter updates. The browser UI uses this automatically. Remote units also connect here to receive commands.
 
-## MQTT Topics
+## MQTT and Home Assistant
 
-### Telemetry (published)
+MQTT is optional: leave **Settings → MQTT → Broker** empty to disable it.
+Otherwise set the broker address, port (default `1883`), and optional credentials.
+Leaving the password field blank when saving settings preserves the stored password.
+Settings are saved in NVS and applied after the device restarts. The transport is
+plain MQTT; MQTT TLS is not implemented.
 
-| Topic | Description |
-|-------|-------------|
-| `ldg/tuner/telemetry/fwd_power` | Forward power (Watts), JSON |
-| `ldg/tuner/telemetry/ref_power` | Reflected power (Watts), JSON |
-| `ldg/tuner/telemetry/swr` | SWR ratio |
-| `ldg/tuner/telemetry/band` | Current band |
-| `ldg/tuner/status` | Online/offline status (retained) |
+Enable the MQTT integration in Home Assistant against the same broker, with its
+default discovery prefix `homeassistant`. **Home Assistant auto discovery** is
+on by default in the controller's web settings, including after upgrading older
+configurations. Each controller creates one HA device with:
 
-### Commands (subscribed)
+- Sensors: forward power (W), reflected power (W), SWR, band, mode, and antenna.
+- Buttons: Memory Tune, Full Tune, Toggle Bypass, Toggle Antenna, Auto Mode, Manual Mode.
 
-| Topic | Description |
-|-------|-------------|
-| `ldg/tuner/command` | Command JSON: `{"command": "full_tune"}` |
+Mode values are `auto`, `manual`, `bypass`, or `unknown`; antenna values are `A`,
+`B`, or `unknown`. Numeric readings are `null` until received or when non-finite.
+Mode and antenna reflect received tuner responses; booting does not assume either.
+Availability indicates the controller's MQTT connection, not proof of tuner UART
+communication. Buttons report the existing command executor's result; a successful
+tune command response is not a measurement of the resulting antenna match.
 
-Valid commands: `toggle`, `memory_tune`, `full_tune`, `bypass`, `auto`
+### Device topics
 
-Response published to `ldg/tuner/command/response`.
+The base topic is `ldg/tuner/<mac>`, where `<mac>` is the full station MAC address
+in lowercase with no separators (for example `ldg/tuner/aabbcc010203`). Find the
+actual base topic in Settings or `GET /api/config` (`mqttBaseTopic`).
+
+**Migration:** the former shared `ldg/tuner/...` and `ldg/tuner/remote/...` topics
+are no longer published or subscribed. Update existing MQTT clients and automations.
+Display ↔ remote communication continues over HTTPS/SSE and needs no MQTT broker.
+
+| Topic relative to the base | Direction | Payload / retention |
+|---|---|---|
+| `/state` | Published | JSON snapshot, not retained |
+| `/status` | Published | `online` / `offline`, retained; Last Will is `offline` |
+| `/command` | Subscribed | Command JSON; publish with QoS 0 and retain disabled |
+| `/command/response` | Published | Command result JSON, not retained |
+
+Example `/state` payload:
+
+```json
+{"fwd_power":250,"ref_power":10,"swr":1.5,"fwd_raw":375,"ref_raw":75,"band":"20m","mode":"auto","antenna":"A","source":"local"}
+```
+
+The snapshot always uses the active tuner. A display controller follows the
+remote tuner, including its band, mode, and antenna, while connected; it falls
+back to its local UART tuner after a remote disconnect or a 60-second telemetry
+timeout. `source` is `local` or `remote`. Commands follow the same active source.
+
+### Adaptive state updates
+
+State is sent at most once per second during significant changes, and every
+30 seconds otherwise, including unchanged or zero-power readings. Changes are
+compared with the last successfully sent snapshot, so small changes accumulate.
+Any of these triggers the fast interval:
+
+| Measurement / state | Significant change |
+|---|---|
+| Forward power | At least `max(1 W, 1% of the previous value)` |
+| Reflected power | At least `max(0.1 W, 1% of the previous value)` |
+| SWR | At least `0.05` |
+| Either power reading | Zero ↔ nonzero transition, regardless of size |
+| Band, mode, antenna, source, or value validity | Any change |
+
+Intermediate changes are coalesced into the latest snapshot. First connection,
+reconnection, Home Assistant discovery, and completed web/MQTT commands request an
+immediate state update. A failed publish does not advance the timer or baseline.
+Thresholds are fixed in firmware. Web/SSE and display refresh rates are unchanged.
+
+### Commands and discovery lifecycle
+
+Send commands such as `{"command":"full_tune"}` to the per-device `/command`
+topic. Supported commands: `toggle`, `memory_tune`, `full_tune`, `bypass`, `auto`,
+`manual`. Responses contain `command` and `result`: `success`, `failed`,
+`invalid_json`, `missing_command`, or `unknown_command`. Commands are not retried
+automatically and must not be retained.
+
+Discovery configurations are retained at
+`homeassistant/<sensor|button>/ldg_<mac>/<entity>/config`. Entity and device IDs
+stay stable across restarts and firmware variants. Configurations and current
+state are resent after a broker reconnect or HA's `homeassistant/status = online`.
+Each board subscribes only to its own command topic and HA's birth topic.
+
+Turning auto discovery off (`mqttDiscoveryEnabled: false` in `POST /api/config`)
+removes this board's retained discovery configurations on its next connection;
+normal MQTT state and commands remain available. Keep the broker configured and
+reachable until cleanup completes. Disabling MQTT or switching brokers cannot
+remove old discovery records from an unreachable/previous broker; remove those
+records there manually if needed.
+
+### Verification
+
+`pio test -e native` runs the existing touch tests plus MQTT scheduling, JSON,
+command, active-source, and simulated-broker lifecycle tests. The MQTT tests cover
+12 entities per board, two independent boards, HA/broker restarts, retained-config
+cleanup, zero readings, failed writes, and `millis()` wraparound.
+For a live HA/broker check and hardware validation, see
+[the MQTT smoke-test checklist](tests/mqtt-smoke.md).
 
 ## Protocol Reference
 
@@ -308,7 +389,10 @@ No MQTT broker required for the link. The remote unit connects to the display un
 
 ### MQTT (Optional)
 
-If you have an MQTT broker and want Home Assistant integration, both units can also connect to it. Configure broker credentials via the web UI. The remote unit publishes to `ldg/tuner/remote/telemetry` and the display unit subscribes. This is additive to the HTTP/SSE link, not a replacement.
+Both units can independently connect to a broker and appear as separate Home
+Assistant devices. Each uses its own `ldg/tuner/<mac>/...` topics. A display
+controller publishes its active tuner; the headless unit publishes its local
+tuner. MQTT does not carry the display ↔ remote link; that remains HTTPS/SSE.
 
 ## Security
 

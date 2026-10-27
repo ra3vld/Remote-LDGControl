@@ -23,6 +23,7 @@ LdgWebServer webServer;
 
 #ifdef WITH_DISPLAY
 DisplayUI display;
+static std::atomic<bool> s_remoteDisplayPending{false};
 
 static WiFiClientSecure s_remoteClient;
 static bool             s_remoteConnected  = false;
@@ -51,24 +52,24 @@ static String buildBasicAuth(const char* user, const char* pass) {
 static uint32_t lastWiFiCheck = 0;
 static bool wifiConnected = false;
 
-// Meter update tracking
-static uint32_t lastMeterPublish = 0;
-static uint32_t lastHeartbeat = 0;
+// Remote snapshots may also arrive from the web-server task (POST telemetry).
+static portMUX_TYPE s_activeMux = portMUX_INITIALIZER_UNLOCKED;
+static ldg::ActiveTunerState s_activeState;
+static uint32_t s_lastRemoteTelemetry = 0;
 
-// Remote unit state
-static bool remoteUnitConnected = false;
-static bool usingRemoteTuner = false;
-static tuner_meter_t s_remoteMeter;
+bool activeRemoteConnected() {
+    portENTER_CRITICAL(&s_activeMux);
+    const bool connected = s_activeState.remoteConnected();
+    portEXIT_CRITICAL(&s_activeMux);
+    return connected;
+}
 
-// ============================================================
-// Meter Getter (for web server)
-// ============================================================
-
-const tuner_meter_t* getActiveMeter() {
-    if (usingRemoteTuner) {
-        return &s_remoteMeter;
-    }
-    return tuner.getMeterData();
+tuner_state_t getActiveState() {
+    portENTER_CRITICAL(&s_activeMux);
+    const bool remote = s_activeState.remoteConnected();
+    const tuner_state_t state = s_activeState.select(tuner_state_t{});
+    portEXIT_CRITICAL(&s_activeMux);
+    return remote ? state : tuner.getState();
 }
 
 // ============================================================
@@ -117,25 +118,29 @@ bool setupFS() {
 // Remote Telemetry Callback (display unit)
 // ============================================================
 
-void onRemoteTelemetry(const tuner_meter_t* meter) {
-    usingRemoteTuner = true;
-    memcpy(&s_remoteMeter, meter, sizeof(tuner_meter_t));
-
+void onRemoteTelemetry(const tuner_state_t& state) {
+    portENTER_CRITICAL(&s_activeMux);
+    s_activeState.updateRemote(state);
+    s_lastRemoteTelemetry = millis();
+    portEXIT_CRITICAL(&s_activeMux);
 #ifdef WITH_DISPLAY
-    display.updateMeter(meter);
-    display.updateStatus(tuner.getMode(), tuner.getAntenna());
+    // POST telemetry runs on the web task; LVGL belongs to the main task.
+    s_remoteDisplayPending.store(true);
 #endif
+    webServer.pushMeterEvent(getActiveState());
 }
 
-void onRemoteStatus(bool connected) {
-    remoteUnitConnected = connected;
-    usingRemoteTuner = connected;
-
-    if (!connected) {
-        memset(&s_remoteMeter, 0, sizeof(tuner_meter_t));
-    }
-
-    Serial.printf("Remote unit %s\n", connected ? "connected" : "disconnected");
+void onRemoteDisconnected() {
+    portENTER_CRITICAL(&s_activeMux);
+    s_activeState.disconnectRemote();
+    portEXIT_CRITICAL(&s_activeMux);
+    const tuner_state_t local = tuner.getState();
+    webServer.pushMeterEvent(local);
+#ifdef WITH_DISPLAY
+    display.updateMeter(&local.meter);
+    display.updateStatus(local.mode, local.antenna);
+#endif
+    Serial.println("Remote unit disconnected; using local tuner");
 }
 
 // ============================================================
@@ -143,13 +148,13 @@ void onRemoteStatus(bool connected) {
 // ============================================================
 
 void onMeterUpdate(const tuner_meter_t* meter) {
-    if (usingRemoteTuner) return;
+    if (activeRemoteConnected()) return;
 
     // Push directly into the SSE state from the main task so subscribers keep
     // getting fresh readings even when the web-server task is currently inside
     // a long-running SSE handler (webServer.loop()'s own 500 ms poll can't
     // fire while a handler holds the slot).
-    webServer.pushMeterEvent(meter);
+    webServer.pushMeterEvent(tuner.getState());
 
 #ifdef WITH_DISPLAY
     display.updateMeter(meter);
@@ -210,12 +215,21 @@ void connectRemoteUnit() {
 }
 
 void processRemoteSSE() {
+    portENTER_CRITICAL(&s_activeMux);
+    const bool stale = s_activeState.remoteConnected() &&
+        millis() - s_lastRemoteTelemetry > HEARTBEAT_INTERVAL_MS * 2;
+    portEXIT_CRITICAL(&s_activeMux);
+    if (stale) {
+        s_remoteClient.stop();
+        s_remoteConnected = false;
+        onRemoteDisconnected();
+    }
     if (!s_remoteConnected || !s_remoteClient.connected()) {
         if (s_remoteConnected) {
             Serial.println("Remote: SSE disconnected");
             s_remoteClient.stop();
             s_remoteConnected = false;
-            onRemoteStatus(false);
+            onRemoteDisconnected();
         }
         return;
     }
@@ -230,20 +244,8 @@ void processRemoteSSE() {
         JsonDocument doc;
         if (deserializeJson(doc, payload)) continue;
 
-        if (doc["fwd_power"].is<float>() || doc["fwd_power"].is<int>()) {
-            tuner_meter_t m = {};
-            m.forward_power_watts   = doc["fwd_power"]  | 0.0f;
-            m.reflected_power_watts = doc["ref_power"]  | 0.0f;
-            m.swr                   = doc["swr"]        | 1.0f;
-            m.forward_power_raw     = doc["fwd_raw"]    | 0;
-            m.reflected_power_raw   = doc["ref_raw"]    | 0;
-            onRemoteTelemetry(&m);
-
-            if (doc["mode"].is<int>())
-                display.updateStatus((tuner_mode_t)doc["mode"].as<int>(),
-                                     (tuner_ant_t)doc["antenna"].as<int>());
-
-            if (!remoteUnitConnected) onRemoteStatus(true);
+        if (doc.is<JsonObject>() && !doc["fwd_power"].isUnbound()) {
+            onRemoteTelemetry(ldg::readWebState(doc.as<JsonVariantConst>()));
         }
     }
 }
@@ -298,8 +300,10 @@ bool proxyCommandToRemote(uint8_t cmd) {
 
 bool executeCommand(uint8_t cmd) {
 #ifdef WITH_DISPLAY
-    if (remoteUnitConnected) {
-        return proxyCommandToRemote(cmd);
+    if (activeRemoteConnected()) {
+        const bool result = proxyCommandToRemote(cmd);
+        mqtt.requestStatePublish();
+        return result;
     }
 #endif
     bool result = false;
@@ -311,6 +315,7 @@ bool executeCommand(uint8_t cmd) {
         case TUNER_CMD_AUTO_MODE:   result = tuner.setAutoMode();   break;
         case TUNER_CMD_MANUAL_MODE: result = tuner.setManualMode(); break;
     }
+    mqtt.requestStatePublish();
     return result;
 }
 
@@ -358,11 +363,24 @@ void setup() {
 #ifdef WITH_DISPLAY
     Serial.println("Initializing display...");
     display.begin(&tuner);
+#endif
+
+    // The WiFi setup portal may run indefinitely. Initialize MQTT before it,
+    // independently of STA status, and service it from the portal's idle loop.
+    if (configManager.get().mqttBroker[0]) {
+        static WiFiClient mqttClient;
+        if (!mqtt.begin(mqttClient, executeCommand, getActiveState))
+            Serial.println("ERROR: MQTT initialization failed");
+    } else {
+        Serial.println("MQTT broker not configured; MQTT disabled");
+    }
     configManager.setPortalIdleCallback([]() {
         tuner.process();
+        mqtt.loop();
+#ifdef WITH_DISPLAY
         display.loop();
-    });
 #endif
+    });
 
     setupWiFi();
 
@@ -370,25 +388,13 @@ void setup() {
     display.updateNetworkInfo();
 #endif
 
-    if (wifiConnected) {
-        const DeviceConfig& cfg = configManager.get();
-        if (cfg.mqttBroker[0] != '\0') {
-            // mqttClient must outlive setup() — PubSubClient stores a reference.
-            static WiFiClient mqttClient;
-            mqtt.begin(mqttClient, executeCommand);
-            mqtt.subscribeRemoteTelemetry(onRemoteTelemetry);
-            mqtt.subscribeRemoteStatus(onRemoteStatus);
-
-            // mqtt.connect() blocks on TCP connect to the broker. Don't call
-            // it here — main loop()'s mqtt.loop() will reconnect on its own
-            // 5 s backoff, and an unreachable broker would otherwise hang
-            // setup() long enough to trip the IDLE-task watchdog.
-        } else {
-            Serial.println("MQTT broker not configured; MQTT disabled");
-        }
-    }
-
-    if (!webServer.begin(&tuner, executeCommand, getActiveMeter, onRemoteTelemetry)) {
+    if (!webServer.begin(&tuner, executeCommand, getActiveState,
+#ifdef WITH_DISPLAY
+                         onRemoteTelemetry
+#else
+                         nullptr
+#endif
+                         )) {
         Serial.println("ERROR: web server failed to start - port 443 may still be bound");
     }
 
@@ -436,27 +442,9 @@ void loop() {
         } else if (!wifiConnected) {
             wifiConnected = true;
             Serial.println("WiFi reconnected");
-            mqtt.reconnect();
 #ifdef WITH_DISPLAY
             display.updateNetworkInfo();
 #endif
-        }
-    }
-
-    if (wifiConnected) {
-        mqtt.loop();
-
-        if (!usingRemoteTuner && millis() - lastMeterPublish > 2000) {
-            lastMeterPublish = millis();
-            const tuner_meter_t* meter = tuner.getMeterData();
-            if (meter->forward_power_raw > 0 || meter->reflected_power_raw > 0) {
-                mqtt.publishTelemetry(meter);
-            }
-        }
-
-        if (millis() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
-            lastHeartbeat = millis();
-            mqtt.publishStatus(remoteUnitConnected ? "remote_connected" : "online");
         }
     }
 
@@ -465,8 +453,19 @@ void loop() {
 #ifdef WITH_DISPLAY
     connectRemoteUnit();
     processRemoteSSE();
+    if (s_remoteDisplayPending.exchange(false)) {
+        const tuner_state_t state = getActiveState();
+        tuner_meter_t meter = state.meterValid ? state.meter : tuner_meter_t{};
+        // Keep invalid readings unknown on MQTT; the analog gauge needs finite coordinates.
+        if (!std::isfinite(meter.forward_power_watts)) meter.forward_power_watts = 0;
+        if (!std::isfinite(meter.reflected_power_watts)) meter.reflected_power_watts = 0;
+        if (!std::isfinite(meter.swr) || !state.meterValid) meter.swr = 1;
+        display.updateMeter(&meter);
+        display.updateStatus(state.mode, state.antenna);
+    }
     display.loop();
 #endif
 
+    mqtt.loop();
     delay(1);
 }

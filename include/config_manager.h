@@ -17,6 +17,7 @@ struct DeviceConfig {
     char ant1Name[32];
     char ant2Name[32];
     uint16_t mqttPort;
+    bool mqttDiscoveryEnabled;
     uint8_t remoteUnitId;
     bool configured;
     // Static IP (optional; DHCP used when useStaticIP is false)

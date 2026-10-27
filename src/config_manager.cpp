@@ -426,6 +426,7 @@ void ConfigManager::loadDefaults() {
     strncpy(m_config.ant1Name, "ANT 1", sizeof(m_config.ant1Name) - 1);
     strncpy(m_config.ant2Name, "ANT 2", sizeof(m_config.ant2Name) - 1);
     m_config.mqttPort = MQTT_PORT;
+    m_config.mqttDiscoveryEnabled = true;
     m_config.remoteUnitId = 0;
     m_config.configured = false;
     m_config.useStaticIP = false;
@@ -452,6 +453,7 @@ bool ConfigManager::save() {
     m_prefs.putString("ant1Name", m_config.ant1Name);
     m_prefs.putString("ant2Name", m_config.ant2Name);
     m_prefs.putUShort("mqttPort", m_config.mqttPort);
+    m_prefs.putBool("haDiscovery", m_config.mqttDiscoveryEnabled);
     m_prefs.putUChar("remoteUnitId", m_config.remoteUnitId);
     m_prefs.putBool("configured", m_config.configured);
     m_prefs.putBool("useStaticIP",    m_config.useStaticIP);
@@ -487,6 +489,7 @@ bool ConfigManager::load() {
     strncpy(m_config.ant1Name, m_prefs.getString("ant1Name", "ANT 1").c_str(), sizeof(m_config.ant1Name) - 1);
     strncpy(m_config.ant2Name, m_prefs.getString("ant2Name", "ANT 2").c_str(), sizeof(m_config.ant2Name) - 1);
     m_config.mqttPort = m_prefs.getUShort("mqttPort", MQTT_PORT);
+    m_config.mqttDiscoveryEnabled = m_prefs.getBool("haDiscovery", true);
     m_config.remoteUnitId = m_prefs.getUChar("remoteUnitId", 0);
     m_config.configured = m_prefs.getBool("configured", false);
     m_config.useStaticIP = m_prefs.getBool("useStaticIP", false);
