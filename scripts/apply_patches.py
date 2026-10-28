@@ -1,151 +1,144 @@
-"""PlatformIO pre-build hook: apply local patches to managed library deps.
+"""PlatformIO pre-build hook: apply local unified diffs to library deps.
 
-Why this exists:
-  We need a NULL-guard fix in esp32_idf5_https_server's HTTPSConnection.cpp
-  (see patches/esp32_idf5_https_server-null-guards.patch and the wedge story
-  in tests/wedge_repro.sh). The library is installed under .pio/libdeps/, so
-  edits there get blown away whenever PlatformIO refreshes deps. This script
-  re-applies the patches on every build so the fix survives clean checkouts,
-  CI, dep updates, etc.
+Uses only Python's standard library, including on Windows: no patch.exe, Git,
+PATH changes, or extra pip packages are needed. Context must match exactly
+(apart from LF/CRLF line endings); ambiguous or incompatible patches fail the
+build. A reverse check makes repeated builds idempotent.
 
-How it works:
-  - For each .patch under patches/, look up the target library directory
-    under .pio/libdeps/<env>/<libname>/ (filename prefix before "-" is the
-    lib name).
-  - Try to apply via `patch -p1 --dry-run` first; if it succeeds, apply for
-    real. If the dry-run reports "already applied", skip.
-  - Find GNU patch on PATH or inside Git for Windows, without changing PATH.
-  - Fail the build if a patch can't be applied (better to fail loudly than
-    silently ship un-patched code).
-
+Patch filenames: <libname>-<description>.patch.
 Wired in by `extra_scripts = pre:scripts/apply_patches.py` in platformio.ini.
 """
 
-import glob
-import os
-import shutil
-import subprocess
-import sys
-
-Import("env")  # type: ignore  # provided by PlatformIO SCons
-
-PROJECT_DIR    = env["PROJECT_DIR"]
-LIBDEPS_DIR    = env.subst("$PROJECT_LIBDEPS_DIR")  # .pio/libdeps
-ENV_NAME       = env["PIOENV"]
-PATCHES_DIR    = os.path.join(PROJECT_DIR, "patches")
+import re
+from pathlib import Path, PurePosixPath
 
 
-def windows_git_dirs():
-    """Find Git installations, including portable and non-default locations."""
-    git = shutil.which("git")
-    if git:
-        # Git exposes cmd/git.exe, bin/git.exe, or mingw64/bin/git.exe.
-        parent = os.path.dirname(os.path.dirname(os.path.abspath(git)))
-        yield parent
-        yield os.path.dirname(parent)
-
-    import winreg
-
-    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
-            try:
-                with winreg.OpenKey(hive, r"SOFTWARE\GitForWindows", 0,
-                                    winreg.KEY_READ | view) as key:
-                    install_dir, _ = winreg.QueryValueEx(key, "InstallPath")
-                if isinstance(install_dir, str) and install_dir:
-                    yield install_dir
-            except OSError:
-                continue
-
-    for variable in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
-        directory = os.environ.get(variable)
-        if directory:
-            yield os.path.join(directory, "Git")
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        yield os.path.join(local_app_data, "Programs", "Git")
+class PatchMismatch(ValueError):
+    """The dependency does not match the patch's context."""
 
 
-def find_patch():
-    """Return the executable's absolute path or an actionable build error."""
-    executable = shutil.which("patch")
-    if executable:
-        return os.path.abspath(executable)
-    if sys.platform == "win32":
-        for directory in windows_git_dirs():
-            executable = os.path.join(directory, "usr", "bin", "patch.exe")
-            if os.path.isfile(executable):
-                return os.path.abspath(executable)
-        raise RuntimeError(
-            "[apply_patches] GNU patch was not found. Install the full Git for "
-            "Windows distribution (https://gitforwindows.org/), which includes "
-            "usr\\bin\\patch.exe, and restart VS Code. MinGit is not sufficient."
-        )
-    raise RuntimeError(
-        "[apply_patches] GNU patch was not found. Install GNU patch and make "
-        "the patch command available on PATH."
-    )
+def parse_patch(patchfile):
+    """Read the file-edit unified diff format used by patches/ (strip -p1)."""
+    lines = Path(patchfile).read_bytes().replace(b"\r\n", b"\n").splitlines(True)
+    files = []
+    index = 0
+    while index < len(lines):
+        if not lines[index].startswith(b"--- a/"):
+            raise ValueError("expected --- a/<path> file header")
+        old = lines[index][6:].split(b"\t", 1)[0].rstrip(b"\n")
+        index += 1
+        if index >= len(lines) or not lines[index].startswith(b"+++ b/"):
+            raise ValueError("expected +++ b/<path> file header")
+        new = lines[index][6:].split(b"\t", 1)[0].rstrip(b"\n")
+        path = PurePosixPath(old.decode("utf-8"))
+        if (old != new or path.is_absolute() or not path.parts
+                or ".." in path.parts or b"\\" in old or b":" in old):
+            raise ValueError("only edits to existing relative file paths are supported")
+        index += 1
+        hunks = []
+        while index < len(lines) and lines[index].startswith(b"@@ "):
+            header = re.fullmatch(
+                rb"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@[^\n]*\n",
+                lines[index],
+            )
+            if header is None:
+                raise ValueError("invalid unified diff hunk header")
+            old_count = int(header[2]) if header[2] is not None else 1
+            new_count = int(header[4]) if header[4] is not None else 1
+            before, after = [], []
+            index += 1
+            while len(before) < old_count or len(after) < new_count:
+                if index >= len(lines):
+                    raise ValueError("truncated unified diff hunk")
+                line = lines[index]
+                if line[:1] not in (b" ", b"-", b"+") or not line.endswith(b"\n"):
+                    raise ValueError("unsupported or malformed unified diff line")
+                if line[:1] in (b" ", b"-"):
+                    before.append(line[1:])
+                if line[:1] in (b" ", b"+"):
+                    after.append(line[1:])
+                index += 1
+            if len(before) != old_count or len(after) != new_count:
+                raise ValueError("unified diff hunk line counts do not match")
+            if not before or not after:
+                raise ValueError("hunks must include context on both sides")
+            hunks.append((before, after))
+        if not hunks:
+            raise ValueError("file patch has no hunks")
+        files.append((path, hunks))
+    if not files:
+        raise ValueError("empty patch")
+    return files
 
 
-def lib_dir_for(patchfile):
-    """Return the absolute path to the library dir this patch targets.
+def patched_content(content, hunks, reverse=False):
+    """Apply exact, uniquely located hunks in memory, preserving line endings."""
+    lines = content.splitlines(True)
+    cursor = 0
+    for before, after in hunks:
+        if reverse:
+            before, after = after, before
+        normalized = [line.replace(b"\r\n", b"\n") for line in lines]
+        matches = [
+            start for start in range(cursor, len(lines) - len(before) + 1)
+            if normalized[start:start + len(before)] == before
+        ]
+        if len(matches) != 1:
+            raise PatchMismatch(f"expected one matching context, found {len(matches)}")
+        start = matches[0]
+        # Use the source hunk's newline style for context and added lines.
+        original = lines[start:start + len(before)]
+        ending = b"\r\n" if original[0].endswith(b"\r\n") else b"\n"
+        replacement = [line[:-1] + ending for line in after]
+        lines[start:start + len(before)] = replacement
+        cursor = start + len(replacement)
+    return b"".join(lines)
 
-    Patch filename convention: <lib-name>-<short-description>.patch.
-    E.g. esp32_idf5_https_server-null-guards.patch → lib dir
-    .pio/libdeps/<env>/esp32_idf5_https_server.
-    """
-    name = os.path.basename(patchfile)
-    libname = name.split("-", 1)[0]
-    return os.path.join(LIBDEPS_DIR, ENV_NAME, libname)
 
-
-def apply_patch(patchfile, libdir, patch_executable):
-    """Apply one patch idempotently. Raises CalledProcessError on hard failure."""
-    rel = os.path.relpath(patchfile, PROJECT_DIR)
-    # Never prompt in an IDE build or automatically undo an existing patch.
-    command = [patch_executable, "--batch", "--forward", "-p1"]
-
-    # Dry-run forward to see if it applies cleanly.
-    dry = subprocess.run(
-        command + ["--dry-run", "-i", patchfile],
-        cwd=libdir, capture_output=True, text=True, errors="replace",
-    )
-    if dry.returncode == 0:
-        print(f"[apply_patches] applying {rel}")
-        subprocess.run(
-            command + ["-i", patchfile],
-            cwd=libdir, check=True,
-        )
+def apply_patch(patchfile, libdir):
+    """Validate every file before writing; reject partial or incompatible patches."""
+    files = parse_patch(patchfile)
+    root = Path(libdir).resolve()
+    originals = []
+    for relative, hunks in files:
+        target = root.joinpath(*relative.parts).resolve()
+        if root not in target.parents:
+            raise ValueError(f"patch target escapes library directory: {relative}")
+        originals.append((target, target.read_bytes(), hunks))
+    try:
+        updates = [(target, patched_content(content, hunks))
+                   for target, content, hunks in originals]
+    except PatchMismatch as error:
+        try:
+            for _, content, hunks in originals:
+                patched_content(content, hunks, reverse=True)
+        except PatchMismatch:
+            raise RuntimeError(
+                f"[apply_patches] could not apply {Path(patchfile).name}: {error}. "
+                "Dependency sources differ from the expected version or are "
+                "partially patched."
+            ) from error
+        print(f"[apply_patches] skipping {Path(patchfile).name} (already applied)")
         return
-
-    # Dry-run reverse: if it would *un*-apply cleanly, the patch is already in place.
-    rev = subprocess.run(
-        command + ["-R", "--dry-run", "-i", patchfile],
-        cwd=libdir, capture_output=True, text=True, errors="replace",
-    )
-    if rev.returncode == 0:
-        print(f"[apply_patches] skipping {rel} (already applied)")
-        return
-
-    # Neither direction works — patch is broken or the target moved.
-    print(f"[apply_patches] FAILED to apply {rel}:\n{dry.stdout}\n{dry.stderr}")
-    raise RuntimeError(f"could not apply {rel}")
+    for target, content in updates:
+        target.write_bytes(content)
+    print(f"[apply_patches] applying {Path(patchfile).name}")
 
 
-def main():
-    if not os.path.isdir(PATCHES_DIR):
-        return  # no patches to apply
-    patch_executable = None
-    for patchfile in sorted(glob.glob(os.path.join(PATCHES_DIR, "*.patch"))):
-        libdir = lib_dir_for(patchfile)
-        if not os.path.isdir(libdir):
+def main(env):
+    patches_dir = Path(env["PROJECT_DIR"]) / "patches"
+    libdeps_dir = Path(env.subst("$PROJECT_LIBDEPS_DIR")) / env["PIOENV"]
+    for patchfile in sorted(patches_dir.glob("*.patch")):
+        libname = patchfile.name.split("-", 1)[0]
+        libdir = libdeps_dir / libname
+        if not libdir.is_dir():
             print(f"[apply_patches] target lib dir not found for {patchfile} "
                   f"(looked at {libdir}); skipping — PlatformIO may not have "
-                  f"installed it yet")
+                  "installed it yet")
             continue
-        if patch_executable is None:
-            patch_executable = find_patch()
-        apply_patch(patchfile, libdir, patch_executable)
+        apply_patch(patchfile, libdir)
 
 
-main()
+if "Import" in globals():
+    Import("env")  # type: ignore  # provided by PlatformIO SCons
+    main(env)  # type: ignore
