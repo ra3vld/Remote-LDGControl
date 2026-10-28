@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1100" viewBox="0 0 1440 1100" role="img" aria-labelledby="title desc">
+<title id="title">Подключение LDG к ESP32 с согласованием UART</title><desc id="desc">Тюнер mini-DIN 4 передаёт через SN74LVC125A на RX ESP32. TX ESP32 через SN74AHCT125 идёт на mini-DIN 3. Контакт 2 — общая земля; контакт 1 +12 В изолировать.</desc>
+<defs>
+  <marker id="blue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#1763bb"/></marker>
+  <marker id="purple-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#7c3bb4"/></marker>
+</defs>
+<rect width="1440" height="1100" fill="#fff"/>
+<g font-family="DejaVu Sans, Arial, sans-serif" fill="#172b42">
+<text x="40" y="48" font-size="30" fill="#172b42" text-anchor="start" font-weight="700">01 / Тюнер ↔ ESP32: три провода и согласование уровней</text>
+<text x="40" y="82" font-size="20" fill="#52657b" text-anchor="start" font-weight="400">38400 бод · 8N1 · номера у U1/U2 — выводы микросхем, расположение условное</text>
+<rect x="40" y="110" width="1360" height="112" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<text x="64" y="148" font-size="22" fill="#172b42" text-anchor="start" font-weight="700">Sunton ESP32-3248S035C</text>
+<text x="64" y="184" font-size="21" fill="#1763bb" text-anchor="start" font-weight="400">RX = GPIO35 (P3) · TX = GPIO22 (P3)</text>
+<text x="770" y="148" font-size="22" fill="#172b42" text-anchor="start" font-weight="700">NodeMCU: esp32-display / esp32-remote</text>
+<text x="770" y="184" font-size="21" fill="#1763bb" text-anchor="start" font-weight="400">RX = GPIO16 · TX = GPIO17</text>
+<rect x="40" y="254" width="300" height="442" rx="10" fill="#f5f8fc" stroke="#94a3b8" stroke-width="2"/>
+<text x="64" y="292" font-size="23" fill="#172b42" text-anchor="start" font-weight="700">LDG AT-1000ProII</text>
+<text x="64" y="323" font-size="19" fill="#52657b" text-anchor="start" font-weight="400">или AT-600ProII · METER</text>
+<rect x="1100" y="254" width="300" height="442" rx="10" fill="#f5f8fc" stroke="#94a3b8" stroke-width="2"/>
+<text x="1124" y="292" font-size="25" fill="#172b42" text-anchor="start" font-weight="700">ESP32</text>
+<text x="1124" y="323" font-size="19" fill="#52657b" text-anchor="start" font-weight="400">GPIO по таблице выше</text>
+<text x="64" y="393" font-size="21" fill="#1763bb" text-anchor="start" font-weight="700">4 · TX из тюнера</text>
+<text x="1124" y="393" font-size="21" fill="#1763bb" text-anchor="start" font-weight="700">RX · 35 / 16</text>
+<rect x="520" y="344" width="400" height="132" rx="10" fill="#eff6ff" stroke="#1763bb" stroke-width="2"/>
+<text x="720" y="376" font-size="23" fill="#1763bb" text-anchor="middle" font-weight="700">U1 · SN74LVC125AD</text>
+<text x="548" y="413" font-size="20" fill="#1763bb" text-anchor="start" font-weight="400">2 · A</text>
+<text x="892" y="413" font-size="20" fill="#1763bb" text-anchor="end" font-weight="400">Y · 3</text>
+<text x="720" y="451" font-size="19" fill="#52657b" text-anchor="middle" font-weight="400">5 В → 3,3 В · питание 3,3 В</text>
+<polyline points="340,405 520,405" fill="none" stroke="#1763bb" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue-arrow)"/>
+<polyline points="920,405 1100,405" fill="none" stroke="#1763bb" stroke-width="3" stroke-linejoin="round" marker-end="url(#blue-arrow)"/>
+<text x="430" y="388" font-size="18" fill="#1763bb" text-anchor="middle" font-weight="400">5 В TTL</text>
+<text x="1010" y="388" font-size="18" fill="#1763bb" text-anchor="middle" font-weight="400">3,3 В</text>
+<text x="64" y="563" font-size="21" fill="#7c3bb4" text-anchor="start" font-weight="700">3 · RX в тюнер</text>
+<text x="1124" y="563" font-size="21" fill="#7c3bb4" text-anchor="start" font-weight="700">TX · 22 / 17</text>
+<rect x="520" y="514" width="400" height="132" rx="10" fill="#faf5ff" stroke="#7c3bb4" stroke-width="2"/>
+<text x="720" y="546" font-size="23" fill="#7c3bb4" text-anchor="middle" font-weight="700">U2 · SN74AHCT125N</text>
+<text x="548" y="583" font-size="20" fill="#7c3bb4" text-anchor="start" font-weight="400">3 · Y</text>
+<text x="892" y="583" font-size="20" fill="#7c3bb4" text-anchor="end" font-weight="400">A · 2</text>
+<text x="720" y="621" font-size="19" fill="#52657b" text-anchor="middle" font-weight="400">3,3 В → 5 В · питание 5 В</text>
+<polyline points="520,575 340,575" fill="none" stroke="#7c3bb4" stroke-width="3" stroke-linejoin="round" marker-end="url(#purple-arrow)"/>
+<polyline points="1100,575 920,575" fill="none" stroke="#7c3bb4" stroke-width="3" stroke-linejoin="round" marker-end="url(#purple-arrow)"/>
+<text x="430" y="558" font-size="18" fill="#7c3bb4" text-anchor="middle" font-weight="400">5 В TTL</text>
+<text x="1010" y="558" font-size="18" fill="#7c3bb4" text-anchor="middle" font-weight="400">3,3 В</text>
+<text x="64" y="671" font-size="21" fill="#364152" text-anchor="start" font-weight="700">2 · GND</text>
+<text x="1124" y="671" font-size="21" fill="#364152" text-anchor="start" font-weight="700">GND</text>
+<polyline points="340,666 1100,666" fill="none" stroke="#364152" stroke-width="4" stroke-linejoin="round"/>
+<text x="720" y="696" font-size="18" fill="#364152" text-anchor="middle" font-weight="400">Общая земля тюнера, ESP32, интерфейса и источника 5 В</text>
+<circle cx="340" cy="405" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<circle cx="1100" cy="405" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<circle cx="340" cy="575" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
+<circle cx="1100" cy="575" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
+<circle cx="340" cy="666" r="5" fill="#fff" stroke="#364152" stroke-width="3"/>
+<circle cx="1100" cy="666" r="5" fill="#fff" stroke="#364152" stroke-width="3"/>
+<rect x="40" y="728" width="1360" height="70" rx="10" fill="#fff4f3" stroke="#e7a5a4" stroke-width="2"/>
+<text x="64" y="758" font-size="22" fill="#b52b32" text-anchor="start" font-weight="700">1 · +12 В на mini-DIN: оставить свободным и изолировать.</text>
+<text x="64" y="784" font-size="19" fill="#b52b32" text-anchor="start" font-weight="400">Не соединять с 5V, 3V3 или GPIO. Прямого провода TX тюнера → RX ESP32 нет.</text>
+<rect x="40" y="822" width="660" height="228" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<text x="64" y="853" font-size="21" fill="#172b42" text-anchor="start" font-weight="700">U1: питание и разрешение выхода</text>
+<text x="64" y="885" font-size="19" fill="#167446" text-anchor="start" font-weight="700">3,3 В от ESP32</text>
+<polyline points="64,900 590,900" fill="none" stroke="#167446" stroke-width="3" stroke-linejoin="round"/>
+<rect x="240" y="920" width="230" height="90" rx="4" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+<text x="355" y="948" font-size="19" fill="#172b42" text-anchor="middle" font-weight="700">U1</text>
+<text x="250" y="975" font-size="17" fill="#167446" text-anchor="start" font-weight="400">14 · VCC</text>
+<text x="450" y="999" font-size="16" fill="#172b42" text-anchor="end" font-weight="400">1 · /OE + 7 · GND</text>
+<polyline points="260,900 260,920" fill="none" stroke="#167446" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="260" cy="900" r="5" fill="#167446"/>
+<polyline points="520,900 520,959.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="505,959.0 535,959.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="505,969.0 535,969.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="520,969.0 520,1028" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<text x="545" y="956.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="700">C1</text>
+<text x="545" y="981.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="400">100 нФ</text>
+<polyline points="64,1028 590,1028" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="520" cy="900" r="5" fill="#167446"/>
+<circle cx="520" cy="1028" r="5" fill="#364152"/>
+<polyline points="355,1010 355,1028" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="355" cy="1028" r="5" fill="#364152"/>
+<text x="64" y="1020" font-size="18" fill="#172b42" text-anchor="start" font-weight="700">GND</text>
+<rect x="740" y="822" width="660" height="228" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<text x="764" y="853" font-size="21" fill="#172b42" text-anchor="start" font-weight="700">U2: питание и разрешение выхода</text>
+<text x="764" y="885" font-size="19" fill="#b52b32" text-anchor="start" font-weight="700">5 В от БП</text>
+<polyline points="764,900 1290,900" fill="none" stroke="#b52b32" stroke-width="3" stroke-linejoin="round"/>
+<rect x="940" y="920" width="230" height="90" rx="4" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+<text x="1055" y="948" font-size="19" fill="#172b42" text-anchor="middle" font-weight="700">U2</text>
+<text x="950" y="975" font-size="17" fill="#b52b32" text-anchor="start" font-weight="400">14 · VCC</text>
+<text x="1150" y="999" font-size="16" fill="#172b42" text-anchor="end" font-weight="400">1 · /OE + 7 · GND</text>
+<polyline points="960,900 960,920" fill="none" stroke="#b52b32" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="960" cy="900" r="5" fill="#b52b32"/>
+<polyline points="1220,900 1220,959.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1205,959.0 1235,959.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1205,969.0 1235,969.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1220,969.0 1220,1028" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<text x="1245" y="956.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="700">C2</text>
+<text x="1245" y="981.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="400">100 нФ</text>
+<polyline points="764,1028 1290,1028" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="1220" cy="900" r="5" fill="#b52b32"/>
+<circle cx="1220" cy="1028" r="5" fill="#364152"/>
+<polyline points="1055,1010 1055,1028" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="1055" cy="1028" r="5" fill="#364152"/>
+<text x="764" y="1020" font-size="18" fill="#172b42" text-anchor="start" font-weight="700">GND</text>
+<text x="40" y="1080" font-size="18" fill="#52657b" text-anchor="start" font-weight="400">Остальные выводы U1/U2 и корпуса: см. таблицу в WIRING.md. Это схема соединений, не вид платы сверху.</text>
+</g></svg>

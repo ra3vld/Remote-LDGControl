@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1080" viewBox="0 0 1440 1080" role="img" aria-labelledby="title desc">
+<title id="title">Питание LM7805 и необязательный делитель ADC</title><desc id="desc">LM7805: вывод 1 вход 12–13.8 В, 2 GND, 3 выход 5 В. Входной и выходные конденсаторы подключены параллельно питанию. ADC GPIO34 через делитель 100k/22k и параллельный фильтр 100nF; только NodeMCU.</desc>
+<defs>
+  <marker id="blue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#1763bb"/></marker>
+  <marker id="purple-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#7c3bb4"/></marker>
+</defs>
+<rect width="1440" height="1080" fill="#fff"/>
+<g font-family="DejaVu Sans, Arial, sans-serif" fill="#172b42">
+<text x="40" y="48" font-size="30" fill="#172b42" text-anchor="start" font-weight="700">04 / Питание и необязательный вход измерения</text>
+<text x="40" y="82" font-size="20" fill="#52657b" text-anchor="start" font-weight="400">Общий GND для всех узлов · питание ESP32 и дисплея только стабилизированными 5 В</text>
+<rect x="40" y="110" width="1360" height="515" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<text x="64" y="148" font-size="22" fill="#172b42" text-anchor="start" font-weight="700">A. LM7805 · TO-220 · выводы сверить с паспортом установленного производителя</text>
+<text x="85" y="216" font-size="22" fill="#b52b32" text-anchor="start" font-weight="700">+12…13,8 В</text>
+<polyline points="85,246 510,246" fill="none" stroke="#b52b32" stroke-width="4" stroke-linejoin="round"/>
+<rect x="510" y="202" width="330" height="190" rx="10" fill="#fff" stroke="#172b42" stroke-width="2"/>
+<text x="675" y="239" font-size="25" fill="#172b42" text-anchor="middle" font-weight="700">U3 · LM7805</text>
+<text x="532" y="280" font-size="21" fill="#b52b32" text-anchor="start" font-weight="400">1 · IN</text>
+<text x="818" y="280" font-size="21" fill="#b52b32" text-anchor="end" font-weight="400">OUT · 3</text>
+<text x="675" y="357" font-size="21" fill="#172b42" text-anchor="middle" font-weight="400">2 · GND</text>
+<text x="675" y="320" font-size="21" fill="#52657b" text-anchor="middle" font-weight="400">РАДИАТОР</text>
+<polyline points="840,246 1320,246" fill="none" stroke="#b52b32" stroke-width="4" stroke-linejoin="round"/>
+<text x="1135" y="216" font-size="21" fill="#b52b32" text-anchor="middle" font-weight="700">+5 В к ESP32, U2 и BTT</text>
+<polyline points="330,246 330,353.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="315,353.0 345,353.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="315,363.0 345,363.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="330,363.0 330,470" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<text x="305" y="350.0" font-size="18" fill="#172b42" text-anchor="end" font-weight="700">C3</text>
+<text x="305" y="375.0" font-size="18" fill="#172b42" text-anchor="end" font-weight="400">330 нФ / ≥25 В</text>
+<polyline points="910,246 910,353.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="895,353.0 925,353.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="895,363.0 925,363.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="910,363.0 910,470" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<text x="935" y="350.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="700">C4</text>
+<text x="935" y="375.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="400">100 нФ</text>
+<polyline points="1220,246 1220,353.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1205,353.0 1235,353.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1205,363.0 1235,363.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="1220,363.0 1220,470" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<text x="1195" y="350.0" font-size="18" fill="#172b42" text-anchor="end" font-weight="700">C5</text>
+<text x="1195" y="375.0" font-size="18" fill="#172b42" text-anchor="end" font-weight="400">10 мкФ / ≥10 В</text>
+<text x="1247" y="344.0" font-size="20" fill="#b52b32" text-anchor="middle" font-weight="400">+</text>
+<polyline points="85,470 1320,470" fill="none" stroke="#364152" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="675,392 675,470" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<text x="85" y="506" font-size="21" fill="#364152" text-anchor="start" font-weight="700">− БП / GND</text>
+<text x="1320" y="506" font-size="21" fill="#364152" text-anchor="end" font-weight="700">GND всех узлов</text>
+<circle cx="330" cy="246" r="5" fill="#b52b32"/>
+<circle cx="330" cy="470" r="5" fill="#364152"/>
+<circle cx="910" cy="246" r="5" fill="#b52b32"/>
+<circle cx="910" cy="470" r="5" fill="#364152"/>
+<circle cx="1220" cy="246" r="5" fill="#b52b32"/>
+<circle cx="1220" cy="470" r="5" fill="#364152"/>
+<circle cx="675" cy="470" r="5" fill="#364152"/>
+<text x="64" y="553" font-size="21" fill="#172b42" text-anchor="start" font-weight="700">C3/C4/C5 — между соответствующей шиной и GND; у C5 «+» к 5 В. Разместить у U3.</text>
+<text x="64" y="588" font-size="20" fill="#52657b" text-anchor="start" font-weight="400">P = (Uвх − 5) × I: 3,1 Вт при 13,8 В / 0,35 А; 8,8 Вт при 1 А. Ток платы нужно измерить.</text>
+<rect x="40" y="658" width="1360" height="380" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<text x="64" y="700" font-size="23" fill="#172b42" text-anchor="start" font-weight="700">B. Измерение напряжения · только NodeMCU, GPIO34 · опция</text>
+<text x="64" y="735" font-size="20" fill="#b52b32" text-anchor="start" font-weight="400">У Sunton GPIO34 занят датчиком света: этот узел не подключать.</text>
+<text x="85" y="802" font-size="21" fill="#b52b32" text-anchor="start" font-weight="700">+U тюнера</text>
+<polyline points="85,828 310,828" fill="none" stroke="#b52b32" stroke-width="3" stroke-linejoin="round"/>
+<rect x="310" y="813" width="120" height="30" rx="0" fill="#fff" stroke="#172b42" stroke-width="2"/>
+<text x="370" y="796" font-size="20" fill="#172b42" text-anchor="middle" font-weight="400">R1 · 100 кОм</text>
+<polyline points="430,828 1250,828" fill="none" stroke="#167446" stroke-width="3" stroke-linejoin="round"/>
+<text x="1250" y="802" font-size="22" fill="#167446" text-anchor="end" font-weight="700">GPIO34</text>
+<circle cx="1250" cy="828" r="5" fill="#fff" stroke="#167446" stroke-width="3"/>
+<circle cx="580" cy="828" r="5" fill="#167446"/>
+<polyline points="580,828 580,866" fill="none" stroke="#167446" stroke-width="3" stroke-linejoin="round"/>
+<rect x="565" y="866" width="30" height="72" rx="0" fill="#fff" stroke="#172b42" stroke-width="2"/>
+<text x="551" y="897" font-size="20" fill="#172b42" text-anchor="end" font-weight="700">R2</text>
+<text x="551" y="925" font-size="20" fill="#172b42" text-anchor="end" font-weight="400">22 кОм</text>
+<polyline points="580,938 580,976" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="855,828 855,897.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="840,897.0 870,897.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="840,907.0 870,907.0" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="855,907.0 855,976" fill="none" stroke="#364152" stroke-width="3" stroke-linejoin="round"/>
+<text x="880" y="894.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="700">C6</text>
+<text x="880" y="919.0" font-size="18" fill="#172b42" text-anchor="start" font-weight="400">100 нФ</text>
+<circle cx="855" cy="828" r="5" fill="#167446"/>
+<polyline points="85,976 1250,976" fill="none" stroke="#364152" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="580" cy="976" r="5" fill="#364152"/>
+<circle cx="855" cy="976" r="5" fill="#364152"/>
+<text x="85" y="1009" font-size="20" fill="#172b42" text-anchor="start" font-weight="700">GND</text>
+<text x="1130" y="906" font-size="20" fill="#167446" text-anchor="middle" font-weight="400">Uadc = U × 22 / 122</text>
+<text x="1130" y="941" font-size="20" fill="#167446" text-anchor="middle" font-weight="400">13,8 В → 2,49 В</text>
+<text x="40" y="1065" font-size="18" fill="#52657b" text-anchor="start" font-weight="400">Вход БП отдельный; +12 В mini-DIN в этой сборке не используется. Вариант USB 5 В описан в WIRING.md.</text>
+</g></svg>

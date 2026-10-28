@@ -1,174 +1,232 @@
-# Wiring Diagram
+# Схема пайки LDG ↔ ESP32
 
-## Sunton ESP32-3248S035C
+Сначала выберите свою плату. Номера GPIO соответствуют
+[include/config.h](include/config.h) и [include/User_Setup.h](include/User_Setup.h).
+На рисунках показаны электрические соединения: положение контактов ESP32
+условное, при пайке ориентируйтесь на маркировку своей платы.
 
-The integrated Sunton board has different pins from the external BTT display
-below. Use the [Sunton board guide](docs/boards/esp32-3248s035c.md): tuner RX is
-GPIO35, tuner TX is GPIO22, both on P3. The onboard display/touch are already wired.
+| Плата / прошивка | Вход RX от тюнера | Выход TX в тюнер | Экран |
+|---|---|---|---|
+| **Sunton ESP32-3248S035C** / `esp32-3248s035c` | **GPIO35, P3** | **GPIO22, P3** | Уже подключён на плате |
+| NodeMCU ESP32 / `esp32-display` | GPIO16 | GPIO17 | Внешний BTT, схема 03 |
+| NodeMCU ESP32 / `esp32-remote` | GPIO16 | GPIO17 | Не нужен |
 
-![Wiring Diagram](wiring-diagram.svg)
+## 01. Тюнер и согласование UART
 
-## ESP32 NodeMCU Pin Assignment
+![Подключение тюнера к ESP32 через два буфера уровней](docs/wiring/tuner-uart.svg)
 
-The graphical diagram above shows the complete wiring. For quick reference, here are the key pin assignments:
+[Открыть схему UART крупно](docs/wiring/tuner-uart.svg).
 
-## Connection 1: Tuner TTL Interface (4-pin mini-DIN)
+**В прежней версии документа были перепутаны контакты 3 и 4 mini-DIN,
+а контакт 1 ошибочно назывался N/C.** По LDG Meter Protocol контакт 1 —
+**+12 В**, 3 — **вход тюнера**, 4 — **выход тюнера**.
+В этой сборке контакт 1 оставляем свободным и изолируем; ESP32 питаем отдельно.
 
-**CRITICAL**: The mini-DIN connector on the AT-1000ProII is NOT standard S-Video. Do NOT use an S-Video cable.
+Интерфейс тюнера: **38400 бод, 8N1, TTL 0–5 В**. GPIO ESP32 работают
+с 3,3 В. Ниже приведён конкретный вариант согласования на двух
+неинвертирующих буферах; названия U1/U2 относятся к рисунку.
 
-### Mini-DIN Connector Pinout (viewed from front, pins facing you)
+| Обозначение | Деталь | Исполнение для сборки |
+|---|---|---|
+| U1 | **SN74LVC125AD** | SOIC-14 на переходнике SOIC-14 → DIP-14; питание **3,3 В**, вход допускает 5 В |
+| U2 | **SN74AHCT125N** | DIP-14; питание **5 В**, вход совместим с TTL и принимает 3,3 В |
+| C1, C2 | 100 нФ, керамика | По одному между выводами 14 и 7 каждой микросхемы, рядом с корпусом |
 
-| Pin | Signal | Connection |
-|-----|--------|------------|
-| 1 | N/C | Not connected |
-| 2 | GND | ESP32 GND |
-| 3 | TX | ESP32 GPIO 16 (tuner → ESP32) |
-| 4 | RX | ESP32 GPIO 17 (ESP32 → tuner) |
+U1 принимает данные тюнера и выдаёт 3,3 В на RX ESP32. U2 повышает уровень
+TX ESP32 до 5 В для входа тюнера. Используется первый канал каждого буфера.
+Не заменяйте U1/U2 произвольной микросхемой с похожим названием: допустимые
+напряжения входов и пороги переключения у семейств различаются.
 
-### Tuner Wiring Summary
+### Куда припаять сигнальные провода
 
-- **Pin 1**: N/C (not connected)
-- **Pin 2**: GND → ESP32 GND
-- **Pin 3**: TX → ESP32 GPIO 16
-- **Pin 4**: RX → ESP32 GPIO 17
+| Откуда | Куда | Назначение |
+|---|---|---|
+| Mini-DIN **4**, TX из тюнера | U1, вывод **2** (1A) | Данные 5 В в интерфейс |
+| U1, вывод **3** (1Y) | Sunton **GPIO35 на P3** / NodeMCU **GPIO16** | Данные 3,3 В в ESP32 |
+| Sunton **GPIO22 на P3** / NodeMCU **GPIO17** | U2, вывод **2** (1A) | Команды 3,3 В из ESP32 |
+| U2, вывод **3** (1Y) | Mini-DIN **3**, RX в тюнер | Команды 5 В в тюнер |
+| Mini-DIN **2**, GND | GND ESP32, U1/U2 и минус источника 5 В | Общая земля |
+| Mini-DIN **1**, +12 В | **Не подключать**, изолировать | Питание внешнего метра, здесь не используется |
 
-**Serial**: 38400 baud, 8N1, TTL (5V)
+### Питание и остальные выводы U1/U2
 
-**Note**: ESP32 GPIO use 3.3V logic and are not 5V-tolerant. Use a suitable TTL level interface; the tuner's 5V TX must be converted to 3.3V before reaching the ESP32 RX input.
+Нумерация — по корпусу микросхемы, **вид сверху**, метка вывода 1 у выемки
+или точки. Переходник для U1 должен сохранять эти номера; проверьте его
+дорожки прозвонкой.
 
-## Connection 2: Power Supply
+| Вывод | Сигнал | U1, SN74LVC125AD | U2, SN74AHCT125N |
+|---|---|---|---|
+| **14** | VCC | **3V3 от ESP32** | **+5 В от источника питания** |
+| **7** | GND | Общая земля | Общая земля |
+| **1** | /1OE | GND: первый канал включён | GND: первый канал включён |
+| **2** | 1A | Mini-DIN 4 | TX ESP32 |
+| **3** | 1Y | RX ESP32 | Mini-DIN 3 |
+| 4, 10, 13 | /2OE, /3OE, /4OE | **3,3 В**: остальные каналы выключены | **5 В**: остальные каналы выключены |
+| 5, 9, 12 | 2A, 3A, 4A | GND: не оставлять входы висящими | GND: не оставлять входы висящими |
+| 6, 8, 11 | 2Y, 3Y, 4Y | Не подключать | Не подключать |
 
-Power is supplied by a separate 12V DC source (13.8V typical, 2A minimum). An LM7805 linear regulator steps this down to 5V for the ESP32 and display. A linear regulator is preferred over a switching buck converter to avoid RF noise injection into your receiver.
+У Sunton сигналы UART и GND берите с **P3**, а **3V3 для U1 — с CN1,
+с контакта V3.3**. На P3 линии 3,3 В нет. Ориентацию CN1 и напряжение
+контакта проверьте на своей ревизии до подключения. Питание U2 берите
+с той же стабилизированной шины 5 В, которая питает плату.
+Разъём P1 с TX/RX используется для USB–UART и прошивки.
+GPIO16/17 у Sunton заняты RGB-светодиодом.
 
-**Thermal calculation:**
-- Input: 12V (13.8V typical)
-- Output: 5V
-- Peak current: ~350mA (ESP32 WiFi TX + display)
-- Dissipation: (13.8V - 5V) x 0.35A = **~3.1W**
+Держите интерфейс рядом с ESP32, провода короткими. Соединяйте кабель
+при выключенном питании; U1/U2 должны быть запитаны при обмене с тюнером.
+Отдельного провода +12 В от mini-DIN к интерфейсу нет.
 
-A TO-220 package with a heatsink is required.
+## 02. Mini-DIN: какой контакт где
 
-### Power Supply Circuit
+![Вид гнезда LDG снаружи и вилки со стороны контактов](docs/wiring/tuner-connector.svg)
 
-```
-12V Supply → [100nF] → LM7805 IN → LM7805 OUT → [10µF] → 5V
-                          (heatsink)
-```
+[Открыть виды разъёма крупно](docs/wiring/tuner-connector.svg).
 
-- **Input**: 12V DC (13.8V typical, 2A minimum)
-- **Regulator**: LM7805 (TO-220) with heatsink
-- **Output**: 5V regulated for ESP32 and display
-- **Input capacitor**: 100nF ceramic (place close to regulator input)
-- **Output capacitor**: 10µF (place close to regulator output)
-- **Dissipation**: ~3.1W at 350mA — heatsink required
+Слева — **вид в гнездо на задней панели тюнера**, как в документе LDG.
+Справа — ответная вилка **со стороны контактов**, ключ внизу.
+Сторона пайки вилки здесь не показана: расположение чашек и выводов зависит
+от исполнения разъёма. Определяйте их по паспорту конкретной вилки и
+прозванивайте до доступной контактной части.
 
-## Connection 3: BTT TFT35-SPI Display
+Обозначения LDG: **METERRX** (контакт 3) означает «тюнер принимает от метра»,
+**METERTX** (контакт 4) — «тюнер передаёт метру».
+Кабель **S-Video не использовать**: совпадение формы разъёма не гарантирует
+нужные соединения. Нужна проверенная распайка трёх отдельных проводов.
 
-The display connects via a JST-XH 10-pin connector. The display uses SPI for the ILI9488 LCD and I2C for the NS2009 touch controller (separate buses).
+Источник распиновки: **LDG External Meter Serial Communications Protocol
+Specification, стр. 3**, [копия документа LDG в LDGControl](https://github.com/Efpophis/LDGControl/blob/master/MeterProtocol.pdf).
 
-### JST-XH 10-Pin Connector Pinout
+## 03. Внешний дисплей BTT — только NodeMCU
 
-| Pin | Signal | ESP32 Pin | Notes |
-|-----|--------|-----------|-------|
-| 1 | IORQ | GPIO 39 (SVN) | Touch interrupt (input only) |
-| 2 | SCL | GPIO 22 | I2C clock (touch) |
-| 3 | SDA | GPIO 21 | I2C data (touch) |
-| 4 | RS (DC) | GPIO 15 | Data/command select |
-| 5 | NSS (CS) | GPIO 5 | Display chip select |
-| 6 | SCK | GPIO 18 | SPI clock |
-| 7 | MOSI | GPIO 23 | SPI data in |
-| 8 | MISO | GPIO 19 | SPI data out |
-| 9 | GND | GND | Common ground |
-| 10 | +5V | 5V | Regulated 5V supply |
+Для Sunton этот раздел пропускается: экран и тачскрин уже соединены с ESP32.
 
-### Touch Controller (NS2009 I2C)
+![Десять прямых соединений ESP32 NodeMCU и BTT TFT35-SPI V2.1](wiring-diagram.svg)
 
-The BTT TFT35-SPI V2.1 uses an NS2009 I2C touch controller at address 0x48. This is a separate bus from the display SPI — only SDA (GPIO 21), SCL (GPIO 22), and IRQ (GPIO 39) are needed.
+[Открыть схему BTT крупно](wiring-diagram.svg).
 
-### SPI and I2C Bus Summary
+| Контакт BTT, XH2.54 | Сигнал | Куда припаять на NodeMCU |
+|---|---|---|
+| 1 | IORQ, touch IRQ | GPIO39 / SVN |
+| 2 | SCL | GPIO22 |
+| 3 | SDA | GPIO21 |
+| 4 | RS / DC | GPIO15 |
+| 5 | NSS / CS | GPIO5 |
+| 6 | SCK | GPIO18 |
+| 7 | MOSI | GPIO23 |
+| 8 | MISO | GPIO19 |
+| 9 | GND | Общая земля |
+| 10 | +5V | Стабилизированные +5 В |
 
-**SPI (Display):**
-- GPIO 18 → Display SCK (P6)
-- GPIO 23 → Display MOSI (P7)
-- GPIO 19 → Display MISO (P8)
-- GPIO 5 → Display NSS/CS (P5)
-- GPIO 15 → Display RS/DC (P4)
-- GPIO 32 → Display Backlight
+На этой плате LCD ILI9488 работает по **SPI**, а тач NS2009 — по **I2C**
+(адрес `0x48`); логические уровни BTT — 3,3 В, питание — 5 В.
+Ищите начало разъёма по маркировке **IORQ / +5V** и
+[распиновке производителя BTT](https://bttwiki.com/TFT35%20SPI.html).
 
-**I2C (Touch):**
-- GPIO 21 → Touch SDA (P3)
-- GPIO 22 → Touch SCL (P2)
-- GPIO 39 → Touch IORQ (P1)
+В 10-контактном разъёме **нет RST и BL**. В прошивке для внешнего дисплея
+задан `TFT_BL = 32`, но штатный кабель BTT не выводит эту линию:
+отдельный провод GPIO32 в этот разъём не паять.
 
-## Connection 4: Voltage Sense (Optional)
+## 04. Питание и измерение напряжения
 
-Auto-detects the tuner's PSU voltage for accurate power calculation. Uses a voltage divider on GPIO 34 (ADC1_CH6, input-only).
+![LM7805 с параллельными конденсаторами и отдельный делитель GPIO34](docs/wiring/power.svg)
 
-### Voltage Divider Circuit
+[Открыть схему питания крупно](docs/wiring/power.svg).
 
-```
-+12V → [100k] → GPIO 34 → [22k] → GND
-                  │
-                [100nF] (filter)
-                  │
-               [TVS 3.3V] (protection)
-```
+### Питание от готового источника 5 В
 
-- **Divider ratio**: 5.545 = (100k + 22k) / 22k
-- **ADC pin**: GPIO 34 (ADC1_CH6, input-only)
-- **Valid range**: 8.0V - 18.0V (falls back to 13.8V default if out of range)
+Для первоначальной сборки можно использовать стабилизированный **5 В / 1 А**
+источник, указанный для Sunton: +5 В на штатный вход питания платы,
+минус — на GND. U2 питается от этих же +5 В, U1 — от 3V3 платы.
+При питании платы от USB шину для U2 берите только с проверенного вывода 5V
+платы. Не соединяйте два независимых источника 5 В, включая USB компьютера,
+без проверки схемы развязки конкретной платы.
 
-## Connection 5: Remote Unit (No Display)
+### Питание от 12–13,8 В через LM7805
 
-Only the tuner TTL interface and power supply are needed.
+Это **отдельный вход от блока питания**, не контакт 1 mini-DIN.
+Для LM7805 в TO-220, при взгляде на маркировку, ножки вниз:
+**1 IN — 2 GND — 3 OUT**; для указанного TI TO-220 металлическая площадка
+соединена с GND. Сверьте корпус и распиновку купленной детали.
 
-- **12V Supply** → LM7805 → 5V → ESP32 5V
-- **ESP32 GND** → Tuner Pin 2 (GND)
-- **ESP32 GPIO 16** → Tuner Pin 3 (TX)
-- **ESP32 GPIO 17** → Tuner Pin 4 (RX)
+| Деталь / вывод | Куда подключить |
+|---|---|
+| U3 LM7805, 1 IN | +12–13,8 В источника |
+| U3, 2 GND | Минус источника и общая земля |
+| U3, 3 OUT | +5 В к ESP32, U2 и, если есть, BTT |
+| C3, 330 нФ, ≥25 В | Между IN и GND, рядом с U3 |
+| C4, 100 нФ | Между OUT и GND, рядом с U3 |
+| C5, 10 мкФ, ≥10 В | **Плюс к OUT**, минус к GND |
+| Радиатор TO-220 | На U3; размер по измеренному току и температуре |
 
-## Parts List
+Все конденсаторы стоят **параллельно** соответствующей шине питания.
+Последовательного включения конденсатора в провод +12 В или +5 В нет.
 
-| Item | Qty | Notes |
-|------|-----|-------|
-| ESP32 WROOM dev board (NodeMCU) | 1-2 | NodeMCU ESP32S v1.1 |
-| 4-pin mini-DIN connector | 1 | Kycon KMDLAX-4P or equivalent |
-| LM7805 | 1 | 5V linear regulator, TO-220 |
-| TO-220 heatsink | 1 | For LM7805 (~3.1W dissipation) |
-| 100nF ceramic capacitor | 1 | Regulator input decoupling |
-| 10µF capacitor | 1 | Regulator output stability |
-| BTT TFT35-SPI display | 1 | For display unit only (ILI9488 + NS2009 touch) |
-| Jumper wires | ~15 | Male-female for display, male-male for tuner |
-| Level shifter (optional) | 1 | TXS0108E or 74HCT245 if 3.3V logic issues |
+Тепловая мощность: `P ≈ (Uвх − 5 В) × I`. При 13,8 В и 350 мА это
+**3,1 Вт**, при 1 А — **8,8 Вт**. Значение 350 мА — пример расчёта,
+а не подтверждённый максимум потребления Sunton. Радиатор и допустимый ток
+нужно проверить под фактической нагрузкой. Линейный стабилизатор не создаёт
+помех от переключения преобразователя; устойчивость и RF-помехи готовой
+сборки требуют проверки.
 
-### Voltage Sense (optional)
+### Необязательный делитель на GPIO34 — только NodeMCU
 
-| Item | Qty | Notes |
-|------|-----|-------|
-| 100k resistor | 1 | Voltage divider upper |
-| 22k resistor | 1 | Voltage divider lower |
-| 100nF ceramic capacitor | 1 | Filter |
-| 3.3V TVS diode | 1 | GPIO protection |
+На схеме 04B верхний резистор **R1 = 100 кОм** идёт от плюса питания
+**тюнера** к измерительной точке. От этой точки подключены три ветви:
+**GPIO34**, **R2 = 22 кОм на GND** и **C6 = 100 нФ на GND**.
+Конденсатор параллелен R2. Используйте резисторы с допуском 1%.
 
-## First-Time Setup
+- `Uadc = Uтюнера × 22 / 122`; при 13,8 В получается примерно **2,49 В**.
+- Коэффициент в прошивке — `5.545`; программный диапазон — 8–18 В.
+  Он не ограничивает напряжение физически. Не подавайте на делитель больше
+  18 В; защита от выбросов в этом базовом рисунке не предусмотрена.
+- Указанная в старом документе произвольная «TVS 3,3 В» не гарантирует
+  безопасное напряжение GPIO при выбросе; конкретная защита требует расчёта
+  напряжения ограничения и тока. Не считайте этот делитель защитой ADC.
+- Без делителя используется напряжение из настроек веб-интерфейса,
+  по умолчанию 13,8 В. **На Sunton GPIO34 занят датчиком света**,
+  измерение PSU отключено в прошивке: внешний делитель туда не паять.
 
-After flashing, the ESP32 creates a WiFi access point:
+## Детали для сборки
 
-| Setting | Value |
-|---------|-------|
-| SSID | `LDGConfig` |
-| Password | `configure` |
+| Деталь | Количество | Когда нужна |
+|---|---|---|
+| Sunton ESP32-3248S035C **или** NodeMCU ESP32 | 1 | Выбрать одну плату |
+| Вилка mini-DIN 4, отдельные провода, термоусадка | 1 комплект | Соединение с тюнером |
+| U1 SN74LVC125AD + переходник SOIC-14 → DIP-14 | 1 + 1 | Приём 5 В → 3,3 В |
+| U2 SN74AHCT125N | 1 | Передача 3,3 В → 5 В |
+| C1/C2, 100 нФ | 2 | Развязка питания буферов |
+| Стабилизированный источник 5 В | 1 | Либо узел LM7805 ниже |
+| U3 LM7805 + радиатор, C3 330 нФ, C4 100 нФ, C5 10 мкФ | 1 комплект | Если питание от 12–13,8 В |
+| BTT TFT35-SPI V2.1 + 10-проводный кабель XH2.54 | 1 комплект | Только `esp32-display` |
+| R1 100 кОм, R2 22 кОм, C6 100 нФ | По 1 | Необязательный ADC NodeMCU |
 
-Connect to it — a captive portal will open for your home WiFi setup. Once connected to your network, access the web UI at the assigned IP.
+## Порядок сборки и проверки
 
-## Assembly Notes
+1. При отключённом питании определите контакты mini-DIN прозвонкой,
+   изолируйте контакт 1. Подпишите три провода: **GND, RX в тюнер, TX из тюнера**.
+2. Соберите питание и измерьте +5 В и 3V3 до подключения сигнальных проводов.
+   Для U1 и U2 соблюдайте разные напряжения VCC.
+3. Соедините все GND, установите C1/C2, подключите /OE и неиспользуемые
+   входы буферов по таблице. Затем припаяйте две сигнальные цепочки схемы 01.
+4. Для NodeMCU с дисплеем добавьте десять соединений схемы 03.
+   Для `esp32-remote` достаточно питания и интерфейса UART;
+   для Sunton внешний дисплей не подключается.
+5. Проверьте отсутствие короткого замыкания питания и связь каждой жилы
+   до нужного вывода. После включения проверьте уровни UART, обмен
+   с тюнером и нагрев стабилизатора под нагрузкой.
 
-1. **Common ground**: All GND connections must be tied together (ESP32, tuner, display, regulator, 12V supply)
-2. **Power supply**: Use a separate 12V DC supply (13.8V typical, 2A minimum). The LM7805 regulator requires a heatsink (~3.1W dissipation at 350mA).
-3. **Regulator capacitors**: Place the 100nF ceramic close to the regulator input, and the 10µF close to the output. These are required for stability.
-4. **Tuner connection**: The mini-DIN carries only GND, TX, and RX. Pin 1 is not connected.
-5. **Level shifting**: The AT-1000ProII uses 5V TTL. ESP32 GPIO are not 5V-tolerant; use a suitable level interface between the tuner and ESP32.
-6. **Display bus**: The display uses SPI (MOSI/MISO/SCK/CS/DC) and touch uses I2C (SDA/SCL/IRQ) — these are separate buses sharing only the ESP32.
-7. **Backlight**: GPIO 32 controls backlight via PWM. Set to HIGH for full brightness.
-8. **Touch IRQ**: GPIO 39 is input-only, which is fine for the touch interrupt line.
-9. **RF considerations**: The linear regulator produces zero switching noise. Keep regulator leads short and use the capacitors as shown to prevent oscillation.
+При первом запуске точка доступа: **`LDGConfig`**, пароль **`configure`**.
+Настройте Wi-Fi через портал. Установка прошивки Sunton описана в
+[руководстве платы](docs/boards/esp32-3248s035c.md).
+
+Рисунки и таблицы сверены с назначениями GPIO в текущем коде и источниками
+ниже. Вариант интерфейса U1/U2 приведён по паспортным уровням микросхем;
+пайка конкретной сборки, обмен с тюнером, температура и работа в RF-поле
+аппаратно здесь не проверены.
+
+Источники: [документ LDG, стр. 3](https://github.com/Efpophis/LDGControl/blob/master/MeterProtocol.pdf),
+[TI SN74LVC125A](https://www.ti.com/lit/ds/symlink/sn74lvc125a.pdf),
+[TI SN74AHCT125](https://www.ti.com/lit/ds/symlink/sn74ahct125.pdf),
+[TI LM7805 / LM340](https://www.ti.com/lit/ds/symlink/lm340.pdf),
+[Sunton P3/CN1 и питание](https://esp3d.io/esp3d-tft/version_1x/hardware/esp32/sunton-35-3248/),
+[BTT TFT35 SPI](https://bttwiki.com/TFT35%20SPI.html).

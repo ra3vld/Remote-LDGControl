@@ -62,17 +62,27 @@ of the network text. These previews preserve that layout for inspection.
 ### Wiring
 
 For the Sunton board, follow [ESP32-3248S035C wiring and installation](docs/boards/esp32-3248s035c.md).
-Its tuner UART uses **RX GPIO35 / TX GPIO22 on P3**. The table and diagram below apply to the separate ESP32 + BTT hardware.
+Its tuner UART uses **RX GPIO35 / TX GPIO22 on P3**. The UART diagram covers
+both board profiles; the display diagram and quick-reference table below apply
+to the separate ESP32 + BTT hardware.
 
 See [WIRING.md](WIRING.md) for complete details. Quick reference:
 
-![Wiring Diagram](wiring-diagram.svg)
+![Tuner UART with mandatory 5V / 3.3V level conversion](docs/wiring/tuner-uart.svg)
+
+The [LDG Meter Protocol (page 3)](https://github.com/Efpophis/LDGControl/blob/master/MeterProtocol.pdf)
+defines mini-DIN **pin 3 as tuner RX** and **pin 4 as tuner TX**.
+**Pin 1 carries +12V**; leave it disconnected and insulated in this build.
+This corrects the earlier pinout in WIRING.md. Follow its updated soldering
+tables and connector views when assembling the cable.
+
+![NodeMCU to BTT display connections](wiring-diagram.svg)
 
 | Connection | ESP32 Pin | Notes |
 |------------|-----------|-------|
 | Tuner GND | GND | Common ground |
-| Tuner TX | GPIO 16 | Tuner TX → ESP32 RX |
-| Tuner RX | GPIO 17 | ESP32 TX → Tuner RX |
+| Tuner TX, mini-DIN 4 | GPIO 16 | Tuner TX → 5V-to-3.3V buffer → ESP32 RX |
+| Tuner RX, mini-DIN 3 | GPIO 17 | ESP32 TX → 3.3V-to-5V buffer → tuner RX |
 | 12V Supply | LM7805 IN | Separate 12V supply → 5V regulated |
 | Display MOSI | GPIO 23 | Shared SPI bus |
 | Display MISO | GPIO 19 | Shared SPI bus |
