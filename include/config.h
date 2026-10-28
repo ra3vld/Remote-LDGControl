@@ -73,8 +73,8 @@
 #define DISPLAY_HEIGHT          320
 
 #ifdef BOARD_ESP32_3248S035C
-// ST7796 MADCTL MY|MV: matches the GT911 raw-to-landscape transform.
-#define DISPLAY_ROTATION        7
+// ST7796 MADCTL MV: normal landscape. Rotation 7 adds MY and mirrors X.
+#define DISPLAY_ROTATION        1
 #define TOUCH_GT911
 #define TOUCH_SDA               33
 #define TOUCH_SCL               32
