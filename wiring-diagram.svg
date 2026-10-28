@@ -1,74 +1,173 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="940" viewBox="0 0 1440 940" role="img" aria-labelledby="title desc">
-<title id="title">ESP32 NodeMCU и BTT TFT35-SPI V2.1: провода дисплея</title><desc id="desc">Десять прямых соединений от подписанных GPIO NodeMCU к сигналам JST-XH дисплея. Эта схема не применяется к встроенному дисплею Sunton.</desc>
-<defs>
-  <marker id="blue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#1763bb"/></marker>
-  <marker id="purple-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#7c3bb4"/></marker>
-</defs>
-<rect width="1440" height="940" fill="#fff"/>
-<g font-family="DejaVu Sans, Arial, sans-serif" fill="#172b42">
-<text x="40" y="48" font-size="30" fill="#172b42" text-anchor="start" font-weight="700">03 / NodeMCU ↔ BTT TFT35-SPI V2.1</text>
-<text x="40" y="82" font-size="20" fill="#52657b" text-anchor="start" font-weight="400">Только esp32-display · у Sunton дисплей и тачскрин уже подключены на плате</text>
-<rect x="40" y="112" width="1360" height="65" rx="10" fill="#fff9ec" stroke="#dec78e" stroke-width="2"/>
-<text x="64" y="141" font-size="20" fill="#172b42" text-anchor="start" font-weight="700">Показан порядок сигналов, а не расположение ножек NodeMCU или вид JST со стороны пайки.</text>
-<text x="64" y="164" font-size="18" fill="#52657b" text-anchor="start" font-weight="400">Ищите маркировку GPIO на своей плате; контакт 1 дисплея определяйте по документации BTT.</text>
-<rect x="80" y="214" width="360" height="590" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
-<rect x="1000" y="214" width="360" height="590" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
-<text x="104" y="253" font-size="25" fill="#172b42" text-anchor="start" font-weight="700">ESP32 NodeMCU</text>
-<text x="1024" y="253" font-size="25" fill="#172b42" text-anchor="start" font-weight="700">BTT · JST-XH 10 pin</text>
-<text x="104" y="311" font-size="22" fill="#52657b" text-anchor="start" font-weight="700">GPIO39 / SVN</text>
-<text x="1024" y="311" font-size="22" fill="#52657b" text-anchor="start" font-weight="700">1 · IORQ (touch IRQ)</text>
-<polyline points="440,304 1000,304" fill="none" stroke="#52657b" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="304" r="5" fill="#fff" stroke="#52657b" stroke-width="3"/>
-<circle cx="1000" cy="304" r="5" fill="#fff" stroke="#52657b" stroke-width="3"/>
-<text x="720" y="292" font-size="17" fill="#52657b" text-anchor="middle" font-weight="400">I2C / TOUCH</text>
-<text x="104" y="361" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">GPIO22</text>
-<text x="1024" y="361" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">2 · SCL (touch)</text>
-<polyline points="440,354 1000,354" fill="none" stroke="#7c3bb4" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="354" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
-<circle cx="1000" cy="354" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
-<text x="104" y="411" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">GPIO21</text>
-<text x="1024" y="411" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">3 · SDA (touch)</text>
-<polyline points="440,404 1000,404" fill="none" stroke="#7c3bb4" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="404" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
-<circle cx="1000" cy="404" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
-<text x="104" y="461" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO15</text>
-<text x="1024" y="461" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">4 · RS / DC</text>
-<polyline points="440,454 1000,454" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="454" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<circle cx="1000" cy="454" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<text x="720" y="442" font-size="17" fill="#52657b" text-anchor="middle" font-weight="400">SPI / LCD</text>
-<text x="104" y="511" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO5</text>
-<text x="1024" y="511" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">5 · NSS / CS</text>
-<polyline points="440,504 1000,504" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="504" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<circle cx="1000" cy="504" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<text x="104" y="561" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO18</text>
-<text x="1024" y="561" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">6 · SCK</text>
-<polyline points="440,554 1000,554" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="554" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<circle cx="1000" cy="554" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<text x="104" y="611" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO23</text>
-<text x="1024" y="611" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">7 · MOSI</text>
-<polyline points="440,604 1000,604" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="604" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<circle cx="1000" cy="604" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<text x="104" y="661" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO19</text>
-<text x="1024" y="661" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">8 · MISO</text>
-<polyline points="440,654 1000,654" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="654" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<circle cx="1000" cy="654" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
-<text x="104" y="711" font-size="22" fill="#364152" text-anchor="start" font-weight="700">GND</text>
-<text x="1024" y="711" font-size="22" fill="#364152" text-anchor="start" font-weight="700">9 · GND</text>
-<polyline points="440,704 1000,704" fill="none" stroke="#364152" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="704" r="5" fill="#fff" stroke="#364152" stroke-width="3"/>
-<circle cx="1000" cy="704" r="5" fill="#fff" stroke="#364152" stroke-width="3"/>
-<text x="720" y="692" font-size="17" fill="#52657b" text-anchor="middle" font-weight="400">ПИТАНИЕ</text>
-<text x="104" y="761" font-size="22" fill="#b52b32" text-anchor="start" font-weight="700">5V от БП</text>
-<text x="1024" y="761" font-size="22" fill="#b52b32" text-anchor="start" font-weight="700">10 · +5V</text>
-<polyline points="440,754 1000,754" fill="none" stroke="#b52b32" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="440" cy="754" r="5" fill="#fff" stroke="#b52b32" stroke-width="3"/>
-<circle cx="1000" cy="754" r="5" fill="#fff" stroke="#b52b32" stroke-width="3"/>
-<rect x="40" y="838" width="1360" height="70" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
-<text x="64" y="867" font-size="21" fill="#172b42" text-anchor="start" font-weight="700">Тюнер подключается отдельно через U1/U2: RX = GPIO16, TX = GPIO17 (схема 01).</text>
-<text x="64" y="894" font-size="19" fill="#52657b" text-anchor="start" font-weight="400">В штатном 10-контактном кабеле нет RST и BL: отдельный провод от GPIO32 к дисплею не добавлять.</text>
-</g></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1100" font-family="'Courier New', monospace" font-size="10">
+  <defs>
+    <filter id="glow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="pcb" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a5c2a"/><stop offset="100%" stop-color="#0d3d1a"/></linearGradient>
+  </defs>
+
+  <rect width="1500" height="1100" fill="#0a0a1a"/>
+  <text x="750" y="28" text-anchor="middle" fill="#22c55e" font-size="16" font-weight="bold" filter="url(#glow)">LDG Tuner Controller — Fritzing-Style Wiring Diagram</text>
+  <text x="750" y="46" text-anchor="middle" fill="#6b7280" font-size="10">NodeMCU ESP32S v1.1 (USB top) + BTT TFT35-SPI V2.1 + AT-1000ProII</text>
+
+  <!-- ==================== NODEMCU ESP32S v1.1 (USB top, ESP32 bottom) ==================== -->
+  <rect x="520" y="80" width="280" height="600" rx="6" fill="url(#pcb)" stroke="#2a7c3a" stroke-width="2"/>
+  <rect x="620" y="75" width="80" height="25" rx="3" fill="#888" stroke="#666" stroke-width="1"/>
+  <text x="660" y="92" text-anchor="middle" fill="#333" font-size="9" font-weight="bold">USB</text>
+  <rect x="600" y="580" width="120" height="80" rx="4" fill="#c0c0c0" stroke="#999" stroke-width="1"/>
+  <text x="660" y="625" text-anchor="middle" fill="#333" font-size="10" font-weight="bold">ESP32</text>
+  <text x="660" y="380" text-anchor="middle" fill="#4a9c5a" font-size="11" font-weight="bold">NodeMCU ESP32S v1.1</text>
+
+  <!-- LEFT SIDE PINS (19 pins, top to bottom) -->
+  <g font-size="8" fill="#e8e8f0">
+    <circle cx="520" cy="280" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="283" text-anchor="end" fill="#666" font-size="7">CLK</text>
+    <circle cx="520" cy="300" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="303" text-anchor="end" fill="#666" font-size="7">SD0</text>
+    <circle cx="520" cy="320" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="323" text-anchor="end" fill="#666" font-size="7">SD1</text>
+    <circle cx="520" cy="340" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="343" text-anchor="end" fill="#9ca3af" font-size="7">15</text>
+    <circle cx="520" cy="360" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="363" text-anchor="end" fill="#9ca3af" font-size="7">2</text>
+    <circle cx="520" cy="380" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="383" text-anchor="end" fill="#9ca3af" font-size="7">0</text>
+    <circle cx="520" cy="400" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="403" text-anchor="end" fill="#9ca3af" font-size="7">4</text>
+    <circle cx="520" cy="420" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="423" text-anchor="end" fill="#3b82f6" font-size="7" font-weight="bold">16</text>
+    <circle cx="520" cy="440" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="443" text-anchor="end" fill="#d946ef" font-size="7" font-weight="bold">17</text>
+    <circle cx="520" cy="460" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="463" text-anchor="end" fill="#9ca3af" font-size="7" font-weight="bold">5</text>
+    <circle cx="520" cy="480" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="483" text-anchor="end" fill="#eab308" font-size="7" font-weight="bold">18</text>
+    <circle cx="520" cy="500" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="503" text-anchor="end" fill="#eab308" font-size="7" font-weight="bold">19</text>
+    <circle cx="520" cy="520" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="523" text-anchor="end" fill="#22c55e" font-size="7">GND</text>
+    <circle cx="520" cy="540" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="543" text-anchor="end" fill="#a855f7" font-size="7" font-weight="bold">21</text>
+    <circle cx="520" cy="560" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="563" text-anchor="end" fill="#666" font-size="7">RX</text>
+    <circle cx="520" cy="580" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="583" text-anchor="end" fill="#666" font-size="7">TX</text>
+    <circle cx="520" cy="600" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="603" text-anchor="end" fill="#a855f7" font-size="7" font-weight="bold">22</text>
+    <circle cx="520" cy="620" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="623" text-anchor="end" fill="#eab308" font-size="7" font-weight="bold">23</text>
+    <circle cx="520" cy="640" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="510" y="643" text-anchor="end" fill="#22c55e" font-size="7">GND</text>
+  </g>
+
+  <!-- RIGHT SIDE PINS (19 pins, top to bottom) -->
+  <g font-size="8" fill="#e8e8f0">
+    <circle cx="800" cy="280" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="283" text-anchor="start" fill="#06b6d4" font-size="7">5V</text>
+    <circle cx="800" cy="300" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="303" text-anchor="start" fill="#22c55e" font-size="7">GND</text>
+    <circle cx="800" cy="320" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="323" text-anchor="start" fill="#666" font-size="7">S03</text>
+    <circle cx="800" cy="340" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="343" text-anchor="start" fill="#666" font-size="7">S02</text>
+    <circle cx="800" cy="360" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="363" text-anchor="start" fill="#9ca3af" font-size="7">13</text>
+    <circle cx="800" cy="380" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="383" text-anchor="start" fill="#22c55e" font-size="7">GND</text>
+    <circle cx="800" cy="400" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="403" text-anchor="start" fill="#9ca3af" font-size="7">12</text>
+    <circle cx="800" cy="420" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="423" text-anchor="start" fill="#9ca3af" font-size="7">14</text>
+    <circle cx="800" cy="440" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="443" text-anchor="start" fill="#9ca3af" font-size="7">27</text>
+    <circle cx="800" cy="460" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="463" text-anchor="start" fill="#9ca3af" font-size="7">26</text>
+    <circle cx="800" cy="480" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="483" text-anchor="start" fill="#9ca3af" font-size="7">25</text>
+    <circle cx="800" cy="500" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="503" text-anchor="start" fill="#9ca3af" font-size="7">33</text>
+    <circle cx="800" cy="520" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="523" text-anchor="start" fill="#9ca3af" font-size="7">32</text>
+    <circle cx="800" cy="540" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="543" text-anchor="start" fill="#9ca3af" font-size="7">35</text>
+    <circle cx="800" cy="560" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="563" text-anchor="start" fill="#a855f7" font-size="7" font-weight="bold">34</text>
+    <circle cx="800" cy="580" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="583" text-anchor="start" fill="#9ca3af" font-size="7">SVN</text>
+    <circle cx="800" cy="600" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="603" text-anchor="start" fill="#9ca3af" font-size="7">SVP</text>
+    <circle cx="800" cy="620" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="623" text-anchor="start" fill="#9ca3af" font-size="7">EN</text>
+    <circle cx="800" cy="640" r="4" fill="#c0a030" stroke="#999" stroke-width="1"/><text x="810" y="643" text-anchor="start" fill="#06b6d4" font-size="7">3V3</text>
+  </g>
+
+  <!-- ==================== DISPLAY (far left) ==================== -->
+  <rect x="40" y="100" width="220" height="380" rx="8" fill="#12141c" stroke="#2a2d3e" stroke-width="2"/>
+  <text x="150" y="128" text-anchor="middle" fill="#22c55e" font-size="13" font-weight="bold">BTT TFT35-SPI V2.1</text>
+  <text x="150" y="144" text-anchor="middle" fill="#6b7280" font-size="9">JST-XH 10-pin Connector</text>
+  <g font-size="9" fill="#e8e8f0">
+    <rect x="255" y="165" width="10" height="12" rx="1" fill="#555"/><text x="275" y="175" text-anchor="start">1: IORQ</text>
+    <rect x="255" y="190" width="10" height="12" rx="1" fill="#555"/><text x="275" y="200" text-anchor="start">2: SCL</text>
+    <rect x="255" y="215" width="10" height="12" rx="1" fill="#555"/><text x="275" y="225" text-anchor="start">3: SDA</text>
+    <rect x="255" y="240" width="10" height="12" rx="1" fill="#555"/><text x="275" y="250" text-anchor="start">4: RS (DC)</text>
+    <rect x="255" y="265" width="10" height="12" rx="1" fill="#555"/><text x="275" y="275" text-anchor="start">5: NSS (CS)</text>
+    <rect x="255" y="290" width="10" height="12" rx="1" fill="#555"/><text x="275" y="300" text-anchor="start">6: SCK</text>
+    <rect x="255" y="315" width="10" height="12" rx="1" fill="#555"/><text x="275" y="325" text-anchor="start">7: MOSI</text>
+    <rect x="255" y="340" width="10" height="12" rx="1" fill="#555"/><text x="275" y="350" text-anchor="start">8: MISO</text>
+    <rect x="255" y="365" width="10" height="12" rx="1" fill="#555"/><text x="275" y="375" text-anchor="start">9: GND</text>
+    <rect x="255" y="390" width="10" height="12" rx="1" fill="#555"/><text x="275" y="400" text-anchor="start">10: +5V</text>
+  </g>
+
+  <!-- ==================== TUNER MINI-DIN (far right) ==================== -->
+  <rect x="1100" y="140" width="160" height="240" rx="8" fill="#12141c" stroke="#f59e0b" stroke-width="2"/>
+  <text x="1180" y="168" text-anchor="middle" fill="#f59e0b" font-size="13" font-weight="bold">LDG Tuner</text>
+  <text x="1180" y="184" text-anchor="middle" fill="#6b7280" font-size="9">Mini-DIN (REMOTE)</text>
+  <circle cx="1180" cy="230" r="16" fill="none" stroke="#6b7280" stroke-width="2"/><circle cx="1180" cy="230" r="3" fill="#ef4444"/><text x="1180" y="234" text-anchor="middle" fill="#ef4444" font-size="8">1</text><text x="1180" y="258" text-anchor="middle" fill="#6b7280" font-size="9">N/C</text>
+  <circle cx="1140" cy="290" r="16" fill="none" stroke="#6b7280" stroke-width="2"/><circle cx="1140" cy="290" r="3" fill="#22c55e"/><text x="1140" y="294" text-anchor="middle" fill="#22c55e" font-size="8">2</text><text x="1140" y="318" text-anchor="middle" fill="#6b7280" font-size="9">GND</text>
+  <circle cx="1220" cy="290" r="16" fill="none" stroke="#6b7280" stroke-width="2"/><circle cx="1220" cy="290" r="3" fill="#3b82f6"/><text x="1220" y="294" text-anchor="middle" fill="#3b82f6" font-size="8">3</text><text x="1220" y="318" text-anchor="middle" fill="#6b7280" font-size="9">TX</text>
+  <circle cx="1180" cy="350" r="16" fill="none" stroke="#6b7280" stroke-width="2"/><circle cx="1180" cy="350" r="3" fill="#d946ef"/><text x="1180" y="354" text-anchor="middle" fill="#d946ef" font-size="8">4</text><text x="1180" y="378" text-anchor="middle" fill="#6b7280" font-size="9">RX</text>
+  <rect x="1100" y="390" width="160" height="30" rx="4" fill="#332200" stroke="#664400"/><text x="1180" y="410" text-anchor="middle" fill="#f59e0b" font-size="10" font-weight="bold">NOT S-Video!</text>
+
+  <!-- ==================== WIRING LINES ==================== -->
+  <g stroke-width="2" fill="none">
+    <!-- Display P6 (SCK) → GPIO18 (Left y=480) -->
+    <path d="M 265 296 L 520 486" stroke="#eab308"/><text x="390" y="385" text-anchor="middle" fill="#eab308" font-size="9">SCK</text>
+    <!-- Display P7 (MOSI) → GPIO23 (Left y=620) -->
+    <path d="M 265 321 L 520 626" stroke="#eab308"/><text x="390" y="468" text-anchor="middle" fill="#eab308" font-size="9">MOSI</text>
+    <!-- Display P8 (MISO) → GPIO19 (Left y=500) -->
+    <path d="M 265 346 L 520 506" stroke="#eab308"/><text x="390" y="420" text-anchor="middle" fill="#eab308" font-size="9">MISO</text>
+    <!-- Display P5 (CS) → GPIO5 (Left y=460) -->
+    <path d="M 265 271 L 520 466" stroke="#9ca3af"/><text x="390" y="362" text-anchor="middle" fill="#9ca3af" font-size="9">CS</text>
+    <!-- Display P4 (DC) → GPIO15 (Left y=340) -->
+    <path d="M 265 246 L 520 346" stroke="#9ca3af"/><text x="390" y="290" text-anchor="middle" fill="#9ca3af" font-size="9">DC</text>
+    <!-- Display P3 (SDA) → GPIO21 (Left y=540) -->
+    <path d="M 265 221 L 520 546" stroke="#a855f7"/><text x="390" y="378" text-anchor="middle" fill="#a855f7" font-size="9">SDA</text>
+    <!-- Display P2 (SCL) → GPIO22 (Left y=600) -->
+    <path d="M 265 196 L 520 606" stroke="#a855f7"/><text x="390" y="395" text-anchor="middle" fill="#a855f7" font-size="9">SCL</text>
+    <!-- Display P1 (IRQ) → SVN/GPIO39 (Right y=580) -->
+    <path d="M 265 171 L 800 586" stroke="#9ca3af"/><text x="530" y="372" text-anchor="middle" fill="#9ca3af" font-size="9">IRQ</text>
+    <!-- Display P10 (+5V) → 5V (Right y=280) -->
+    <path d="M 265 396 L 265 260 L 800 260" stroke="#06b6d4" stroke-dasharray="4,2"/><text x="530" y="255" text-anchor="middle" fill="#06b6d4" font-size="9">+5V</text>
+    <!-- Display P9 (GND) → GND (Left y=520) -->
+    <path d="M 265 371 L 520 526" stroke="#22c55e"/><text x="390" y="442" text-anchor="middle" fill="#22c55e" font-size="9">GND</text>
+    <!-- Tuner Pin2 (GND) → GND (Right y=300) -->
+    <path d="M 1100 290 L 800 306" stroke="#22c55e"/><text x="950" y="292" text-anchor="middle" fill="#22c55e" font-size="9">GND</text>
+    <!-- Tuner Pin3 (TX) → GPIO16 (Left y=420) -->
+    <path d="M 1100 290 L 520 426" stroke="#3b82f6"/><text x="810" y="352" text-anchor="middle" fill="#3b82f6" font-size="9">TX→16</text>
+    <!-- Tuner Pin4 (RX) → GPIO17 (Left y=440) -->
+    <path d="M 1100 350 L 520 446" stroke="#d946ef"/><text x="810" y="392" text-anchor="middle" fill="#d946ef" font-size="9">RX←17</text>
+  </g>
+
+  <!-- ==================== POWER SECTION (bottom) ==================== -->
+  <rect x="600" y="720" width="180" height="60" rx="6" fill="#12141c" stroke="#ef4444" stroke-width="2"/>
+  <text x="690" y="745" text-anchor="middle" fill="#ef4444" font-size="12" font-weight="bold">12V Supply</text>
+  <text x="690" y="765" text-anchor="middle" fill="#6b7280" font-size="9">13.8V typical, 2A min</text>
+
+  <rect x="80" y="720" width="240" height="100" rx="6" fill="#12141c" stroke="#3b82f6" stroke-width="2"/>
+  <text x="200" y="745" text-anchor="middle" fill="#3b82f6" font-size="12" font-weight="bold">LM7805 (TO-220)</text>
+  <text x="200" y="765" text-anchor="middle" fill="#6b7280" font-size="9">Mount on heatsink</text>
+  <text x="140" y="795" text-anchor="middle" fill="#6b7280" font-size="8">IN</text><text x="200" y="795" text-anchor="middle" fill="#6b7280" font-size="8">GND</text><text x="260" y="795" text-anchor="middle" fill="#6b7280" font-size="8">OUT</text>
+  <path d="M 600 750 L 340 750 L 340 780 L 140 780 L 140 790" stroke="#ef4444" stroke-width="2" fill="none"/><text x="270" y="775" text-anchor="middle" fill="#ef4444" font-size="8">+12V</text>
+  <line x1="140" y1="800" x2="155" y2="800" stroke="#eab308" stroke-width="2"/><line x1="155" y1="795" x2="155" y2="805" stroke="#eab308" stroke-width="2"/><line x1="159" y1="795" x2="159" y2="805" stroke="#eab308" stroke-width="2"/><line x1="159" y1="800" x2="175" y2="800" stroke="#eab308" stroke-width="2"/><line x1="175" y1="800" x2="175" y2="815" stroke="#eab308" stroke-width="2"/><text x="157" y="790" text-anchor="middle" fill="#eab308" font-size="7">100nF</text>
+  <line x1="260" y1="800" x2="275" y2="800" stroke="#eab308" stroke-width="2"/><line x1="275" y1="795" x2="275" y2="805" stroke="#eab308" stroke-width="2"/><path d="M 279 795 Q 282 800 279 805" stroke="#eab308" stroke-width="2" fill="none"/><line x1="279" y1="800" x2="295" y2="800" stroke="#eab308" stroke-width="2"/><line x1="295" y1="800" x2="295" y2="815" stroke="#eab308" stroke-width="2"/><text x="277" y="790" text-anchor="middle" fill="#eab308" font-size="7">10uF</text>
+  <line x1="175" y1="815" x2="295" y2="815" stroke="#22c55e" stroke-width="2"/><line x1="190" y1="815" x2="190" y2="820" stroke="#22c55e" stroke-width="2"/><line x1="180" y1="820" x2="200" y2="820" stroke="#22c55e" stroke-width="2"/><line x1="183" y1="824" x2="197" y2="824" stroke="#22c55e" stroke-width="2"/><line x1="186" y1="828" x2="194" y2="828" stroke="#22c55e" stroke-width="2"/>
+  <line x1="200" y1="795" x2="200" y2="815" stroke="#22c55e" stroke-width="2"/>
+
+  <!-- ==================== VOLTAGE SENSE (middle right) ==================== -->
+  <rect x="900" y="540" width="280" height="180" rx="6" fill="#12141c" stroke="#a855f7" stroke-width="2"/>
+  <text x="1040" y="565" text-anchor="middle" fill="#a855f7" font-size="11" font-weight="bold">Voltage Sense</text>
+  <text x="1040" y="580" text-anchor="middle" fill="#6b7280" font-size="8">Auto PSU Detection</text>
+  <path d="M 690 720 L 860 720 L 860 560 L 1000 560 L 1000 630" stroke="#ef4444" stroke-width="2" fill="none" stroke-dasharray="3,2"/><text x="860" y="640" text-anchor="middle" fill="#ef4444" font-size="8">+12V sense tap</text>
+  <path d="M 1000 630 L 988 640 L 1012 650 L 988 660 L 1012 670 L 1000 680" fill="none" stroke="#eab308" stroke-width="2" stroke-linejoin="round"/><text x="1025" y="660" text-anchor="start" fill="#eab308" font-size="8">100k</text>
+  <line x1="1000" y1="680" x2="1000" y2="690" stroke="#eab308" stroke-width="2"/><circle cx="1000" cy="690" r="3" fill="#eab308"/>
+  <path d="M 1000 690 L 900 690 L 900 566 L 800 566" stroke="#a855f7" stroke-width="2" fill="none" stroke-dasharray="3,2"/><text x="850" y="625" text-anchor="middle" fill="#a855f7" font-size="8">ADC→34</text>
+  <line x1="1000" y1="690" x2="1000" y2="700" stroke="#eab308" stroke-width="2"/><path d="M 1000 700 L 988 710 L 1012 720 L 988 730 L 1012 740 L 1000 750" fill="none" stroke="#eab308" stroke-width="2" stroke-linejoin="round"/><text x="1025" y="730" text-anchor="start" fill="#eab308" font-size="8">22k</text>
+  <line x1="985" y1="765" x2="1165" y2="765" stroke="#22c55e" stroke-width="2"/><line x1="990" y1="765" x2="990" y2="775" stroke="#22c55e" stroke-width="2"/><line x1="980" y1="775" x2="1000" y2="775" stroke="#22c55e" stroke-width="2"/><line x1="983" y1="779" x2="997" y2="779" stroke="#22c55e" stroke-width="2"/><line x1="986" y1="783" x2="994" y2="783" stroke="#22c55e" stroke-width="2"/>
+  <path d="M 1000 750 L 1000 765" stroke="#22c55e" stroke-width="2" fill="none"/>
+  <path d="M 1000 690 L 1050 690" stroke="#eab308" stroke-width="1.5" fill="none"/><line x1="1050" y1="690" x2="1050" y2="702" stroke="#eab308" stroke-width="1.5"/><line x1="1044" y1="702" x2="1056" y2="702" stroke="#eab308" stroke-width="2"/><line x1="1044" y1="706" x2="1056" y2="706" stroke="#eab308" stroke-width="2"/><path d="M 1050 706 L 1050 765" stroke="#eab308" stroke-width="1.5" fill="none"/><text x="1066" y="708" text-anchor="start" fill="#eab308" font-size="7">100nF</text>
+  <path d="M 1000 690 L 1102 690" stroke="#ef4444" stroke-width="1.5" fill="none"/><polygon points="1106,684 1106,696 1118,690" fill="none" stroke="#ef4444" stroke-width="1.5"/><line x1="1118" y1="684" x2="1118" y2="696" stroke="#ef4444" stroke-width="1.5"/><path d="M 1118 690 L 1126 690 L 1126 765" stroke="#ef4444" stroke-width="1.5" fill="none"/><text x="1134" y="688" text-anchor="start" fill="#ef4444" font-size="7">3.3V TVS</text>
+
+  <!-- ==================== LEGEND ==================== -->
+  <rect x="80" y="860" width="1090" height="25" rx="4" fill="#12141c" stroke="#2a2d3e"/>
+  <g font-size="9" fill="#6b7280">
+    <rect x="100" y="870" width="12" height="3" fill="#ef4444"/><text x="118" y="874">+12V</text>
+    <rect x="160" y="870" width="12" height="3" fill="#22c55e"/><text x="178" y="874">GND</text>
+    <rect x="220" y="870" width="12" height="3" fill="#06b6d4"/><text x="238" y="874">+5V</text>
+    <rect x="290" y="870" width="12" height="3" fill="#3b82f6"/><text x="308" y="874">TX</text>
+    <rect x="350" y="870" width="12" height="3" fill="#d946ef"/><text x="368" y="874">RX</text>
+    <rect x="410" y="870" width="12" height="3" fill="#eab308"/><text x="428" y="874">SPI</text>
+    <rect x="470" y="870" width="12" height="3" fill="#9ca3af"/><text x="488" y="874">Control</text>
+    <rect x="560" y="870" width="12" height="3" fill="#a855f7"/><text x="578" y="874">I2C/ADC</text>
+    <rect x="650" y="870" width="12" height="3" fill="#3b82f6"/><text x="668" y="874">Regulator</text>
+  </g>
+
+  <rect x="80" y="890" width="1090" height="50" rx="6" fill="#12141c" stroke="#2a2d3e"/>
+  <text x="625" y="910" text-anchor="middle" fill="#22c55e" font-size="11" font-weight="bold">Pin-to-Pin Connections (NodeMCU ESP32S v1.1, USB top)</text>
+  <g font-size="9" fill="#e8e8f0">
+    <text x="100" y="925">Display→ESP32: P6(SCK)→18 | P7(MOSI)→23 | P8(MISO)→19 | P5(CS)→5 | P4(DC)→15 | P3(SDA)→21 | P2(SCL)→22 | P1(IRQ)→SVN</text>
+    <text x="100" y="935">Display→ESP32: P10(+5V)→5V | P9(GND)→GND | Tuner: Pin2→GND | Pin3→16 | Pin4→17 | Pin1: N/C</text>
+    <text x="650" y="925">Voltage Sense: 100k/22k divider → 34 | Power: 13.8V → LM7805 → 5V → VIN</text>
+  </g>
+</svg>

@@ -57,20 +57,22 @@ UI previews with demo data: 250 W forward, 10 W reflected, SWR 1.5, and the 20m 
 ### Wiring
 
 For the Sunton board, follow [ESP32-3248S035C wiring and installation](docs/boards/esp32-3248s035c.md).
-Its tuner UART uses **RX GPIO35 / TX GPIO22 on P3**. The UART diagram covers
-both board profiles; the display diagram and quick-reference table below apply
-to the separate ESP32 + BTT hardware.
+Its tuner UART uses **RX GPIO35 / TX GPIO22 on P3**. The diagram and
+quick-reference table below apply to the separate ESP32 + BTT hardware.
 
 See [WIRING.md](WIRING.md) for complete details. Quick reference:
 
-![Tuner UART with mandatory 5V / 3.3V level conversion](docs/wiring/tuner-uart.svg)
+![Wiring Diagram](wiring-diagram.svg)
+
+Additional diagrams: [tuner UART](docs/wiring/tuner-uart.svg),
+[mini-DIN connector](docs/wiring/tuner-connector.svg),
+[BTT display](docs/wiring/btt-display.svg),
+[power supply](docs/wiring/power.svg).
 
 The [LDG Meter Protocol (page 3)](https://github.com/Efpophis/LDGControl/blob/master/MeterProtocol.pdf)
 defines mini-DIN **pin 3 as tuner RX** and **pin 4 as tuner TX**.
 **Pin 1 carries +12V**; leave it disconnected and insulated in this build.
 See WIRING.md for soldering tables and connector views.
-
-![NodeMCU to BTT display connections](wiring-diagram.svg)
 
 | Connection | ESP32 Pin | Notes |
 |------------|-----------|-------|

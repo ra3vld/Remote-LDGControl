@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="940" viewBox="0 0 1440 940" role="img" aria-labelledby="title desc">
+<title id="title">ESP32 NodeMCU и BTT TFT35-SPI V2.1: провода дисплея</title><desc id="desc">Десять прямых соединений от подписанных GPIO NodeMCU к сигналам JST-XH дисплея. Эта схема не применяется к встроенному дисплею Sunton.</desc>
+<defs>
+  <marker id="blue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#1763bb"/></marker>
+  <marker id="purple-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#7c3bb4"/></marker>
+</defs>
+<rect width="1440" height="940" fill="#fff"/>
+<g font-family="DejaVu Sans, Arial, sans-serif" fill="#172b42">
+<text x="40" y="48" font-size="30" fill="#172b42" text-anchor="start" font-weight="700">03 / NodeMCU ↔ BTT TFT35-SPI V2.1</text>
+<text x="40" y="82" font-size="20" fill="#52657b" text-anchor="start" font-weight="400">Только esp32-display · у Sunton дисплей и тачскрин уже подключены на плате</text>
+<rect x="40" y="112" width="1360" height="65" rx="10" fill="#fff9ec" stroke="#dec78e" stroke-width="2"/>
+<text x="64" y="141" font-size="20" fill="#172b42" text-anchor="start" font-weight="700">Показан порядок сигналов, а не расположение ножек NodeMCU или вид JST со стороны пайки.</text>
+<text x="64" y="164" font-size="18" fill="#52657b" text-anchor="start" font-weight="400">Ищите маркировку GPIO на своей плате; контакт 1 дисплея определяйте по документации BTT.</text>
+<rect x="80" y="214" width="360" height="590" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<rect x="1000" y="214" width="360" height="590" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<text x="104" y="253" font-size="25" fill="#172b42" text-anchor="start" font-weight="700">ESP32 NodeMCU</text>
+<text x="1024" y="253" font-size="25" fill="#172b42" text-anchor="start" font-weight="700">BTT · JST-XH 10 pin</text>
+<text x="104" y="311" font-size="22" fill="#52657b" text-anchor="start" font-weight="700">GPIO39 / SVN</text>
+<text x="1024" y="311" font-size="22" fill="#52657b" text-anchor="start" font-weight="700">1 · IORQ (touch IRQ)</text>
+<polyline points="440,304 1000,304" fill="none" stroke="#52657b" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="304" r="5" fill="#fff" stroke="#52657b" stroke-width="3"/>
+<circle cx="1000" cy="304" r="5" fill="#fff" stroke="#52657b" stroke-width="3"/>
+<text x="720" y="292" font-size="17" fill="#52657b" text-anchor="middle" font-weight="400">I2C / TOUCH</text>
+<text x="104" y="361" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">GPIO22</text>
+<text x="1024" y="361" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">2 · SCL (touch)</text>
+<polyline points="440,354 1000,354" fill="none" stroke="#7c3bb4" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="354" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
+<circle cx="1000" cy="354" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
+<text x="104" y="411" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">GPIO21</text>
+<text x="1024" y="411" font-size="22" fill="#7c3bb4" text-anchor="start" font-weight="700">3 · SDA (touch)</text>
+<polyline points="440,404 1000,404" fill="none" stroke="#7c3bb4" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="404" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
+<circle cx="1000" cy="404" r="5" fill="#fff" stroke="#7c3bb4" stroke-width="3"/>
+<text x="104" y="461" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO15</text>
+<text x="1024" y="461" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">4 · RS / DC</text>
+<polyline points="440,454 1000,454" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="454" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<circle cx="1000" cy="454" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<text x="720" y="442" font-size="17" fill="#52657b" text-anchor="middle" font-weight="400">SPI / LCD</text>
+<text x="104" y="511" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO5</text>
+<text x="1024" y="511" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">5 · NSS / CS</text>
+<polyline points="440,504 1000,504" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="504" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<circle cx="1000" cy="504" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<text x="104" y="561" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO18</text>
+<text x="1024" y="561" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">6 · SCK</text>
+<polyline points="440,554 1000,554" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="554" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<circle cx="1000" cy="554" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<text x="104" y="611" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO23</text>
+<text x="1024" y="611" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">7 · MOSI</text>
+<polyline points="440,604 1000,604" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="604" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<circle cx="1000" cy="604" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<text x="104" y="661" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">GPIO19</text>
+<text x="1024" y="661" font-size="22" fill="#1763bb" text-anchor="start" font-weight="700">8 · MISO</text>
+<polyline points="440,654 1000,654" fill="none" stroke="#1763bb" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="654" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<circle cx="1000" cy="654" r="5" fill="#fff" stroke="#1763bb" stroke-width="3"/>
+<text x="104" y="711" font-size="22" fill="#364152" text-anchor="start" font-weight="700">GND</text>
+<text x="1024" y="711" font-size="22" fill="#364152" text-anchor="start" font-weight="700">9 · GND</text>
+<polyline points="440,704 1000,704" fill="none" stroke="#364152" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="704" r="5" fill="#fff" stroke="#364152" stroke-width="3"/>
+<circle cx="1000" cy="704" r="5" fill="#fff" stroke="#364152" stroke-width="3"/>
+<text x="720" y="692" font-size="17" fill="#52657b" text-anchor="middle" font-weight="400">ПИТАНИЕ</text>
+<text x="104" y="761" font-size="22" fill="#b52b32" text-anchor="start" font-weight="700">5V от БП</text>
+<text x="1024" y="761" font-size="22" fill="#b52b32" text-anchor="start" font-weight="700">10 · +5V</text>
+<polyline points="440,754 1000,754" fill="none" stroke="#b52b32" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="440" cy="754" r="5" fill="#fff" stroke="#b52b32" stroke-width="3"/>
+<circle cx="1000" cy="754" r="5" fill="#fff" stroke="#b52b32" stroke-width="3"/>
+<rect x="40" y="838" width="1360" height="70" rx="10" fill="#f5f8fc" stroke="#cbd5e1" stroke-width="2"/>
+<text x="64" y="867" font-size="21" fill="#172b42" text-anchor="start" font-weight="700">Тюнер подключается отдельно через U1/U2: RX = GPIO16, TX = GPIO17 (схема 01).</text>
+<text x="64" y="894" font-size="19" fill="#52657b" text-anchor="start" font-weight="400">В штатном 10-контактном кабеле нет RST и BL: отдельный провод от GPIO32 к дисплею не добавлять.</text>
+</g></svg>

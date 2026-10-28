@@ -99,9 +99,9 @@ Specification, стр. 3**, [копия документа LDG в LDGControl](ht
 
 Для Sunton этот раздел пропускается: экран и тачскрин уже соединены с ESP32.
 
-![Десять прямых соединений ESP32 NodeMCU и BTT TFT35-SPI V2.1](wiring-diagram.svg)
+![Десять прямых соединений ESP32 NodeMCU и BTT TFT35-SPI V2.1](docs/wiring/btt-display.svg)
 
-[Открыть схему BTT крупно](wiring-diagram.svg).
+[Открыть схему BTT крупно](docs/wiring/btt-display.svg).
 
 | Контакт BTT, XH2.54 | Сигнал | Куда припаять на NodeMCU |
 |---|---|---|
