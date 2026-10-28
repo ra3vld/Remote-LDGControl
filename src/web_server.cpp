@@ -1,13 +1,16 @@
 #include "web_server.h"
 #include "config_manager.h"
-#include "portal_cert.h"
 #include "config.h"
 #include "mqtt_protocol.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <HTTPServer.hpp>
+#if TLS_ENABLED
 #include <HTTPSServer.hpp>
 #include <SSLCert.hpp>
+#include "portal_cert.h"
+#endif
 #include <HTTPRequest.hpp>
 #include <HTTPResponse.hpp>
 #include <WebsocketHandler.hpp>
@@ -21,7 +24,7 @@ namespace hsv = httpsserver;
 // ---------------------------------------------------------------------------
 // Singleton + shared SSE state.
 //
-// The HTTPS library accepts plain function pointers for route handlers, so we
+// The HTTP library accepts plain function pointers for route handlers, so we
 // can't capture `this` in lambdas. Handlers read from s_instance to reach
 // LdgWebServer members, and from s_sse for the SSE push state. Each SSE
 // subscriber runs its own connection task and polls s_sse seq counters.
@@ -47,8 +50,8 @@ static SseState s_sse = {
 // Unlike SSE, the library dispatches WS handlers non-inline — the slot stays
 // in STATE_WEBSOCKET and the connection's loop() polls for client data, so a
 // long-lived WS handler doesn't block the slot the way h_events does. That
-// lets us keep one persistent connection per browser (no per-command TLS
-// handshakes, no SSE session caps, no close-on-button-click dance) AND let
+// lets us keep one persistent connection per browser (no SSE session caps
+// or close-on-button-click dance) AND let
 // command POSTs dispatch on free slots concurrently.
 //
 // Registry lives in the webServer task only — both registration (handler
@@ -190,7 +193,7 @@ static bool authenticate(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
 }
 
 static std::string readRequestBody(hsv::HTTPRequest* req) {
-    // readBytes() is non-blocking and returns 0 between SSL records, not only
+    // readBytes() is non-blocking and returns 0 between TCP packets, not only
     // at end-of-body. Drive the loop off requestComplete() so we don't bail
     // mid-body when the receive buffer is briefly empty.
     std::string body;
@@ -426,7 +429,11 @@ static void h_telemetry(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
 // ---------------------------------------------------------------------------
 
 LdgWebServer::LdgWebServer()
-    : m_server(nullptr), m_sslCert(nullptr), m_tuner(nullptr),
+    : m_server(nullptr),
+#if TLS_ENABLED
+      m_sslCert(nullptr),
+#endif
+      m_tuner(nullptr),
       m_cmdHandler(nullptr), m_stateGetter(nullptr),
       m_remoteTelemetryHandler(nullptr), m_lastMeterUpdate(0) {
     s_instance = this;
@@ -434,7 +441,9 @@ LdgWebServer::LdgWebServer()
 
 LdgWebServer::~LdgWebServer() {
     if (m_server) { m_server->stop(); delete m_server; }
-    if (m_sslCert) delete m_sslCert;
+#if TLS_ENABLED
+    delete m_sslCert;
+#endif
     if (s_instance == this) s_instance = nullptr;
 }
 
@@ -447,18 +456,19 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     m_remoteTelemetryHandler = remoteTelemetryHandler;
     s_instance = this;
 
+    // setupWiFi() reboots after portal setup, leaving WEB_PORT free here.
+    // Bind to every interface, including the display unit's softAP.
+#if TLS_ENABLED
     m_sslCert = portalCert_newSSLCert();
     if (!m_sslCert) {
-        Serial.println("ERROR: runtime web server: no SSL cert");
+        Serial.println("ERROR: runtime web server: no TLS certificate");
         return false;
     }
-
-    // The captive portal HTTPSServer is torn down in setupWiFi() after STA
-    // join (with a 3s wait so its last connection drains), so port 443 is
-    // free here. Bind to 0.0.0.0 so the runtime is reachable on every
-    // interface — including the softAP on display units where the remote
-    // unit needs to talk to it.
-    m_server = new hsv::HTTPSServer(m_sslCert, 443, 4);
+    // Leave room for a persistent WebSocket and one command connection.
+    m_server = new hsv::HTTPSServer(m_sslCert, WEB_PORT, 2);
+#else
+    m_server = new hsv::HTTPServer(HTTP_PORT, 4);
+#endif
 
     m_server->registerNode(new hsv::ResourceNode("/",                   "GET",  &h_root));
     m_server->registerNode(new hsv::ResourceNode("/api/status",         "GET",  &h_status));
@@ -484,10 +494,11 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
 
     m_server->start();
     if (!m_server->isRunning()) {
-        Serial.println("ERROR: runtime HTTPS server failed to bind :443");
+        Serial.printf("ERROR: runtime web server failed to bind :%u\n", WEB_PORT);
         return false;
     }
-    Serial.println("Runtime HTTPS server started on :443");
+    Serial.printf("Runtime web server started: %s%s/\n",
+                  WEB_SCHEME, WiFi.localIP().toString().c_str());
     return true;
 }
 

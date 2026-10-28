@@ -5,7 +5,7 @@
 
 namespace httpsserver { class SSLCert; }
 
-// Generate a unique self-signed certificate and RSA key on first boot.
+// Generate a unique self-signed certificate and ECDSA P-256 key when TLS is enabled.
 // Stores them in NVS so they persist across reboots.
 // This prevents the security issue of a hardcoded private key in firmware.
 

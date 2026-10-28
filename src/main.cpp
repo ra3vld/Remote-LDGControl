@@ -1,16 +1,18 @@
 #include <Arduino.h>
+#include "config.h"
 #include <WiFi.h>
 #include <WiFiClient.h>
+#if TLS_ENABLED
 #include <WiFiClientSecure.h>
+#include "portal_cert.h"
+#endif
 #include <ESPmDNS.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
-#include "config.h"
 #include "config_manager.h"
 #include "tuner_protocol.h"
 #include "mqtt_handler.h"
 #include "web_server.h"
-#include "portal_cert.h"
 
 #ifdef WITH_DISPLAY
 #include "display_ui.h"
@@ -25,7 +27,12 @@ LdgWebServer webServer;
 DisplayUI display;
 static std::atomic<bool> s_remoteDisplayPending{false};
 
-static WiFiClientSecure s_remoteClient;
+#if TLS_ENABLED
+using WebClient = WiFiClientSecure;
+#else
+using WebClient = WiFiClient;
+#endif
+static WebClient s_remoteClient;
 static bool             s_remoteConnected  = false;
 static uint32_t         s_lastRemoteReconnect = 0;
 
@@ -93,7 +100,7 @@ void setupWiFi() {
 
         if (MDNS.begin(hostname)) {
             Serial.printf("mDNS responder started: %s.local\n", hostname);
-            MDNS.addService("http", "tcp", HTTP_PORT);
+            MDNS.addService(TLS_ENABLED ? "https" : "http", "tcp", WEB_PORT);
         }
     } else {
         wifiConnected = false;
@@ -191,10 +198,12 @@ void connectRemoteUnit() {
     }
 
     Serial.printf("Connecting to remote SSE at %s:%d...\n",
-                  remoteIP.toString().c_str(), HTTPS_PORT);
+                  remoteIP.toString().c_str(), WEB_PORT);
+#if TLS_ENABLED
     s_remoteClient.setInsecure();
+#endif
 
-    if (!s_remoteClient.connect(remoteIP, HTTPS_PORT)) {
+    if (!s_remoteClient.connect(remoteIP, WEB_PORT)) {
         Serial.println("Remote: connect failed");
         return;
     }
@@ -270,9 +279,11 @@ bool proxyCommandToRemote(uint8_t cmd) {
         default: return false;
     }
 
-    WiFiClientSecure client;
+    WebClient client;
+#if TLS_ENABLED
     client.setInsecure();
-    if (!client.connect(remoteIP, HTTPS_PORT)) return false;
+#endif
+    if (!client.connect(remoteIP, WEB_PORT)) return false;
 
     String auth = buildBasicAuth(cfg.webUsername, cfg.webPassword);
     client.printf(
@@ -335,19 +346,19 @@ void setup() {
         "remote"
 #endif
     , __DATE__);
+    Serial.printf("Web transport: %s (TLS_ENABLED=%d, port=%u)\n",
+                  TLS_ENABLED ? "HTTPS" : "HTTP", TLS_ENABLED, WEB_PORT);
 
     // Load configuration from NVS
     configManager.begin();
 
     setupFS();
 
-    // Ensure the device's self-signed cert exists before any HTTPS server
-    // starts. Both the captive portal and the runtime web server use it; the
-    // portal would normally trigger this lazily, but a device with saved STA
-    // credentials skips the portal entirely.
+#if TLS_ENABLED
     if (!portalCert_init()) {
         Serial.println("ERROR: portal cert init failed; HTTPS will not work");
     }
+#endif
 
     // Tuner and display are UART/SPI — no WiFi dependency. Init them early so
     // the display is live during portal setup and for users who never use WiFi.
@@ -395,16 +406,16 @@ void setup() {
                          nullptr
 #endif
                          )) {
-        Serial.println("ERROR: web server failed to start - port 443 may still be bound");
+        Serial.printf("ERROR: web server failed to start - port %u may still be bound\n", WEB_PORT);
     }
 
-    // Spin the runtime HTTPS server on a dedicated FreeRTOS task so its
+    // Spin the runtime web server on a dedicated FreeRTOS task so its
     // handlers — especially the long-running SSE stream — cannot block
     // loop()'s tuner.process(). Without this, an active SSE subscriber
     // freezes the meter and queues every POST behind itself until the
     // SSE session cap fires. UART access shared between this task and
     // loop() is serialized by TunerProtocol's mutex. The 16 KB stack is
-    // generous; SSE handler + ArduinoJson + mbedtls peaks ~6 KB.
+    // retained for the SSE handlers and ArduinoJson serialization.
     xTaskCreatePinnedToCore(
         [](void*) {
             for (;;) {

@@ -1,3 +1,6 @@
+#include "config.h"
+
+#if TLS_ENABLED
 #include "portal_cert.h"
 #include <mbedtls/pk.h>
 #include <mbedtls/x509_crt.h>
@@ -210,3 +213,5 @@ httpsserver::SSLCert* portalCert_newSSLCert() {
 
     return new httpsserver::SSLCert(certDer, certDerLen, keyDer, keyDerLen);
 }
+
+#endif // TLS_ENABLED

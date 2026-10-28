@@ -19,7 +19,21 @@
 #define HTTP_PORT               80
 #define HTTPS_PORT              443
 #define MQTT_PORT               1883
-#define MQTTS_PORT              8883
+
+// Optional web/portal/remote-link TLS. Override with -DTLS_ENABLED=1.
+#ifndef TLS_ENABLED
+#define TLS_ENABLED             0
+#endif
+#if TLS_ENABLED != 0 && TLS_ENABLED != 1
+#error "TLS_ENABLED must be 0 or 1"
+#endif
+#if TLS_ENABLED
+#define WEB_PORT                HTTPS_PORT
+#define WEB_SCHEME              "https://"
+#else
+#define WEB_PORT                HTTP_PORT
+#define WEB_SCHEME              "http://"
+#endif
 
 // ============================================================
 // MQTT Configuration
@@ -88,16 +102,6 @@
 #define WEB_RATE_LIMIT_WINDOW_MS 1000
 #define MAX_LOGIN_ATTEMPTS      5
 #define LOGIN_LOCKOUT_MS        300000  // 5 minutes
-
-// TLS (optional, requires certificates in LittleFS)
-#define TLS_ENABLED             false
-#define TLS_CA_CERT_PATH        "/certs/ca.pem"
-#define TLS_SERVER_CERT_PATH    "/certs/server.pem"
-#define TLS_SERVER_KEY_PATH     "/certs/server.key"
-
-// MQTT TLS (optional)
-#define MQTT_TLS_ENABLED        false
-#define MQTT_TLS_FINGERPRINT    ""  // SHA1 fingerprint of broker cert
 
 // ============================================================
 // System

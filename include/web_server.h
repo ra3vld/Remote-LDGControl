@@ -5,7 +5,10 @@
 #include "tuner_protocol.h"
 #include "config.h"
 
-namespace httpsserver { class HTTPSServer; class SSLCert; }
+namespace httpsserver { class HTTPServer; }
+#if TLS_ENABLED
+namespace httpsserver { class SSLCert; }
+#endif
 
 typedef bool (*command_handler_t)(uint8_t cmd);
 typedef tuner_state_t (*state_getter_t)();
@@ -35,8 +38,10 @@ public:
     remote_telemetry_handler_t getRemoteTelemetryHandler() { return m_remoteTelemetryHandler; }
 
 private:
-    httpsserver::HTTPSServer* m_server;
+    httpsserver::HTTPServer* m_server;
+#if TLS_ENABLED
     httpsserver::SSLCert* m_sslCert;
+#endif
     TunerProtocol* m_tuner;
     command_handler_t m_cmdHandler;
     state_getter_t m_stateGetter;

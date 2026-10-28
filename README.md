@@ -104,7 +104,7 @@ No software installation required. Works in Chrome, Edge, or Opera.
 2. Connect your ESP32 via USB
 3. Select your firmware variant and click **Install**
 4. After flashing, the ESP32 creates a `LDGConfig` WiFi AP
-5. Connect to it — a captive portal opens for WiFi setup
+5. Connect to it and open `http://192.168.4.1/` for WiFi setup
 6. Once connected to your network, access the web UI at the assigned IP
 
 ### Option 2: Download Pre-built Firmware
@@ -136,8 +136,8 @@ pio run -e esp32-3248s035c -t uploadfs # Web UI in LittleFS (required on first i
 pio device monitor                   # Serial console
 ```
 
-The build pins PlatformIO Espressif32 6.12.0 (Arduino ESP32 2.0.17), matching the
-existing TLS code. Run `pio test -e native` for the GT911 protocol tests.
+The build pins PlatformIO Espressif32 6.12.0 (Arduino ESP32 2.0.17).
+Run `pio test -e native` for the GT911 protocol tests.
 See the [Sunton board guide](docs/boards/esp32-3248s035c.md) for pins, power,
 and flash offsets.
 
@@ -147,11 +147,33 @@ All settings are configured through the web interface — no need to edit source
 
 ### Initial Setup (Captive Portal)
 
-After first flash, the ESP32 creates an AP named `LDGConfig` (password: `configure`). Connect to it and a captive portal will prompt for your WiFi credentials.
+After first flash, the ESP32 creates an AP named `LDGConfig` (password: `configure`).
+Connect to it, stay connected if your phone reports no Internet, and open
+`http://192.168.4.1/` in a browser. Captive-network probes redirect to this
+address. The setup portal, runtime web UI and display-to-remote link use
+plain HTTP on port 80 by default (`TLS_ENABLED=0`), without certificate
+generation. In this mode, passwords and HTTP Basic Auth credentials are
+transmitted without transport encryption.
+The portal's periodic log includes `internal_free` and `internal_max` (the
+largest free block); total free heap alone does not show fragmentation.
+
+### Optional TLS
+
+Add `-DTLS_ENABLED=1` to the selected environment's `build_flags` in
+`platformio.ini` to enable HTTPS on port 443 for the setup portal, runtime
+web UI and display-to-remote link. Both linked units must use the same setting.
+Without this flag, all three use HTTP on port 80.
+
+TLS builds generate a device certificate on first use and retain it in NVS.
+Open `https://192.168.4.1/` for setup and accept the self-signed certificate
+warning in a regular browser. Captive HTTP requests redirect to that address.
+The setup server permits one TLS session at a time and closes each response;
+the runtime permits two sessions to leave room for WebSocket plus commands.
 
 ### Web Configuration
 
 Once on your network, go to `http://<esp32-ip>/` and log in (default: `admin` / `change_me_please`).
+For TLS builds, use `https://<esp32-ip>/` instead.
 
 Go to **Settings** (or `GET /api/config`) to configure:
 
@@ -226,7 +248,8 @@ actual base topic in Settings or `GET /api/config` (`mqttBaseTopic`).
 
 **Migration:** the former shared `ldg/tuner/...` and `ldg/tuner/remote/...` topics
 are no longer published or subscribed. Update existing MQTT clients and automations.
-Display ↔ remote communication continues over HTTPS/SSE and needs no MQTT broker.
+Display ↔ remote communication continues over HTTP/SSE (HTTPS with
+`TLS_ENABLED=1`) and needs no MQTT broker.
 
 | Topic relative to the base | Direction | Payload / retention |
 |---|---|---|
@@ -396,7 +419,8 @@ No MQTT broker required for the link. The remote unit connects to the display un
 Both units can independently connect to a broker and appear as separate Home
 Assistant devices. Each uses its own `ldg/tuner/<mac>/...` topics. A display
 controller publishes its active tuner; the headless unit publishes its local
-tuner. MQTT does not carry the display ↔ remote link; that remains HTTPS/SSE.
+tuner. MQTT does not carry the display ↔ remote link; that remains HTTP/SSE
+(HTTPS with `TLS_ENABLED=1`).
 
 ## Security
 
@@ -413,7 +437,6 @@ The controller uses the following security controls:
 ### Hardening Recommendations
 
 - **Never** port-forward the HTTP port to the internet
-- Use MQTT TLS if your broker supports it
 - Change the default web password immediately
 - Place on an isolated IoT VLAN if possible
 

@@ -2,26 +2,67 @@
 #include <DNSServer.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
-#include <HTTPSServer.hpp>
-#include <SSLCert.hpp>
+#include <HTTPServer.hpp>
 #include <HTTPRequest.hpp>
 #include <HTTPResponse.hpp>
-#include <mbedtls/base64.h>
+#include <esp_heap_caps.h>
+#if TLS_ENABLED
+#include <HTTPSServer.hpp>
+#include <SSLCert.hpp>
 #include "portal_cert.h"
+#endif
 
 ConfigManager configManager;
 
 static DNSServer* dnsServer = nullptr;
 static const uint32_t PORTAL_HEAP_LOG_INTERVAL_MS = 30000;
 
-// HTTPS server instance
-static httpsserver::HTTPSServer* httpsServer = nullptr;
+static httpsserver::HTTPServer* portalServer = nullptr;
+#if TLS_ENABLED
+static httpsserver::HTTPServer* portalRedirectServer = nullptr;
 static httpsserver::SSLCert* sslCert = nullptr;
+#endif
 
-// Handler functions for HTTPS server
+static void handlePortalRedirect(httpsserver::HTTPRequest* req,
+                                 httpsserver::HTTPResponse* res) {
+    res->setHeader("Cache-Control", "no-store");
+    res->setHeader("Connection", "close");
+    if (req->getMethod() != "GET" && req->getMethod() != "HEAD") {
+        res->setStatusCode(405);
+        res->setStatusText("Method Not Allowed");
+        res->setHeader("Allow", "GET, HEAD");
+        return;
+    }
+
+    // Use our AP address, never the probe's Host/path (e.g. /generate_204).
+    const String url = String(WEB_SCHEME) + WiFi.softAPIP().toString() + "/";
+    res->setStatusCode(302);
+    res->setStatusText("Found");
+    res->setHeader("Location", url.c_str());
+    res->setHeader("Content-Type", "text/plain; charset=utf-8");
+    if (req->getMethod() == "GET") {
+        res->print("Open setup in your browser: ");
+        res->print(url);
+        res->print("\n");
+    }
+}
+
+// ResourceResolver does not own its nodes; keep the fallback alive statically.
+static httpsserver::ResourceNode portalRedirectNode("", "GET", &handlePortalRedirect);
+
+static void portalResponseMiddleware(httpsserver::HTTPRequest* req,
+                                     httpsserver::HTTPResponse* res,
+                                     std::function<void()> next) {
+    // Setup has no persistent streams. Release each slot after its response.
+    res->setHeader("Connection", "close");
+    res->setHeader("Cache-Control", "no-store");
+    next();
+}
+
+// Handler functions for the HTTP setup server
 void handleRoot(httpsserver::HTTPRequest * req, httpsserver::HTTPResponse * res) {
     res->setHeader("Content-Type", "text/html");
-    res->print(configManager.portalHTML());
+    if (req->getMethod() == "GET") res->print(configManager.portalHTML());
 }
 
 void handleScan(httpsserver::HTTPRequest * req, httpsserver::HTTPResponse * res) {
@@ -70,10 +111,10 @@ void handleSave(httpsserver::HTTPRequest * req, httpsserver::HTTPResponse * res)
         // (see portalHTML — URLSearchParams body); we parse it manually since
         // esp32_idf5_https_server doesn't have a built-in form parser.
         //
-        // readBytes() is non-blocking and returns 0 whenever the SSL/TCP
+        // readBytes() is non-blocking and returns 0 whenever the TCP
         // receive buffer is momentarily empty — NOT only at end-of-body — so
-        // we must drive the loop off requestComplete(). The body almost
-        // always spans multiple SSL records on a real client (phone over the
+        // we must drive the loop off requestComplete(). The body
+        // can span multiple TCP packets on a real client (phone over the
         // AP), and the old `while (readBytes() > 0)` loop would bail out
         // after the first chunk and miss `ssid=`.
         std::string body;
@@ -159,35 +200,58 @@ void handleSave(httpsserver::HTTPRequest * req, httpsserver::HTTPResponse * res)
 }
 
 void ConfigManager::startPortalServer() {
-    if (!portalCert_init()) {
-        Serial.println("ERROR: Failed to init portal certificate");
+#if TLS_ENABLED
+    if (!portalCert_init() || !(sslCert = portalCert_newSSLCert())) {
+        Serial.println("ERROR: Failed to initialize portal certificate");
         return;
     }
-
-    sslCert = portalCert_newSSLCert();
-    if (!sslCert) {
-        Serial.println("ERROR: Failed to build SSLCert for portal");
+    // TLS record buffers are large on Arduino 2.x. Setup needs no streams,
+    // so serialize requests and release the session after every response.
+    portalServer = new httpsserver::HTTPSServer(sslCert, WEB_PORT, 1, WiFi.softAPIP());
+#else
+    portalServer = new httpsserver::HTTPServer(HTTP_PORT, 4, WiFi.softAPIP());
+#endif
+    portalServer->addMiddleware(&portalResponseMiddleware);
+    portalServer->registerNode(new httpsserver::ResourceNode("/",     "GET",  &handleRoot));
+    portalServer->registerNode(new httpsserver::ResourceNode("/",     "HEAD", &handleRoot));
+    portalServer->registerNode(new httpsserver::ResourceNode("/scan", "GET",  &handleScan));
+    portalServer->registerNode(new httpsserver::ResourceNode("/save", "POST", &handleSave));
+    portalServer->setDefaultNode(&portalRedirectNode);
+    if (!portalServer->start()) {
+        Serial.printf("ERROR: Failed to start portal server on :%u\n", WEB_PORT);
+        stopPortalServer();
         return;
     }
-
-    httpsServer = new httpsserver::HTTPSServer(sslCert, 443, 4);
-    httpsServer->registerNode(new httpsserver::ResourceNode("/",     "GET",  &handleRoot));
-    httpsServer->registerNode(new httpsserver::ResourceNode("/scan", "GET",  &handleScan));
-    httpsServer->registerNode(new httpsserver::ResourceNode("/save", "POST", &handleSave));
-    httpsServer->start();
-    Serial.println("Portal HTTPS server started on :443");
+    Serial.printf("Portal server started: %s%s/\n",
+                  WEB_SCHEME, WiFi.softAPIP().toString().c_str());
+#if TLS_ENABLED
+    portalRedirectServer = new httpsserver::HTTPServer(HTTP_PORT, 2, WiFi.softAPIP());
+    portalRedirectServer->setDefaultNode(&portalRedirectNode);
+    if (!portalRedirectServer->start()) {
+        Serial.println("ERROR: Failed to start portal HTTP redirect; use HTTPS directly");
+        delete portalRedirectServer;
+        portalRedirectServer = nullptr;
+    }
+#endif
 }
 
 void ConfigManager::stopPortalServer() {
-    if (httpsServer) {
-        httpsServer->stop();
-        delete httpsServer;
-        httpsServer = nullptr;
+#if TLS_ENABLED
+    if (portalRedirectServer) {
+        portalRedirectServer->stop();
+        delete portalRedirectServer;
+        portalRedirectServer = nullptr;
     }
-    if (sslCert) {
-        delete sslCert;
-        sslCert = nullptr;
+#endif
+    if (portalServer) {
+        portalServer->stop();
+        delete portalServer;
+        portalServer = nullptr;
     }
+#if TLS_ENABLED
+    delete sslCert;
+    sslCert = nullptr;
+#endif
 }
 
 ConfigManager::ConfigManager() {
@@ -365,20 +429,23 @@ bool ConfigManager::setupWiFi() {
     uint32_t nextHeapLog = millis();
     while (true) {
         dnsServer->processNextRequest();
-        if (httpsServer) httpsServer->loop();
+#if TLS_ENABLED
+        if (portalRedirectServer) portalRedirectServer->loop();
+#endif
+        if (portalServer) portalServer->loop();
 
         if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("\nConnected: %s — rebooting to release :443 cleanly\n",
-                          WiFi.localIP().toString().c_str());
+            Serial.printf("\nConnected: %s — rebooting to release :%u cleanly\n",
+                          WiFi.localIP().toString().c_str(), WEB_PORT);
             // esp32_idf5_https_server's HTTPServer::setupSocket() binds without
-            // SO_REUSEADDR. If we just tore the portal HTTPSServer down here and
+            // SO_REUSEADDR. If we just tore the portal HTTPServer down here and
             // then tried to bind the runtime server on the same port, lwIP
             // would return EADDRINUSE because the previous listening socket
             // sits in TIME_WAIT. Reboot instead — on next boot, setupWiFi()'s
             // fast-path joins STA without ever starting the portal server, and
-            // :443 is free for the runtime to bind.
+            // WEB_PORT is free for the runtime to bind.
             //
-            // Brief drain so the /save TLS response actually reaches the
+            // Brief drain so the /save response actually reaches the
             // client before the reset; the portal JS already plans for the
             // device to disappear (it does a delayed location.reload).
             delay(3000);
@@ -388,10 +455,15 @@ bool ConfigManager::setupWiFi() {
 
         if ((int32_t)(millis() - nextHeapLog) >= 0) {
             nextHeapLog += PORTAL_HEAP_LOG_INTERVAL_MS;
-            Serial.printf("portal: uptime=%lus heap_free=%u min_free=%u\n",
+            const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+            Serial.printf("portal: uptime=%lus heap_free=%u min_free=%u "
+                          "internal_free=%u internal_max=%u ap_clients=%u\n",
                           (unsigned long)(millis() / 1000),
                           (unsigned)ESP.getFreeHeap(),
-                          (unsigned)ESP.getMinFreeHeap());
+                          (unsigned)ESP.getMinFreeHeap(),
+                          (unsigned)heap_caps_get_free_size(caps),
+                          (unsigned)heap_caps_get_largest_free_block(caps),
+                          (unsigned)WiFi.softAPgetStationNum());
         }
 
         if (m_portalIdleCb) m_portalIdleCb(); else delay(10);

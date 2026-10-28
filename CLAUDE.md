@@ -56,7 +56,7 @@ If you ever DO get a "silent chip" symptom, before assuming the chip is bricked,
 nix-shell -p platformio --run "python -c 'import serial; s=serial.Serial(\"/dev/ttyUSB1\", 115200); s.dtr=False; s.rts=False; s.close()'"
 ```
 
-**Local library patches.** `patches/` holds unified diffs that get applied to managed PlatformIO library deps under `.pio/libdeps/<env>/<libname>/` via `scripts/apply_patches.py` (wired as `extra_scripts = pre:` in `platformio.ini`). Currently used to fix a NULL-`_ssl` polling crash in `esp32_idf5_https_server` that takes down the runtime web server when SSE clients close — see `tests/wedge_repro.sh` for the reproduction. If a future `pio pkg install` or clean checkout wipes `.pio/libdeps/`, the next build automatically re-applies the patches; idempotent so repeated builds don't double-apply.
+**Local library patches.** `patches/` holds unified diffs that get applied to managed PlatformIO library deps under `.pio/libdeps/<env>/<libname>/` via `scripts/apply_patches.py` (wired as `extra_scripts = pre:` in `platformio.ini`). They fix WebSocket upgrade response flushing and optional TLS connection cleanup/session tickets. If a future `pio pkg install` or clean checkout wipes `.pio/libdeps/`, the next build automatically re-applies the patches; idempotent so repeated builds don't double-apply.
 
 There is **no test suite** in this repo yet. CI (`.github/workflows/build.yml`) builds both envs on push, releases binaries on tags, and deploys `flash.html` to GitHub Pages.
 
@@ -75,8 +75,8 @@ Prefer **PlatformIO's `test/` directory with the `native` environment** so tests
 
 Initial WiFi setup / captive portal on the ESP32 in **AP mode** is the current pain point. Specifically:
 
-- The captive portal runs over **HTTPS** (`esp32_idf5_https_server`) with a self-signed cert generated on first boot and persisted to NVS (see `src/portal_cert.cpp`, `include/portal_cert.h`).
-- HTTPS in AP mode has been flaky; **do not "fix" it by falling back to plain HTTP**. Setup credentials (WiFi password, web password) flow through this portal, so plaintext is not acceptable. Diagnose and fix the HTTPS path.
+- The captive portal, runtime web UI and display-to-remote link use **plain HTTP on port 80 by default** (`TLS_ENABLED=0`). Build with `-DTLS_ENABLED=1` to switch all three to HTTPS on port 443. Keep the same setting on linked display/remote units.
+- Default HTTP builds must not initialize certificates or link TLS session code. TLS builds generate/store a certificate, limit the portal to one session with response-close, and limit runtime sessions to two for WebSocket plus commands. Keep the transport consistent with the Home Assistant URL and mDNS service.
 - The portal's HTML/JS is inlined in `ConfigManager::portalHTML()` (`src/config_manager.cpp`) and the captive-portal flow lives in `ConfigManager::setupWiFi()` in the same file.
 
 ## Architecture
@@ -85,8 +85,8 @@ Initial WiFi setup / captive portal on the ESP32 in **AP mode** is the current p
 
 Key modules (`include/` + `src/`):
 
-- **`config_manager`** — owns `DeviceConfig` (MQTT creds, web creds, PSU voltage, etc.), persists to NVS via `Preferences`, and runs the **first-boot captive portal**: softAP `LDGConfig` / `configure`, DNS hijack on port 53, HTTPS portal on 443. The portal collects SSID/PSK and a new web password, then joins STA mode.
-- **`portal_cert`** — generates a unique self-signed RSA cert/key pair on first boot, stores base64-DER in NVS. Avoids a hardcoded private key in firmware.
+- **`config_manager`** — owns `DeviceConfig` (MQTT creds, web creds, PSU voltage, etc.), persists to NVS via `Preferences`, and runs the **first-boot captive portal**: softAP `LDGConfig` / `configure`, DNS hijack on port 53, HTTP on port 80 by default or optional HTTPS on port 443. The portal collects SSID/PSK and a new web password, then joins STA mode.
+- **`portal_cert`** — generates and loads the device's ECDSA certificate/key only when `TLS_ENABLED=1`.
 - **`security`** — `RateLimiter` (10 req/s/IP) + `LoginTracker` (5 fails = 5 min lockout) + `Security::verifyAuth`. **All exposed endpoints must go through `Security::isAuthorized`** — this is project policy, not a suggestion.
 - **`web_server`** — runtime HTTP server (`ESPAsyncWebServer`) for all variants. Serves the UI from `data/index.html` (LittleFS), JSON `/api/status`/`/api/config`, command endpoints, and `/api/events` (SSE). The SSE channel doubles as the **transport to remote units** — when configured, the device acts as an SSE client to subscribe to commands from a display unit.
 - **`tuner_protocol`** — UART2 @ 38400 8N1 to the tuner. Implements wake (2× space), command bytes, 250 ms inter-command delay, and parses the 6-byte meter telemetry frames (forward/reflected raw + band, big-endian, terminated by `;;`). See README "Protocol Reference" for the byte-level spec.
@@ -104,7 +104,7 @@ When the device is configured to act as a remote, it connects to the display uni
 
 ## Conventions and constraints
 
-- **Security is the design center, not a nice-to-have.** Every exposed service, API call, and SSE channel must be authenticated and rate-limited. Setup must stay on HTTPS. New endpoints go through `Security::isAuthorized`.
+- Runtime web endpoints and SSE retain authentication. HTTP is the default; optional TLS must be controlled by `TLS_ENABLED` consistently across setup, runtime and remote clients.
 - **Avoid commands that trigger "unsafe command" permission prompts.** Flashing `/dev/ttyUSB1` and `nmcli` operations against the device are already authorized; prefer those over invocations that will ask the user.
 - **The display UI and web UI must stay in sync** — the canvas cross-needle in `data/index.html` is meant to mirror the LVGL meter in `display_ui.cpp` (same scales: 100 / 600 / 1000 W, forward needle pivots right, reflected pivots left).
 - Tuner UART is **TTL 5 V at 38400**, *not* RS-232 and *not* the console baud. The console (`pio device monitor`) is 115200.

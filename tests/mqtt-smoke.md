@@ -40,5 +40,6 @@ Use an isolated test broker / HA installation for the following checks.
     broker address and restart: MQTT must stay disabled. Restore broker settings,
     boot without Wi-Fi, then restore Wi-Fi and verify MQTT starts. Initial Wi-Fi
     setup retains its existing captive-portal flow, including the deliberate
-    reboot after joining a network to release HTTPS port 443; MQTT reconnects
+    reboot after joining a network to release the web port (80 by default,
+    443 with `TLS_ENABLED=1`); MQTT reconnects
     after that reboot. An ordinary Wi-Fi outage after boot needs no reboot.

@@ -48,7 +48,7 @@ bool MqttHandler::connect() {
 #else
     const char* model = "ESP32 remote controller";
 #endif
-    const String url = "https://" + WiFi.localIP().toString() + "/";
+    const String url = String(WEB_SCHEME) + WiFi.localIP().toString() + "/";
     if (!m_session->connected(cfg.mqttDiscoveryEnabled, model, url.c_str())) {
         disconnect();
         return false;
