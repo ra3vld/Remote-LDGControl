@@ -1,7 +1,5 @@
 # MQTT / Home Assistant smoke checks
 
-Native tests exercise the production session with a simulated broker transport;
-they do not establish physical UART operation or a running Home Assistant instance.
 Use an isolated test broker / HA installation for the following checks.
 
 1. Build firmware and LittleFS for the board. Flash **both** images when updating
@@ -21,7 +19,7 @@ Use an isolated test broker / HA installation for the following checks.
 5. Press each HA button with a tuner connected. Exactly one existing command must
    execute, a non-retained `/command/response` must report its result, and state
    must refresh. Do not use retained command messages. Check actual antenna/mode
-   and tune results on the tuner; MQTT acceptance alone is not that proof.
+   and tune results on the tuner.
 6. Restart HA, then the broker. Expect the same device/entity IDs, all 12 discovery
    configurations, fresh state, and command subscriptions after reconnect.
 7. Abruptly power off the controller. After the broker detects the lost connection
@@ -44,6 +42,3 @@ Use an isolated test broker / HA installation for the following checks.
     setup retains its existing captive-portal flow, including the deliberate
     reboot after joining a network to release HTTPS port 443; MQTT reconnects
     after that reboot. An ordinary Wi-Fi outage after boot needs no reboot.
-
-Without a connected board, checks of Last Will, Wi-Fi recovery, UART commands,
-and display/remote switching remain hardware acceptance work.

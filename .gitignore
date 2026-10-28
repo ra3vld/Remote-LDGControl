@@ -31,3 +31,6 @@ data/certs/
 
 # Local config overrides
 include/config_local.h
+
+# Local working notes
+/local-notes/

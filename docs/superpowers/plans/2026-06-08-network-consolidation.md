@@ -1,7 +1,5 @@
 # Network Consolidation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Consolidate three builds into two, remove the softAP dependency between units, add static IP config to both builds, fix the web UI SWR meter and antenna buttons, and switch to deterministic mDNS hostnames.
 
 **Architecture:** Both builds (`esp32-display`, `esp32-remote`) are standalone web servers with local tuner control. The display build optionally subscribes to a remote unit's SSE stream for LVGL updates and proxies commands to it over infrastructure WiFi. No softAP is needed after initial portal setup. `REMOTE_UNIT` define and all its ifdefs are removed.
@@ -1169,9 +1167,7 @@ git commit -m "ui: fix SWR meter scales to two 90-degree arcs matching needle ge
 
 ---
 
-## Self-Review
-
-**Spec coverage check:**
+## Requirements and tasks
 
 | Spec requirement | Task |
 |---|---|
@@ -1191,5 +1187,3 @@ git commit -m "ui: fix SWR meter scales to two 90-degree arcs matching needle ge
 | Web UI: pre-fill from DHCP, remoteHost shown for display | Task 7 |
 | Web UI: named active/inactive antenna buttons | Task 8 |
 | Web UI: SWR meter two 90° arcs | Task 9 |
-
-All spec requirements are covered.

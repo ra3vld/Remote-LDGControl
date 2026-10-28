@@ -21,18 +21,13 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
 
 ## Screenshots
 
-Software previews rendered from the current UI code with demo data, not photos
-from a physical board. The transmit example shows 250 W forward, 10 W reflected,
-SWR 1.5, and the 20m band. Network details and antenna names are fictional.
+UI previews with demo data: 250 W forward, 10 W reflected, SWR 1.5, and the 20m band.
 
 ### Sunton ESP32-3248S035C — 480×320
 
 | Idle | Transmitting |
 |---|---|
 | ![Sunton display at idle](docs/screenshots/sunton-idle.png) | ![Sunton display with transmit telemetry](docs/screenshots/sunton-transmit.png) |
-
-The current Sunton layout clips the bottom band/scale labels and the right edge
-of the network text. These previews preserve that layout for inspection.
 
 ### Web interface
 
@@ -73,8 +68,7 @@ See [WIRING.md](WIRING.md) for complete details. Quick reference:
 The [LDG Meter Protocol (page 3)](https://github.com/Efpophis/LDGControl/blob/master/MeterProtocol.pdf)
 defines mini-DIN **pin 3 as tuner RX** and **pin 4 as tuner TX**.
 **Pin 1 carries +12V**; leave it disconnected and insulated in this build.
-This corrects the earlier pinout in WIRING.md. Follow its updated soldering
-tables and connector views when assembling the cable.
+See WIRING.md for soldering tables and connector views.
 
 ![NodeMCU to BTT display connections](wiring-diagram.svg)
 
@@ -143,7 +137,7 @@ pio device monitor                   # Serial console
 The build pins PlatformIO Espressif32 6.12.0 (Arduino ESP32 2.0.17), matching the
 existing TLS code. Run `pio test -e native` for the GT911 protocol tests.
 See the [Sunton board guide](docs/boards/esp32-3248s035c.md) for pins, power,
-flash offsets, and checks that still require a physical board.
+and flash offsets.
 
 ## Configuration
 
@@ -219,10 +213,8 @@ configurations. Each controller creates one HA device with:
 
 Mode values are `auto`, `manual`, `bypass`, or `unknown`; antenna values are `A`,
 `B`, or `unknown`. Numeric readings are `null` until received or when non-finite.
-Mode and antenna reflect received tuner responses; booting does not assume either.
-Availability indicates the controller's MQTT connection, not proof of tuner UART
-communication. Buttons report the existing command executor's result; a successful
-tune command response is not a measurement of the resulting antenna match.
+Mode and antenna update from tuner responses. Availability indicates the
+controller's MQTT connection. Buttons report the command executor's result.
 
 ### Device topics
 
@@ -299,7 +291,7 @@ records there manually if needed.
 command, active-source, and simulated-broker lifecycle tests. The MQTT tests cover
 12 entities per board, two independent boards, HA/broker restarts, retained-config
 cleanup, zero readings, failed writes, and `millis()` wraparound.
-For a live HA/broker check and hardware validation, see
+For checks with Home Assistant and an MQTT broker, see
 [the MQTT smoke-test checklist](tests/mqtt-smoke.md).
 
 ## Protocol Reference
@@ -408,7 +400,7 @@ tuner. MQTT does not carry the display ↔ remote link; that remains HTTPS/SSE.
 
 ### Threat Model
 
-This device will inevitably be exposed to networks by people who shouldn't. Defense in depth:
+The controller uses the following security controls:
 
 1. **HTTP Basic Auth** on all web endpoints
 2. **Rate limiting** (10 requests/second per IP)
