@@ -513,6 +513,9 @@
             highScale: true,
             band: '--'
         };
+        let meterScaleRevision = null;
+        let meterScaleEpoch = 0;
+        let scaleRequestPending = false;
 
         function drawMeter() {
             const w = canvas.width;
@@ -724,13 +727,49 @@
             };
         }
 
-        // Tap to toggle scale
-        canvas.addEventListener('click', () => {
-            meterState.highScale = !meterState.highScale;
-            meterState.maxPower = meterState.highScale ? 1000 : 100;
-            document.getElementById('scaleValue').textContent = meterState.highScale ? '1000W' : '100W';
-            drawMeter();
-        });
+        function applyMeterScale(data, epoch = meterScaleEpoch) {
+            const watts = data.meter_scale;
+            const revision = data.meter_scale_revision;
+            if (epoch !== meterScaleEpoch || (watts !== 100 && watts !== 1000)
+                || !Number.isInteger(revision) || revision < 0 || revision > 0xffffffff) return false;
+            // HTTP responses can arrive after a newer WebSocket update.
+            if (meterScaleRevision !== null) {
+                const delta = (revision - meterScaleRevision) >>> 0;
+                if (delta === 0 || delta >= 0x80000000) return false;
+            }
+            meterScaleRevision = revision;
+            meterState.maxPower = watts;
+            meterState.highScale = watts === 1000;
+            document.getElementById('scaleValue').textContent = watts + 'W';
+            return true;
+        }
+
+        async function toggleMeterScale() {
+            if (scaleRequestPending) return;
+            scaleRequestPending = true;
+            const epoch = meterScaleEpoch;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const resp = await fetch('/api/meter-scale', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ toggle: true }),
+                    signal: controller.signal
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                if (applyMeterScale(data, epoch)) drawMeter();
+            } catch (err) {
+                showToast('Cannot change meter scale: ' + err.message, 'error');
+            } finally {
+                clearTimeout(timeout);
+                scaleRequestPending = false;
+            }
+        }
+
+        canvas.addEventListener('click', toggleMeterScale);
+        document.getElementById('scaleValue').addEventListener('click', toggleMeterScale);
 
         let activeAntenna = 0; // 0=unknown, 1=ANT1, 2=ANT2
 
@@ -748,6 +787,7 @@
         }
 
         function updateMeter(data) {
+            applyMeterScale(data);
             meterState.fwdPower = data.fwd_power || 0;
             meterState.refPower = data.ref_power || 0;
             meterState.swr = data.swr || 1.0;
@@ -795,6 +835,10 @@
             ws = new WebSocket(proto + '//' + location.host + '/api/ws?t=' + token);
 
             ws.onopen = () => {
+                // A reboot starts a fresh revision sequence. Invalidate HTTP
+                // responses that were started before this connection opened.
+                meterScaleEpoch++;
+                meterScaleRevision = null;
                 statusEl.innerHTML = '<span class="status-dot"></span> Connected';
             };
 
@@ -877,12 +921,14 @@
         // Schedule after completion, with a deadline, so slow requests cannot pile up.
         async function refreshMqttStatus() {
             if (!document.hidden) {
+                const epoch = meterScaleEpoch;
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 5000);
                 try {
                     const resp = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
                     const data = await resp.json();
+                    if (applyMeterScale(data, epoch)) drawMeter();
                     if (!data.mqtt) throw new Error('MQTT diagnostics missing; update firmware');
                     updateMqttStatus(data.mqtt);
                 } catch (err) {

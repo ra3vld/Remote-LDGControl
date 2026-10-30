@@ -22,6 +22,7 @@
 TunerProtocol tuner;
 MqttHandler mqtt;
 LdgWebServer webServer;
+ldg::MeterScale meterScale;
 
 #ifdef WITH_DISPLAY
 DisplayUI display;
@@ -373,7 +374,7 @@ void setup() {
 
 #ifdef WITH_DISPLAY
     Serial.println("Initializing display...");
-    display.begin(&tuner);
+    display.begin(&tuner, &meterScale);
 #endif
 
     // The WiFi setup portal may run indefinitely. Initialize MQTT before it,
@@ -400,7 +401,7 @@ void setup() {
 #else
                          nullptr,
 #endif
-                         []() { return mqtt.getStatus(); })) {
+                         []() { return mqtt.getStatus(); }, &meterScale)) {
         Serial.printf("ERROR: web server failed to start - port %u may still be bound\n", WEB_PORT);
     }
 

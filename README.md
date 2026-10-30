@@ -9,6 +9,9 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
   - Auto mode selection
   - Antenna A/B switching
 - **Real-time Metering**: Forward power, reflected power, SWR, band detection
+  - Shared 100/1000 W scale: changing it on the touchscreen or in any browser
+    updates the display and all connected pages. The scale starts at 1000 W
+    after a device restart; switching it does not write settings to flash.
 - **Web Interface**: Responsive browser UI with Server-Sent Events (SSE) for live updates
 - **MQTT Integration**: Per-device telemetry, adaptive 1/30-second updates, and Home Assistant auto discovery (six sensors and six command buttons)
 - **Touchscreen Display**: Sunton ESP32-3248S035C or BTT TFT35-SPI with custom cross-needle meter
@@ -207,6 +210,7 @@ All endpoints require HTTP Basic Auth.
 |--------|----------|-------------|
 | GET | `/` | Web UI |
 | GET | `/api/status` | JSON status (power, SWR, band, mode) |
+| POST | `/api/meter-scale` | Set the shared scale with `{"meter_scale":100}` or `{"meter_scale":1000}`, or switch it with `{"toggle":true}` |
 | GET | `/api/config` | Current configuration |
 | POST | `/api/config` | Update configuration (restarts device) |
 | POST | `/api/command/toggle` | Toggle antenna A/B |
@@ -214,6 +218,13 @@ All endpoints require HTTP Basic Auth.
 | POST | `/api/command/full_tune` | Full tune |
 | POST | `/api/command/bypass` | Toggle bypass |
 | POST | `/api/command/auto` | Set auto mode |
+
+The scale endpoint returns `meter_scale` and `meter_scale_revision`. Both fields
+are also included in `/api/status` and live WebSocket meter updates, including
+when the tuner is idle. Invalid scale requests return HTTP 400. To install this
+feature, upload both the application and LittleFS (`uploadfs`) and reload the
+browser page. Run `pio test -e native` and `node tests/test_meter_scale_web.cjs`
+for the shared-state and page synchronization regression checks.
 
 ### Server-Sent Events (SSE)
 

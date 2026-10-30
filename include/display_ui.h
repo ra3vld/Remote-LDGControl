@@ -9,13 +9,14 @@
 #include <TFT_eSPI.h>
 #include "tuner_protocol.h"
 #include "config.h"
+#include "meter_scale.h"
 
 class DisplayUI {
 public:
     DisplayUI();
     ~DisplayUI();
 
-    bool begin(TunerProtocol* tuner);
+    bool begin(TunerProtocol* tuner, ldg::MeterScale* meterScale);
     void loop();
     void updateMeter(const tuner_meter_t* meter);
     void updateStatus(tuner_mode_t mode, tuner_ant_t antenna);
@@ -24,6 +25,7 @@ public:
 private:
     TFT_eSPI* m_tft;
     TunerProtocol* m_tuner;
+    ldg::MeterScale* m_meterScale;
 
     // LVGL objects
     lv_obj_t* m_scr;
@@ -45,7 +47,6 @@ private:
     lv_obj_t* m_btnAuto;
 
     // Meter state
-    bool m_highScale;
     float m_maxPower;
     float m_fwdPower;
     float m_refPower;
@@ -66,6 +67,7 @@ private:
     static void meterTapEvent(lv_event_t* e);
 
     void updateAntButtons();
+    void updateMeterScale();
 
     // Custom meter drawing
     static void drawMeterEvent(lv_event_t* e);

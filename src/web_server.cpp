@@ -221,6 +221,8 @@ static void sendJson(hsv::HTTPResponse* res, int code, const String& body) {
 static String serializeState(const tuner_state_t& state) {
     JsonDocument doc;
     ldg::writeState(doc, state, false);
+    if (s_instance && s_instance->getMeterScale())
+        ldg::writeMeterScale(doc, s_instance->getMeterScale()->snapshot());
     String out;
     serializeJson(doc, out);
     return out;
@@ -268,6 +270,8 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
         self->getTuner() ? self->getTuner()->getState() : tuner_state_t{};
     JsonDocument doc;
     ldg::writeState(doc, state, false);
+    if (self->getMeterScale())
+        ldg::writeMeterScale(doc, self->getMeterScale()->snapshot());
     doc["connected"] = state.remote || (self->getTuner() && self->getTuner()->isConnected());
     const ldg::MqttStatus mqttStatus = self->getMqttStatusGetter()
         ? self->getMqttStatusGetter()() : ldg::MqttStatus{};
@@ -278,6 +282,24 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     mqtt["port"] = cfg.mqttPort;
     String out;
     serializeJson(doc, out);
+    sendJson(res, 200, out);
+}
+
+static void h_meter_scale(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    ldg::MeterScale* scale = s_instance ? s_instance->getMeterScale() : nullptr;
+    if (!scale) { sendJson(res, 503, "{\"error\":\"meter scale unavailable\"}"); return; }
+
+    JsonDocument request;
+    if (deserializeJson(request, readRequestBody(req)) ||
+        !ldg::applyMeterScaleRequest(*scale, request.as<JsonVariantConst>())) {
+        sendJson(res, 400, "{\"error\":\"use meter_scale: 100 or 1000, or toggle: true\"}");
+        return;
+    }
+    JsonDocument response;
+    ldg::writeMeterScale(response, scale->snapshot());
+    String out;
+    serializeJson(response, out);
     sendJson(res, 200, out);
 }
 
@@ -442,7 +464,8 @@ LdgWebServer::LdgWebServer()
 #endif
       m_tuner(nullptr),
       m_cmdHandler(nullptr), m_stateGetter(nullptr),
-      m_remoteTelemetryHandler(nullptr), m_mqttStatusGetter(nullptr), m_lastMeterUpdate(0) {
+      m_remoteTelemetryHandler(nullptr), m_mqttStatusGetter(nullptr),
+      m_meterScale(nullptr), m_lastMeterUpdate(0) {
     s_instance = this;
 }
 
@@ -457,12 +480,14 @@ LdgWebServer::~LdgWebServer() {
 bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
                          state_getter_t stateGetter,
                          remote_telemetry_handler_t remoteTelemetryHandler,
-                         mqtt_status_getter_t mqttStatusGetter) {
+                         mqtt_status_getter_t mqttStatusGetter,
+                         ldg::MeterScale* meterScale) {
     m_tuner = tuner;
     m_cmdHandler = cmdHandler;
     m_stateGetter = stateGetter;
     m_remoteTelemetryHandler = remoteTelemetryHandler;
     m_mqttStatusGetter = mqttStatusGetter;
+    m_meterScale = meterScale;
     s_instance = this;
 
     // setupWiFi() reboots after portal setup, leaving WEB_PORT free here.
@@ -481,6 +506,7 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
 
     m_server->registerNode(new hsv::ResourceNode("/",                   "GET",  &h_root));
     m_server->registerNode(new hsv::ResourceNode("/api/status",         "GET",  &h_status));
+    m_server->registerNode(new hsv::ResourceNode("/api/meter-scale",    "POST", &h_meter_scale));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "GET",  &h_config_get));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "POST", &h_config_post));
     m_server->registerNode(new hsv::ResourceNode("/api/telemetry",      "POST", &h_telemetry));
@@ -516,10 +542,12 @@ void LdgWebServer::loop() {
 
     // Mirror the meter into SSE state every 500ms so polling subscribers see
     // updates without us needing an explicit push from every meter source.
-    if (millis() - m_lastMeterUpdate > 500) {
+    const uint32_t scaleRevision = m_meterScale ? m_meterScale->snapshot().revision : 0;
+    if (millis() - m_lastMeterUpdate > 500 || scaleRevision != m_lastMeterScaleRevision) {
         if (m_stateGetter) pushMeterEvent(m_stateGetter());
         else if (m_tuner) pushMeterEvent(m_tuner->getState());
         m_lastMeterUpdate = millis();
+        m_lastMeterScaleRevision = scaleRevision;
     }
 
     // Broadcast newly-published meter data to every connected WebSocket

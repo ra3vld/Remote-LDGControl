@@ -5,6 +5,7 @@
 #include "tuner_protocol.h"
 #include "config.h"
 #include "mqtt_status.h"
+#include "meter_scale.h"
 
 namespace httpsserver { class HTTPServer; }
 #if TLS_ENABLED
@@ -24,7 +25,8 @@ public:
     bool begin(TunerProtocol* tuner, command_handler_t cmdHandler = nullptr,
                state_getter_t stateGetter = nullptr,
                remote_telemetry_handler_t remoteTelemetryHandler = nullptr,
-               mqtt_status_getter_t mqttStatusGetter = nullptr);
+               mqtt_status_getter_t mqttStatusGetter = nullptr,
+               ldg::MeterScale* meterScale = nullptr);
     void loop();
 
     // SSE: push meter event to all connected clients
@@ -40,6 +42,7 @@ public:
     state_getter_t getStateGetter() { return m_stateGetter; }
     remote_telemetry_handler_t getRemoteTelemetryHandler() { return m_remoteTelemetryHandler; }
     mqtt_status_getter_t getMqttStatusGetter() { return m_mqttStatusGetter; }
+    ldg::MeterScale* getMeterScale() { return m_meterScale; }
 
 private:
     httpsserver::HTTPServer* m_server;
@@ -51,6 +54,8 @@ private:
     state_getter_t m_stateGetter;
     remote_telemetry_handler_t m_remoteTelemetryHandler;
     mqtt_status_getter_t m_mqttStatusGetter;
+    ldg::MeterScale* m_meterScale;
+    uint32_t m_lastMeterScaleRevision = 0;
     uint32_t m_lastMeterUpdate;
     uint32_t m_lastWsMeterSeq = 0;  // last meterSeq broadcast to WS subscribers
 };

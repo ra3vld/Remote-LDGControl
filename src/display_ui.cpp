@@ -39,7 +39,7 @@ static bool tsTouched() {
 #endif
 
 DisplayUI::DisplayUI()
-    : m_tft(nullptr), m_tuner(nullptr),
+    : m_tft(nullptr), m_tuner(nullptr), m_meterScale(nullptr),
       m_scr(nullptr), m_meter(nullptr),
       m_bandLabel(nullptr), m_scaleLabel(nullptr),
       m_modeLabel(nullptr),
@@ -48,7 +48,7 @@ DisplayUI::DisplayUI()
       m_btnAnt1(nullptr), m_btnAnt2(nullptr),
       m_ant1NameLabel(nullptr), m_ant2NameLabel(nullptr),
       m_btnBypass(nullptr), m_btnAuto(nullptr),
-      m_highScale(true), m_maxPower(1000.0f),
+      m_maxPower(1000.0f),
       m_fwdPower(0), m_refPower(0), m_swr(1.0f),
       m_activeAnt(ANT_UNKNOWN) {
     s_instance = this;
@@ -59,8 +59,9 @@ DisplayUI::~DisplayUI() {
     s_instance = nullptr;
 }
 
-bool DisplayUI::begin(TunerProtocol* tuner) {
+bool DisplayUI::begin(TunerProtocol* tuner, ldg::MeterScale* meterScale) {
     m_tuner = tuner;
+    m_meterScale = meterScale;
 #ifdef BOARD_ESP32_3248S035C
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, LOW);
@@ -238,8 +239,19 @@ bool DisplayUI::begin(TunerProtocol* tuner) {
 }
 
 void DisplayUI::loop() {
+    // Web requests only change the atomic model; all LVGL calls stay here.
+    updateMeterScale();
     lv_timer_handler();
     delay(5);
+}
+
+void DisplayUI::updateMeterScale() {
+    if (!m_meterScale) return;
+    const uint16_t watts = m_meterScale->snapshot().watts;
+    if (m_maxPower == watts) return;
+    m_maxPower = watts;
+    lv_label_set_text_fmt(m_scaleLabel, "%uW", unsigned(watts));
+    lv_obj_invalidate(m_meter);
 }
 
 void DisplayUI::updateMeter(const tuner_meter_t* meter) {
@@ -548,11 +560,9 @@ void DisplayUI::btnAutoEvent(lv_event_t* e) {
 }
 
 void DisplayUI::meterTapEvent(lv_event_t* e) {
-    if (!s_instance) return;
-    s_instance->m_highScale = !s_instance->m_highScale;
-    s_instance->m_maxPower = s_instance->m_highScale ? 1000.0f : 100.0f;
-    lv_label_set_text(s_instance->m_scaleLabel, s_instance->m_highScale ? "1000W" : "100W");
-    lv_obj_invalidate(s_instance->m_meter);
+    if (!s_instance || !s_instance->m_meterScale) return;
+    s_instance->m_meterScale->toggle();
+    s_instance->updateMeterScale();
 }
 
 #endif // WITH_DISPLAY
