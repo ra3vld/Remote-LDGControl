@@ -47,7 +47,14 @@
 
         .header h1 { font-size: 1rem; color: var(--accent-green); font-weight: 600; letter-spacing: 0.02em; }
 
-        .header-status { font-size: 0.75rem; color: var(--text-secondary); }
+        .header-status { font-size: 0.75rem; color: var(--text-secondary); display: flex;
+                         flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem 1rem; }
+        .mqtt-indicator { color: inherit; font: inherit; background: none; border: 0; cursor: pointer; }
+        .mqtt-diagnostics { background: var(--bg-input); border: 1px solid var(--border);
+                            border-radius: 6px; padding: 0.65rem; margin-bottom: 0.8rem;
+                            font-size: 0.8rem; overflow-wrap: anywhere; }
+        .mqtt-diagnostics p { margin-top: 0.4rem; color: var(--text-secondary); }
+        .mqtt-diagnostics .mqtt-error { color: var(--accent-red); }
 
         .status-dot {
             display: inline-block;
@@ -59,6 +66,7 @@
 
         .status-dot.offline { background: var(--accent-red); }
         .status-dot.connecting { background: var(--accent-yellow); animation: pulse 1s infinite; }
+        .status-dot.disabled { background: var(--text-secondary); }
 
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
@@ -294,6 +302,10 @@
                 <span class="status-dot connecting"></span>
                 Connecting...
             </span>
+            <button type="button" class="mqtt-indicator" id="mqttIndicator" title="Open MQTT settings">
+                <span class="status-dot disabled" id="mqttStatusDot"></span>
+                <span id="mqttStatusText">MQTT: checking...</span>
+            </button>
         </div>
     </div>
 
@@ -387,6 +399,11 @@
             </div>
             <div class="settings-section">
                 <h3>MQTT</h3>
+                <div class="mqtt-diagnostics" aria-live="polite">
+                    <strong id="mqttStatusMessage">Checking live status...</strong>
+                    <p id="mqttStatusDetail"></p>
+                    <p id="mqttStatusError" hidden></p>
+                </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>Broker</label>
@@ -821,6 +838,72 @@
             }
         }
 
+        function mqttErrorText(error) {
+            if (!error) return '';
+            let text = error.message;
+            if (error.code !== undefined) text += ' (code ' + error.code + ')';
+            if (error.detail) text += ': ' + error.detail;
+            if (error.topic) text += '; topic: ' + error.topic;
+            return text;
+        }
+
+        function updateMqttStatus(status) {
+            const labels = { disabled: 'Disabled', waiting_wifi: 'Waiting for Wi-Fi',
+                connecting: 'Connecting', connected: 'Connected', disconnected: 'Reconnecting', error: 'Error' };
+            const label = status.errorActive ? 'Error' : (labels[status.state] || 'Unknown');
+            const dot = status.errorActive || status.state === 'error' ? 'offline'
+                : status.state === 'connected' ? ''
+                : status.state === 'disabled' ? 'disabled' : 'connecting';
+            document.getElementById('mqttStatusText').textContent = 'MQTT: ' + label;
+            document.getElementById('mqttStatusDot').className = 'status-dot ' + dot;
+            document.getElementById('mqttStatusMessage').textContent = status.message;
+            let detail = status.enabled ? 'Broker: ' + status.broker + ':' + status.port
+                + ' · Connection attempts: ' + status.attempts : 'Set a broker below to enable MQTT.';
+            if (status.connectedForMs !== undefined)
+                detail += ' · Connected for ' + Math.floor(status.connectedForMs / 1000) + ' s';
+            if (status.state === 'disconnected')
+                detail += ' · Retry in ' + Math.ceil(status.retryInMs / 1000) + ' s';
+            document.getElementById('mqttStatusDetail').textContent = detail;
+            const error = document.getElementById('mqttStatusError');
+            error.hidden = !status.lastError;
+            error.className = status.errorActive ? 'mqtt-error' : '';
+            error.textContent = status.lastError ? (status.errorActive ? 'Error: ' : 'Last error (recovered): ')
+                + mqttErrorText(status.lastError) + ' · ' + Math.floor(status.lastError.ageMs / 1000) + ' s ago' : '';
+            document.getElementById('mqttIndicator').title = status.message
+                + (status.lastError ? '\n' + error.textContent : '') + '\nOpen MQTT settings';
+        }
+
+        // Separate from meter traffic: status also refreshes when the tuner is idle.
+        // Schedule after completion, with a deadline, so slow requests cannot pile up.
+        async function refreshMqttStatus() {
+            if (!document.hidden) {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 5000);
+                try {
+                    const resp = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    const data = await resp.json();
+                    if (!data.mqtt) throw new Error('MQTT diagnostics missing; update firmware');
+                    updateMqttStatus(data.mqtt);
+                } catch (err) {
+                    document.getElementById('mqttStatusText').textContent = 'MQTT: status unavailable';
+                    document.getElementById('mqttStatusDot').className = 'status-dot disabled';
+                    document.getElementById('mqttStatusMessage').textContent = 'Live status unavailable';
+                    document.getElementById('mqttStatusDetail').textContent = 'Cannot read device status: ' + err.message;
+                    document.getElementById('mqttStatusError').hidden = true;
+                    document.getElementById('mqttIndicator').title = 'Live status unavailable; open MQTT settings';
+                } finally {
+                    clearTimeout(timeout);
+                }
+            }
+            setTimeout(refreshMqttStatus, 3000);
+        }
+
+        document.getElementById('mqttIndicator').addEventListener('click', () => {
+            document.querySelector('.nav-tab[data-tab="settings"]').click();
+            document.getElementById('mqttStatusMessage').scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+
         async function loadSettings() {
             try {
                 const resp = await fetch('/api/config');
@@ -915,6 +998,7 @@
         drawMeter();
         connectWS();
         loadSettings();
+        refreshMqttStatus();
     </script>
 </body>
 </html>

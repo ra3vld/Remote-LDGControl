@@ -11,6 +11,7 @@ public:
     virtual ~MqttTransport() = default;
     virtual bool publish(const char* topic, const char* payload, bool retained) = 0;
     virtual bool subscribe(const char* topic) = 0;
+    virtual void packetTooLarge(const char* topic) { (void)topic; }
 };
 
 class MqttSession {
@@ -84,8 +85,11 @@ public:
 
 private:
     bool send(const std::string& topic, const std::string& payload, bool retained) {
-        return mqttPacketFits(topic, payload.size()) &&
-            m_transport.publish(topic.c_str(), payload.c_str(), retained);
+        if (!mqttPacketFits(topic, payload.size())) {
+            m_transport.packetTooLarge(topic.c_str());
+            return false;
+        }
+        return m_transport.publish(topic.c_str(), payload.c_str(), retained);
     }
 
     MqttTransport& m_transport;

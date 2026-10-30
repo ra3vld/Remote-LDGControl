@@ -43,3 +43,14 @@ Use an isolated test broker / HA installation for the following checks.
     reboot after joining a network to release the web port (80 by default,
     443 with `TLS_ENABLED=1`); MQTT reconnects
     after that reboot. An ordinary Wi-Fi outage after boot needs no reboot.
+12. Watch the header indicator, **Settings → MQTT**, `GET /api/status` (`mqtt`),
+    and the 115200-baud Serial console. Check: no broker → disabled; Wi-Fi down →
+    waiting for Wi-Fi; working broker → connected. Wrong password / unauthorized
+    client must display the broker's code (4 / 5); an unreachable TCP endpoint
+    must display code -2 without claiming DNS is definitely at fault. Stop the
+    broker or interrupt Wi-Fi after connecting, then restore it: show the error,
+    automatic reconnect, and the last error marked recovered. Repeated publish
+    failures must not flood Serial. Stop HTTP access: the header must say status
+    unavailable instead of leaving a stale green indicator. Check narrow/mobile
+    layout and that polling never overwrites unsaved MQTT form values. These
+    checks require both firmware and LittleFS images from the same version.

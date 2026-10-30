@@ -378,13 +378,8 @@ void setup() {
 
     // The WiFi setup portal may run indefinitely. Initialize MQTT before it,
     // independently of STA status, and service it from the portal's idle loop.
-    if (configManager.get().mqttBroker[0]) {
-        static WiFiClient mqttClient;
-        if (!mqtt.begin(mqttClient, executeCommand, getActiveState))
-            Serial.println("ERROR: MQTT initialization failed");
-    } else {
-        Serial.println("MQTT broker not configured; MQTT disabled");
-    }
+    static WiFiClient mqttClient;
+    mqtt.begin(mqttClient, executeCommand, getActiveState);
     configManager.setPortalIdleCallback([]() {
         tuner.process();
         mqtt.loop();
@@ -401,11 +396,11 @@ void setup() {
 
     if (!webServer.begin(&tuner, executeCommand, getActiveState,
 #ifdef WITH_DISPLAY
-                         onRemoteTelemetry
+                         onRemoteTelemetry,
 #else
-                         nullptr
+                         nullptr,
 #endif
-                         )) {
+                         []() { return mqtt.getStatus(); })) {
         Serial.printf("ERROR: web server failed to start - port %u may still be bound\n", WEB_PORT);
     }
 

@@ -222,6 +222,17 @@ Connect to `http://<esp32-ip>/api/events` for real-time meter updates. The brows
 ## MQTT and Home Assistant
 
 MQTT is optional: leave **Settings → MQTT → Broker** empty to disable it.
+
+The header shows live MQTT status; click it to open **Settings → MQTT** for the
+active broker, connection attempts, retry delay, and errors with PubSubClient
+codes. Status refreshes every 3 seconds, independently of meter readings. The
+last error remains visible as recovered after a successful reconnect or retry.
+If the device cannot be reached, the UI marks the live status unavailable.
+`GET /api/status` exposes the same diagnostics under `mqtt`. The Serial console
+(115200 baud) logs `[MQTT]` connection attempts, state changes, transport errors,
+and recovery without printing passwords. Repeated identical send errors are
+logged once until recovery. Publish/subscribe success means the request was sent;
+it does not confirm broker ACL acceptance or Home Assistant discovery.
 Otherwise set the broker address, port (default `1883`), and optional credentials.
 Leaving the password field blank when saving settings preserves the stored password.
 Settings are saved in NVS and applied after the device restarts. The transport is

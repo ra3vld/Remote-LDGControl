@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "tuner_protocol.h"
 #include "config.h"
+#include "mqtt_status.h"
 
 namespace httpsserver { class HTTPServer; }
 #if TLS_ENABLED
@@ -13,6 +14,7 @@ namespace httpsserver { class SSLCert; }
 typedef bool (*command_handler_t)(uint8_t cmd);
 typedef tuner_state_t (*state_getter_t)();
 typedef void (*remote_telemetry_handler_t)(const tuner_state_t& state);
+typedef ldg::MqttStatus (*mqtt_status_getter_t)();
 
 class LdgWebServer {
 public:
@@ -21,7 +23,8 @@ public:
 
     bool begin(TunerProtocol* tuner, command_handler_t cmdHandler = nullptr,
                state_getter_t stateGetter = nullptr,
-               remote_telemetry_handler_t remoteTelemetryHandler = nullptr);
+               remote_telemetry_handler_t remoteTelemetryHandler = nullptr,
+               mqtt_status_getter_t mqttStatusGetter = nullptr);
     void loop();
 
     // SSE: push meter event to all connected clients
@@ -36,6 +39,7 @@ public:
     command_handler_t getCmdHandler() { return m_cmdHandler; }
     state_getter_t getStateGetter() { return m_stateGetter; }
     remote_telemetry_handler_t getRemoteTelemetryHandler() { return m_remoteTelemetryHandler; }
+    mqtt_status_getter_t getMqttStatusGetter() { return m_mqttStatusGetter; }
 
 private:
     httpsserver::HTTPServer* m_server;
@@ -46,6 +50,7 @@ private:
     command_handler_t m_cmdHandler;
     state_getter_t m_stateGetter;
     remote_telemetry_handler_t m_remoteTelemetryHandler;
+    mqtt_status_getter_t m_mqttStatusGetter;
     uint32_t m_lastMeterUpdate;
     uint32_t m_lastWsMeterSeq = 0;  // last meterSeq broadcast to WS subscribers
 };

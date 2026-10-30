@@ -269,6 +269,13 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     JsonDocument doc;
     ldg::writeState(doc, state, false);
     doc["connected"] = state.remote || (self->getTuner() && self->getTuner()->isConnected());
+    const ldg::MqttStatus mqttStatus = self->getMqttStatusGetter()
+        ? self->getMqttStatusGetter()() : ldg::MqttStatus{};
+    JsonObject mqtt = doc["mqtt"].to<JsonObject>();
+    ldg::writeMqttStatus(mqtt, mqttStatus, millis());
+    const DeviceConfig& cfg = configManager.get();
+    mqtt["broker"] = cfg.mqttBroker;
+    mqtt["port"] = cfg.mqttPort;
     String out;
     serializeJson(doc, out);
     sendJson(res, 200, out);
@@ -435,7 +442,7 @@ LdgWebServer::LdgWebServer()
 #endif
       m_tuner(nullptr),
       m_cmdHandler(nullptr), m_stateGetter(nullptr),
-      m_remoteTelemetryHandler(nullptr), m_lastMeterUpdate(0) {
+      m_remoteTelemetryHandler(nullptr), m_mqttStatusGetter(nullptr), m_lastMeterUpdate(0) {
     s_instance = this;
 }
 
@@ -449,11 +456,13 @@ LdgWebServer::~LdgWebServer() {
 
 bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
                          state_getter_t stateGetter,
-                         remote_telemetry_handler_t remoteTelemetryHandler) {
+                         remote_telemetry_handler_t remoteTelemetryHandler,
+                         mqtt_status_getter_t mqttStatusGetter) {
     m_tuner = tuner;
     m_cmdHandler = cmdHandler;
     m_stateGetter = stateGetter;
     m_remoteTelemetryHandler = remoteTelemetryHandler;
+    m_mqttStatusGetter = mqttStatusGetter;
     s_instance = this;
 
     // setupWiFi() reboots after portal setup, leaving WEB_PORT free here.

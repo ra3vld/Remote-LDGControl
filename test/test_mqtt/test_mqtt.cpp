@@ -275,6 +275,8 @@ public:
     std::map<std::string, std::string> retained;
     bool failPublish = false;
     bool failSubscribe = false;
+    std::string oversizedTopic;
+    void packetTooLarge(const char* topic) override { oversizedTopic = topic; }
     bool publish(const char* topic, const char* payload, bool retain) override {
         if (failPublish) return false;
         messages.push_back({topic, payload, retain});
@@ -306,6 +308,21 @@ static void settle(MqttSession& session, uint32_t now, const tuner_state_t& stat
 }
 static void deliver(MqttSession& session, const std::string& topic, const std::string& payload) {
     session.message(topic.c_str(), reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+}
+
+void test_oversized_session_packet_reports_topic_and_retries() {
+    TestBroker broker;
+    const auto id = mqttIdentity("aa:bb:cc:01:02:03");
+    MqttSession session(broker, id, execute);
+    const std::string hugeModel(MQTT_PACKET_SIZE, 'X');
+    TEST_ASSERT_TRUE(session.connected(true, hugeModel.c_str(), "http://192.0.2.1/"));
+    const auto count = broker.messages.size();
+    session.loop(0, measured());
+    TEST_ASSERT_EQUAL_UINT(count, broker.messages.size());
+    TEST_ASSERT_EQUAL_STRING(discoveryTopic(id, 0).c_str(), broker.oversizedTopic.c_str());
+    TEST_ASSERT_TRUE(session.connected(true, "ESP32", "http://192.0.2.1/"));
+    session.loop(0, measured());
+    TEST_ASSERT_EQUAL_STRING(discoveryTopic(id, 0).c_str(), broker.messages.back().topic.c_str());
 }
 
 void test_session_times_interval_from_completed_write() {
@@ -458,6 +475,7 @@ int main() {
     RUN_TEST(test_identities_and_all_discovery_payloads);
     RUN_TEST(test_state_json_unknown_values_and_web_round_trip);
     RUN_TEST(test_active_source_keeps_remote_band_mode_and_antenna);
+    RUN_TEST(test_oversized_session_packet_reports_topic_and_retries);
     RUN_TEST(test_session_times_interval_from_completed_write);
     RUN_TEST(test_session_reconnect_ha_birth_and_discovery_cleanup);
     RUN_TEST(test_session_two_devices_commands_and_error_responses);
