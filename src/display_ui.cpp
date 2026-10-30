@@ -81,13 +81,11 @@ bool DisplayUI::begin(TunerProtocol* tuner, ldg::MeterScale* meterScale) {
     lv_init();
 
     static lv_disp_draw_buf_t draw_buf;
-    // 5-line draw buffers (~4.8 KB each). LVGL recommends ~1/10 of the
-    // screen height as the minimum; halving from 10 lines keeps perf
-    // reasonable while saving ~9.6 KB of dram0.bss — the difference
-    // between the display variant linking or not.
-    static lv_color_t buf1[DISPLAY_WIDTH * 5];
-    static lv_color_t buf2[DISPLAY_WIDTH * 5];
-    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, DISPLAY_WIDTH * 5);
+    // SPI flushing is synchronous, so a second buffer cannot overlap transfer
+    // with rendering. One 10-line buffer uses the same RAM as two 5-line
+    // buffers and halves the number of custom draw callbacks per refresh.
+    static lv_color_t buf[DISPLAY_WIDTH * 10];
+    lv_disp_draw_buf_init(&draw_buf, buf, nullptr, DISPLAY_WIDTH * 10);
 
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
@@ -255,15 +253,19 @@ void DisplayUI::updateMeterScale() {
 }
 
 void DisplayUI::updateMeter(const tuner_meter_t* meter) {
-    m_fwdPower = (float)meter->forward_power_watts;
-    m_refPower = (float)meter->reflected_power_watts;
-    m_swr = (float)meter->swr;
-
-    lv_obj_invalidate(m_meter);
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "Band: %s", TunerProtocol::bandToString(meter->band));
-    lv_label_set_text(m_bandLabel, buf);
+    const float forward = float(meter->forward_power_watts);
+    const float reflected = float(meter->reflected_power_watts);
+    const float swr = float(meter->swr);
+    if (forward != m_fwdPower || reflected != m_refPower || swr != m_swr) {
+        m_fwdPower = forward;
+        m_refPower = reflected;
+        m_swr = swr;
+        lv_obj_invalidate(m_meter);
+    }
+    if (meter->band != m_band) {
+        m_band = meter->band;
+        lv_label_set_text_fmt(m_bandLabel, "Band: %s", TunerProtocol::bandToString(m_band));
+    }
 }
 
 void DisplayUI::updateNetworkInfo() {
@@ -274,14 +276,19 @@ void DisplayUI::updateNetworkInfo() {
 }
 
 void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna) {
-    switch (mode) {
-        case MODE_AUTO:    lv_label_set_text(m_modeLabel, "Mode: AUTO"); break;
-        case MODE_MANUAL:  lv_label_set_text(m_modeLabel, "Mode: MANUAL"); break;
-        case MODE_BYPASS:  lv_label_set_text(m_modeLabel, "Mode: BYPASS"); break;
-        default:           lv_label_set_text(m_modeLabel, "Mode: --"); break;
+    if (mode != m_activeMode) {
+        m_activeMode = mode;
+        switch (mode) {
+            case MODE_AUTO:    lv_label_set_text(m_modeLabel, "Mode: AUTO"); break;
+            case MODE_MANUAL:  lv_label_set_text(m_modeLabel, "Mode: MANUAL"); break;
+            case MODE_BYPASS:  lv_label_set_text(m_modeLabel, "Mode: BYPASS"); break;
+            default:           lv_label_set_text(m_modeLabel, "Mode: --"); break;
+        }
     }
-    m_activeAnt = antenna;
-    updateAntButtons();
+    if (antenna != m_activeAnt) {
+        m_activeAnt = antenna;
+        updateAntButtons();
+    }
 }
 
 void DisplayUI::updateAntButtons() {
@@ -356,36 +363,13 @@ void DisplayUI::drawMeterEvent(lv_event_t* e) {
 void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     lv_draw_ctx_t* draw_ctx = lv_event_get_draw_ctx(e);
     lv_obj_t* obj = lv_event_get_target(e);
-    int w = lv_obj_get_width(obj);
-    int h = lv_obj_get_height(obj);
-
-    const int pad      = 20;
-    const int cx       = w / 2;
-    const int cy       = h - pad;          // pivot row, bottom of meter area
-    const int halfBase = w / 2 - pad;      // horizontal distance from centre to each pivot
-    const int arm      = cy - pad;         // needle length = arc radius; arm > halfBase → arcs cross
-    const float PI_F   = 3.14159265f;
-
-    // Pivot positions: forward bottom-right, reflected bottom-left.
-    // With arm == 2*halfBase (true when meter is square) each arc passes exactly
-    // through the other pivot, giving a natural zero-power resting position.
-    const int fwdPx = cx + halfBase;
-    const int fwdPy = cy;
-    const int refPx = cx - halfBase;
-    const int refPy = cy;
-
-    // Needle angles (math convention: tip_x = pivot_x + arm*cos θ,
-    //                                 tip_y = pivot_y − arm*sin θ)
-    // Forward: θ = PI  (pointing left)  at 0 W  →  θ = PI/2 (pointing up) at max W
-    // Reflected: θ = 0 (pointing right) at 0 W  →  θ = PI/2 (pointing up) at max W
-    const float fwdFrac  = fminf(m_fwdPower / m_maxPower, 1.0f);
-    const float refFrac  = fminf(m_refPower  / m_maxPower, 1.0f);
-    const float fwdTheta = PI_F - fwdFrac * (PI_F / 2.0f);
-    const float refTheta = refFrac * (PI_F / 2.0f);
-    const int fwdTx = fwdPx + (int)(arm * cosf(fwdTheta));
-    const int fwdTy = fwdPy - (int)(arm * sinf(fwdTheta));
-    const int refTx = refPx + (int)(arm * cosf(refTheta));
-    const int refTy = refPy - (int)(arm * sinf(refTheta));
+    m_geometry.resize(lv_obj_get_width(obj), lv_obj_get_height(obj));
+    const int cx = m_geometry.centerX, cy = m_geometry.centerY;
+    const int arm = m_geometry.radius;
+    const int fwdPx = m_geometry.forwardPivot.x, fwdPy = m_geometry.forwardPivot.y;
+    const int refPx = m_geometry.reflectedPivot.x, refPy = m_geometry.reflectedPivot.y;
+    const auto fwdTip = m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f));
+    const auto refTip = m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f));
 
     // ----- Scale arcs (one per pivot, each spanning the full 90° sweep) -----
     // Forward arc: upper-left quarter around fwd pivot (LVGL 180° → 270°, clockwise = left→up)
@@ -401,82 +385,49 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     lv_draw_arc(draw_ctx, &arc_dsc, &ref_ctr, arm, 270, 360);
 
     // ----- Tick marks + labels along each arc -----
-    // thetaZero = needle angle at 0 W, thetaFull = angle at max W
-    auto drawTicks = [&](int px, int py, float thetaZero, float thetaFull, uint32_t color) {
-        const int N = 8;
-        for (int i = 0; i <= N; i++) {
-            const float f     = (float)i / (float)N;
-            const float theta = thetaZero + f * (thetaFull - thetaZero);
-            const float c = cosf(theta), s = sinf(theta);
-            const bool major   = (i % 2 == 0);
-            const int  tickLen = major ? 10 : 5;
-            lv_point_t p1 = {(lv_coord_t)(px + (int)(c * arm)),
-                             (lv_coord_t)(py - (int)(s * arm))};
-            lv_point_t p2 = {(lv_coord_t)(px + (int)(c * (arm - tickLen))),
-                             (lv_coord_t)(py - (int)(s * (arm - tickLen)))};
+    static const char* const highLabels[] = {"", "250", "500", "750", "1000"};
+    static const char* const lowLabels[] = {"", "25", "50", "75", "100"};
+    const char* const* labels = m_maxPower == 100 ? lowLabels : highLabels;
+    for (int side = 0; side < 2; ++side) {
+        const uint32_t color = side == 0 ? 0x22c55e : 0xef4444;
+        for (int i = 0; i <= 8; ++i) {
+            const auto& tick = m_geometry.ticks[side][i];
+            const bool major = i % 2 == 0;
+            lv_point_t p1 = {tick.line.from.x, tick.line.from.y};
+            lv_point_t p2 = {tick.line.to.x, tick.line.to.y};
             lv_draw_line_dsc_t tick_dsc;
             lv_draw_line_dsc_init(&tick_dsc);
             tick_dsc.color = major ? lv_color_hex(color) : lv_color_hex(0x666666);
             tick_dsc.width = major ? 2 : 1;
             lv_draw_line(draw_ctx, &tick_dsc, &p1, &p2);
             if (major && i > 0) {
-                char buf[8];
-                snprintf(buf, sizeof(buf), "%d", (int)(f * m_maxPower));
                 lv_draw_label_dsc_t ld;
                 lv_draw_label_dsc_init(&ld);
                 ld.color = lv_color_hex(color);
                 ld.font  = &lv_font_montserrat_14;
                 ld.align = LV_TEXT_ALIGN_CENTER;
-                const int lr = arm - tickLen - 12;
-                const int lx = px + (int)(c * lr);
-                const int ly = py - (int)(s * lr);
+                const int lx = tick.label.x, ly = tick.label.y;
                 lv_area_t la = {(lv_coord_t)(lx-16),(lv_coord_t)(ly-8),
                                 (lv_coord_t)(lx+16),(lv_coord_t)(ly+8)};
-                lv_draw_label(draw_ctx, &ld, &la, buf, NULL);
+                lv_draw_label(draw_ctx, &ld, &la, labels[i / 2], NULL);
             }
         }
-    };
-    drawTicks(fwdPx, fwdPy, PI_F, PI_F/2.0f, 0x22c55e);  // forward
-    drawTicks(refPx, refPy, 0.0f, PI_F/2.0f, 0xef4444);  // reflected
+    }
 
     // ----- SWR iso-curves -----
-    // Each curve traces the geometric intersection of the two needle lines as
-    // power varies at a fixed SWR (constant reflection coefficient Γ²).
-    // Intersection formula (both pivots share the same y = cy):
-    //   t_f = base2 * sin(thR) / (arm * sin(thF − thR))
-    //   crossing = fwd_pivot + t_f * arm * (cos thF, −sin thF)
-    static const float    swrValues[] = {1.5f, 2.0f, 3.0f, 5.0f, 10.0f};
     static const uint32_t swrColors[] = {0x84cc16, 0xeab308, 0xf97316, 0xef4444, 0xa855f7};
     lv_draw_line_dsc_t curve_dsc;
     lv_draw_line_dsc_init(&curve_dsc);
     curve_dsc.width = 1;
     curve_dsc.opa   = LV_OPA_60;
-    const float base2 = (float)(fwdPx - refPx);
     for (int si = 0; si < 5; si++) {
-        const float swr = swrValues[si];
-        const float g   = (swr - 1.0f) / (swr + 1.0f);
-        const float g2  = g * g;
         curve_dsc.color = lv_color_hex(swrColors[si]);
-        bool havePrev = false;
-        int prevX = 0, prevY = 0;
-        for (int k = 1; k <= 40; k++) {
-            const float ff  = (float)k / 40.0f;
-            const float rf  = fminf(g2 * ff, 1.0f);
-            const float thF = PI_F - ff * (PI_F / 2.0f);
-            const float thR = rf  * (PI_F / 2.0f);
-            const float sinR = sinf(thR);
-            const float sinD = sinf(thF - thR);
-            if (fabsf(sinD) < 0.001f || fabsf(sinR) < 0.001f) { havePrev = false; continue; }
-            const float tf = base2 * sinR / ((float)arm * sinD);
-            if (tf < 0.0f || tf > 1.05f) { havePrev = false; continue; }
-            const int ix = fwdPx + (int)(tf * (float)arm * cosf(thF));
-            const int iy = fwdPy - (int)(tf * (float)arm * sinf(thF));
-            if (havePrev) {
-                lv_point_t p1 = {(lv_coord_t)prevX, (lv_coord_t)prevY};
-                lv_point_t p2 = {(lv_coord_t)ix,    (lv_coord_t)iy};
-                lv_draw_line(draw_ctx, &curve_dsc, &p1, &p2);
-            }
-            prevX = ix; prevY = iy; havePrev = true;
+        const auto& curve = m_geometry.curves[si];
+        for (int i = 0; i < curve.count; ++i) {
+            const auto& line = curve.lines[i];
+            lv_point_t p1 = {line.from.x, line.from.y};
+            lv_point_t p2 = {line.to.x, line.to.y};
+            lv_draw_line(draw_ctx, &curve_dsc, &p1, &p2);
         }
     }
 
@@ -487,11 +438,11 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     needle_dsc.round_end = true;
     needle_dsc.color = lv_color_hex(0x00ff00);
     { lv_point_t p1={(lv_coord_t)fwdPx,(lv_coord_t)fwdPy},
-                 p2={(lv_coord_t)fwdTx,(lv_coord_t)fwdTy};
+                 p2={fwdTip.x, fwdTip.y};
       lv_draw_line(draw_ctx, &needle_dsc, &p1, &p2); }
     needle_dsc.color = lv_color_hex(0xff0000);
     { lv_point_t p1={(lv_coord_t)refPx,(lv_coord_t)refPy},
-                 p2={(lv_coord_t)refTx,(lv_coord_t)refTy};
+                 p2={refTip.x, refTip.y};
       lv_draw_line(draw_ctx, &needle_dsc, &p1, &p2); }
 
     // ----- Pivot dots -----
@@ -508,8 +459,10 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     lv_draw_rect(draw_ctx, &rd, &ra);
 
     // ----- SWR text -----
-    char swrBuf[16];
-    snprintf(swrBuf, sizeof(swrBuf), "%.1f:1", m_swr);
+    if (m_swrTextValue != m_swr) {
+        m_swrTextValue = m_swr;
+        snprintf(m_swrText, sizeof(m_swrText), "%.1f:1", m_swr);
+    }
     lv_draw_label_dsc_t swr_dsc;
     lv_draw_label_dsc_init(&swr_dsc);
     swr_dsc.color = (m_swr > 2.0f) ? lv_color_hex(0xff4444) :
@@ -518,7 +471,7 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     swr_dsc.align = LV_TEXT_ALIGN_CENTER;
     lv_area_t swr_a = {(lv_coord_t)(cx-30),(lv_coord_t)(cy-arm/2-12),
                        (lv_coord_t)(cx+30),(lv_coord_t)(cy-arm/2+12)};
-    lv_draw_label(draw_ctx, &swr_dsc, &swr_a, swrBuf, NULL);
+    lv_draw_label(draw_ctx, &swr_dsc, &swr_a, m_swrText, NULL);
 }
 
 void DisplayUI::displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p) {

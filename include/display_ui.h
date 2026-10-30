@@ -10,6 +10,7 @@
 #include "tuner_protocol.h"
 #include "config.h"
 #include "meter_scale.h"
+#include "meter_geometry.h"
 
 class DisplayUI {
 public:
@@ -52,6 +53,11 @@ private:
     float m_refPower;
     float m_swr;
     tuner_ant_t m_activeAnt;
+    tuner_mode_t m_activeMode = MODE_UNKNOWN;
+    tuner_band_t m_band = BAND_UNKNOWN;
+    ldg::MeterGeometry m_geometry;
+    float m_swrTextValue = -1;
+    char m_swrText[16] = {};
 
     // Touch
     void setupTouch();
