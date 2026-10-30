@@ -17,6 +17,7 @@ private:
         IPAddress ip;
         uint16_t count;
         uint32_t windowStart;
+        bool used;
     };
 
     static const uint8_t MAX_CLIENTS = 10;
@@ -42,6 +43,8 @@ private:
         IPAddress ip;
         uint8_t failures;
         uint32_t lockoutUntil;
+        bool used;
+        bool locked;
     };
 
     static const uint8_t MAX_RECORDS = 10;
@@ -56,13 +59,16 @@ private:
 // Security utilities
 class Security {
 public:
+    enum class Authorization { Allowed, RateLimited, Locked, Unauthorized };
+    static Authorization authorize(const IPAddress& clientIP, const String& username,
+                                   const String& password);
     // Initialize security subsystem
     static void begin();
 
     // Verify HTTP basic auth credentials
     static bool verifyAuth(const String& username, const String& password);
 
-    // Generate a simple CSRF token (ESP32 lacks crypto hardware for full implementation)
+    // Generate a random session token.
     static String generateToken();
 
     // Validate CSRF token

@@ -21,6 +21,7 @@ public:
 
     // Send commands to tuner
     bool toggleAntenna();
+    bool selectAntenna(tuner_ant_t antenna);
     bool memoryTune();
     bool fullTune();
     bool bypass();
@@ -35,7 +36,6 @@ public:
     bool stopMeter();
 
     // Get current meter readings (updated by background task)
-    const tuner_meter_t* getMeterData() const;
     tuner_state_t getState() const;
 
     // Get tuner mode (derived from responses)
@@ -61,8 +61,10 @@ private:
     // Internal methods
     bool sendCommand(uint8_t cmd);
     bool sendWake();
-    void switchToControlMode();
-    void switchToMeterMode();
+    bool switchToControlMode();
+    bool switchToMeterMode();
+    char controlResponse(uint8_t cmd);
+    void publishSnapshot(bool received = false, bool meterReceived = false);
     char waitForResponse(uint32_t timeoutMs = 500);
     void processMeterByte(uint8_t b);
     void publishMeterData();
@@ -95,15 +97,16 @@ private:
     volatile char m_pendingResponse;
     bool m_waitingForResponse;
 
-    // Mutex protecting UART access from main and webServer FreeRTOS tasks.
-    // Held by every high-level command (toggleAntenna, memoryTune, ...) for
-    // the duration of its switchToControlMode → sendCommand → waitForResponse
-    // → switchToMeterMode sequence so meter-mode bytes can't interleave with
-    // control-mode responses. process() uses a non-blocking acquire: if the
-    // mutex is busy, this tick's meter parse is skipped and bytes stay in the
-    // UART RX FIFO until the next call — UART2's 256-byte buffer is plenty
-    // for a worst-case command (~1.5s).
+    // Commands and process() belong to the UART worker. The recursive mutex
+    // also protects the command/response sequence against accidental callers.
     SemaphoreHandle_t m_mutex;
+    // Readers never wait for a control command or UART I/O.
+    mutable portMUX_TYPE m_snapshotMux = portMUX_INITIALIZER_UNLOCKED;
+    tuner_state_t m_snapshot;
+    uint32_t m_lastMeterMs = 0;
+    uint32_t m_lastResponseMs = 0;
+    bool m_seenResponse = false;
+    static constexpr uint32_t TELEMETRY_TIMEOUT_MS = 3000;
 };
 
 #endif // TUNER_PROTOCOL_H

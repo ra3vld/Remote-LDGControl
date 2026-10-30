@@ -26,7 +26,9 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_*.py'
 
       - name: Test browser meter scale synchronization
-        run: node tests/test_meter_scale_web.cjs
+        run: |
+          node tests/test_meter_scale_web.cjs
+          node tests/test_control_web.cjs
 
       - name: Build all environments
         run: |

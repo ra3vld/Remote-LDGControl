@@ -7,6 +7,9 @@ struct DeviceConfig {
     char mqttUsername[32] = "test-user";
     char mqttPassword[64] = "secret-must-not-appear";
     bool mqttDiscoveryEnabled = true;
+    char webUsername[32] = "admin";
+    char webPassword[64] = "test-password";
+    float meterPsuVoltage = 13.8f;
 };
 struct FakeConfigManager {
     DeviceConfig config;

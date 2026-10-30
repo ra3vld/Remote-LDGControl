@@ -6,6 +6,7 @@
 #include <HTTPRequest.hpp>
 #include <HTTPResponse.hpp>
 #include <esp_heap_caps.h>
+#include "config_store.h"
 #if TLS_ENABLED
 #include <HTTPSServer.hpp>
 #include <SSLCert.hpp>
@@ -175,7 +176,11 @@ void handleSave(httpsserver::HTTPRequest * req, httpsserver::HTTPResponse * res)
                 strncpy(newCfg.webPassword, webPass.c_str(), sizeof(newCfg.webPassword) - 1);
                 newCfg.webPassword[sizeof(newCfg.webPassword) - 1] = '\0';
             }
-            configManager.update(newCfg);
+            if (!configManager.update(newCfg)) {
+                res->setStatusCode(500);
+                res->print("{\"error\":\"configuration save failed\"}");
+                return;
+            }
 
             res->print("{\"status\":\"ok\"}");
 
@@ -186,7 +191,8 @@ void handleSave(httpsserver::HTTPRequest * req, httpsserver::HTTPResponse * res)
 
             uint32_t start = millis();
             while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
-                delay(100);
+                configManager.serviceIdle();
+                delay(5);
             }
 
             if (WiFi.status() != WL_CONNECTED) {
@@ -259,25 +265,31 @@ ConfigManager::ConfigManager() {
 }
 
 bool ConfigManager::begin() {
-    m_prefs.begin("ldg-config", false);
-
-    if (!load()) {
-        loadDefaults();
-        save();
-    }
-
-    m_prefs.end();
-    return true;
+    if (load()) return true;
+    loadDefaults();
+    return save(get());
 }
 
-const DeviceConfig& ConfigManager::get() const {
-    return m_config;
+DeviceConfig ConfigManager::get() const {
+    portENTER_CRITICAL(&m_configMux);
+    const DeviceConfig config = m_config;
+    portEXIT_CRITICAL(&m_configMux);
+    return config;
 }
 
 bool ConfigManager::update(const DeviceConfig& config) {
-    m_config = config;
-    m_config.configured = true;
-    return save();
+    DeviceConfig candidate = config;
+    candidate.configured = true;
+    if (!ldg::validDeviceConfig(candidate) || !save(candidate)) return false;
+    portENTER_CRITICAL(&m_configMux);
+    m_config = candidate;
+    portEXIT_CRITICAL(&m_configMux);
+    return true;
+}
+
+void ConfigManager::serviceIdle() {
+    if (m_portalIdleCb) m_portalIdleCb();
+    else delay(1);
 }
 
 String ConfigManager::portalHTML() {
@@ -366,7 +378,9 @@ scan();
 }
 
 String ConfigManager::scanNetworksJSON() {
-    int n = WiFi.scanNetworks();
+    WiFi.scanNetworks(true);
+    int n;
+    while ((n = WiFi.scanComplete()) == WIFI_SCAN_RUNNING) { serviceIdle(); delay(5); }
     JsonDocument doc;
     JsonArray arr = doc.to<JsonArray>();
     for (int i = 0; i < n && i < 20; i++) {
@@ -400,8 +414,8 @@ bool ConfigManager::setupWiFi() {
         WiFi.begin(m_config.wifiSSID, m_config.wifiPassword);
         uint32_t start = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-            delay(100);
-            Serial.print(".");
+            serviceIdle();
+            delay(5);
         }
         if (WiFi.status() == WL_CONNECTED) {
             Serial.printf("\nConnected: %s\n", WiFi.localIP().toString().c_str());
@@ -466,21 +480,21 @@ bool ConfigManager::setupWiFi() {
                           (unsigned)WiFi.softAPgetStationNum());
         }
 
-        if (m_portalIdleCb) m_portalIdleCb(); else delay(10);
+        serviceIdle();
     }
 }
 
-void ConfigManager::reset() {
-    m_prefs.begin("ldg-config", false);
-    m_prefs.clear();
+bool ConfigManager::reset() {
+    if (!m_prefs.begin("ldg-config", false)) return false;
+    const bool cleared = m_prefs.clear();
     m_prefs.end();
-
-    loadDefaults();
-    m_config.configured = false;
+    // The HTTP handler restarts immediately after a successful clear. Keep
+    // the running snapshot intact until then, including its authentication.
+    return cleared;
 }
 
 bool ConfigManager::isConfigured() const {
-    return m_config.configured;
+    return get().configured;
 }
 
 void ConfigManager::loadDefaults() {
@@ -506,41 +520,24 @@ void ConfigManager::loadDefaults() {
     m_config.staticNetmask[0] = '\0';
     m_config.staticGateway[0] = '\0';
     m_config.staticDNS[0]     = '\0';
-    strncpy(m_config.remoteHost, "ldgcontrol-remote.local",
-            sizeof(m_config.remoteHost) - 1);
+    m_config.remoteHost[0] = '\0';
     m_config.remoteHost[sizeof(m_config.remoteHost) - 1] = '\0';
 }
 
-bool ConfigManager::save() {
-    m_prefs.begin("ldg-config", false);
-
-    m_prefs.putString("wifiSSID", m_config.wifiSSID);
-    m_prefs.putString("wifiPassword", m_config.wifiPassword);
-    m_prefs.putString("mqttBroker", m_config.mqttBroker);
-    m_prefs.putString("mqttUsername", m_config.mqttUsername);
-    m_prefs.putString("mqttPassword", m_config.mqttPassword);
-    m_prefs.putString("webUsername", m_config.webUsername);
-    m_prefs.putString("webPassword", m_config.webPassword);
-    m_prefs.putFloat("meterPsuVoltage", m_config.meterPsuVoltage);
-    m_prefs.putString("ant1Name", m_config.ant1Name);
-    m_prefs.putString("ant2Name", m_config.ant2Name);
-    m_prefs.putUShort("mqttPort", m_config.mqttPort);
-    m_prefs.putBool("haDiscovery", m_config.mqttDiscoveryEnabled);
-    m_prefs.putUChar("remoteUnitId", m_config.remoteUnitId);
-    m_prefs.putBool("configured", m_config.configured);
-    m_prefs.putBool("useStaticIP",    m_config.useStaticIP);
-    m_prefs.putString("staticIP",      m_config.staticIP);
-    m_prefs.putString("staticNetmask", m_config.staticNetmask);
-    m_prefs.putString("staticGateway", m_config.staticGateway);
-    m_prefs.putString("staticDNS",     m_config.staticDNS);
-    m_prefs.putString("remoteHost",    m_config.remoteHost);
-
+bool ConfigManager::save(const DeviceConfig& config) {
+    if (!m_prefs.begin("ldg-config", false)) return false;
+    const bool saved = ldg::writeConfig(m_prefs, config);
     m_prefs.end();
-    return true;
+    return saved;
 }
 
 bool ConfigManager::load() {
-    m_prefs.begin("ldg-config", false);
+    if (!m_prefs.begin("ldg-config", true)) return false;
+    if (m_prefs.isKey("configV1")) {
+        const bool loaded = ldg::readConfig(m_prefs, m_config);
+        m_prefs.end();
+        return loaded;
+    }
 
     if (!m_prefs.isKey("configured")) {
         m_prefs.end();
@@ -569,8 +566,18 @@ bool ConfigManager::load() {
     strncpy(m_config.staticNetmask, m_prefs.getString("staticNetmask", "").c_str(), sizeof(m_config.staticNetmask) - 1);
     strncpy(m_config.staticGateway, m_prefs.getString("staticGateway", "").c_str(), sizeof(m_config.staticGateway) - 1);
     strncpy(m_config.staticDNS,     m_prefs.getString("staticDNS",     "").c_str(), sizeof(m_config.staticDNS)     - 1);
-    strncpy(m_config.remoteHost,    m_prefs.getString("remoteHost", "ldgcontrol-remote.local").c_str(), sizeof(m_config.remoteHost) - 1);
+    strncpy(m_config.remoteHost,    m_prefs.getString("remoteHost", "").c_str(), sizeof(m_config.remoteHost) - 1);
 
     m_prefs.end();
-    return true;
+    // Preserve legacy Wi-Fi credentials even if old firmware accepted an
+    // invalid optional setting. Future saves use the validated atomic blob.
+    if (!std::isfinite(m_config.meterPsuVoltage) || m_config.meterPsuVoltage < 8 || m_config.meterPsuVoltage > 18)
+        m_config.meterPsuVoltage = METER_PSU_VOLTAGE;
+    if (!m_config.mqttPort) m_config.mqttPort = MQTT_PORT;
+    if (!m_config.webUsername[0]) strlcpy(m_config.webUsername, WEB_AUTH_USERNAME, sizeof(m_config.webUsername));
+    if (!m_config.webPassword[0]) strlcpy(m_config.webPassword, WEB_AUTH_PASSWORD, sizeof(m_config.webPassword));
+    DeviceConfig checked = m_config;
+    checked.useStaticIP = false;
+    if (!ldg::validDeviceConfig(m_config) && ldg::validDeviceConfig(checked)) m_config.useStaticIP = false;
+    return ldg::validDeviceConfig(m_config);
 }

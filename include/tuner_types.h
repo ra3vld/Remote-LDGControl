@@ -14,6 +14,9 @@
 #define TUNER_CMD_SYNC          'Z'
 #define TUNER_CMD_METER_START   'S'
 #define TUNER_CMD_METER_STOP    'X'
+// Application commands; never written directly to the tuner UART.
+#define TUNER_CMD_SELECT_ANT_A  0x81
+#define TUNER_CMD_SELECT_ANT_B  0x82
 
 // Response codes
 #define TUNER_RESP_GOOD         'T'

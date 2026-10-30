@@ -2,6 +2,9 @@
 #include "config_manager.h"
 #include "config.h"
 #include "mqtt_protocol.h"
+#include "security.h"
+#include "config_store.h"
+#include "remote_protocol.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <WiFi.h>
@@ -22,26 +25,24 @@
 namespace hsv = httpsserver;
 
 // ---------------------------------------------------------------------------
-// Singleton + shared SSE state.
+// Singleton + shared meter snapshots.
 //
 // The HTTP library accepts plain function pointers for route handlers, so we
 // can't capture `this` in lambdas. Handlers read from s_instance to reach
-// LdgWebServer members, and from s_sse for the SSE push state. Each SSE
-// subscriber runs its own connection task and polls s_sse seq counters.
+// LdgWebServer members. Producers replace the shared snapshot under a short
+// critical section; only the web task touches WebSocket subscribers.
 // ---------------------------------------------------------------------------
 
 static LdgWebServer* s_instance = nullptr;
 
-struct SseState {
+struct MeterFeed {
     portMUX_TYPE mux;
     uint32_t meterSeq;
     char meterJson[384];
-    uint32_t statusSeq;
-    char statusJson[96];
 };
-static SseState s_sse = {
+static MeterFeed s_feed = {
     portMUX_INITIALIZER_UNLOCKED,
-    0, "", 0, ""
+    0, ""
 };
 
 // ---------------------------------------------------------------------------
@@ -127,7 +128,7 @@ static String issueWsToken() {
     // and therefore win the tiebreak).
     int slot = 0;
     for (int i = 1; i < WS_TOKEN_POOL_SIZE; i++) {
-        if (s_wsTokens[i].expiresAtMs < s_wsTokens[slot].expiresAtMs) slot = i;
+        if (!s_wsTokens[i].value[0] || int32_t(s_wsTokens[i].expiresAtMs - s_wsTokens[slot].expiresAtMs) < 0) slot = i;
     }
     strncpy(s_wsTokens[slot].value, hex, sizeof(s_wsTokens[slot].value));
     s_wsTokens[slot].expiresAtMs = millis() + WS_TOKEN_TTL_MS;
@@ -138,7 +139,7 @@ static String issueWsToken() {
 static bool consumeWsToken(const std::string& token) {
     uint32_t now = millis();
     for (int i = 0; i < WS_TOKEN_POOL_SIZE; i++) {
-        if (s_wsTokens[i].expiresAtMs > now &&
+        if (s_wsTokens[i].value[0] && int32_t(s_wsTokens[i].expiresAtMs - now) > 0 &&
             token == s_wsTokens[i].value) {
             s_wsTokens[i].expiresAtMs = 0;
             s_wsTokens[i].value[0] = '\0';
@@ -180,10 +181,13 @@ static void wsAuthMiddleware(hsv::HTTPRequest* req, hsv::HTTPResponse* res,
 static bool authenticate(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     std::string user = req->getBasicAuthUser();
     std::string pass = req->getBasicAuthPassword();
-    const DeviceConfig& cfg = configManager.get();
-    if (!user.empty() && !pass.empty() &&
-        user == cfg.webUsername && pass == cfg.webPassword) {
-        return true;
+    const auto authorization = Security::authorize(req->getClientIP(), String(user.c_str()), String(pass.c_str()));
+    if (authorization == Security::Authorization::Allowed) return true;
+    if (authorization == Security::Authorization::RateLimited || authorization == Security::Authorization::Locked) {
+        res->setStatusCode(429);
+        res->setHeader("Retry-After", authorization == Security::Authorization::Locked ? "300" : "1");
+        res->print("Too many requests or login attempts");
+        return false;
     }
     res->setStatusCode(401);
     res->setHeader("WWW-Authenticate", "Basic realm=\"LDG Tuner\"");
@@ -217,7 +221,7 @@ static void sendJson(hsv::HTTPResponse* res, int code, const String& body) {
     res->print(body.c_str());
 }
 
-// Web/SSE retain numeric enums; MQTT uses text labels from the same snapshot.
+// Web transports retain numeric enums; MQTT uses text labels from the same snapshot.
 static String serializeState(const tuner_state_t& state) {
     JsonDocument doc;
     ldg::writeState(doc, state, false);
@@ -345,10 +349,10 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     std::string body = readRequestBody(req);
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, body);
-    if (err) { sendJson(res, 400, "{\"error\":\"invalid json\"}"); return; }
+    if (err || !doc.is<JsonObject>()) { sendJson(res, 400, "{\"error\":\"invalid json object\"}"); return; }
 
     if (doc["reset"].is<bool>() && doc["reset"].as<bool>()) {
-        configManager.reset();
+        if (!configManager.reset()) { sendJson(res, 500, "{\"error\":\"reset failed\"}"); return; }
         sendJson(res, 200, "{\"result\":\"ok\",\"restart\":true}");
         delay(500);
         ESP.restart();
@@ -358,7 +362,12 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     DeviceConfig cfg = configManager.get();
     if (doc["mqttBroker"].is<const char*>())
         strlcpy(cfg.mqttBroker, doc["mqttBroker"], sizeof(cfg.mqttBroker));
-    if (doc["mqttPort"])        cfg.mqttPort = doc["mqttPort"];
+    if (!doc["mqttPort"].isUnbound()) {
+        if (!doc["mqttPort"].is<uint16_t>() || doc["mqttPort"].as<uint16_t>() == 0) {
+            sendJson(res, 400, "{\"error\":\"invalid MQTT port\"}"); return;
+        }
+        cfg.mqttPort = doc["mqttPort"];
+    }
     if (doc["mqttUsername"].is<const char*>())
         strlcpy(cfg.mqttUsername, doc["mqttUsername"], sizeof(cfg.mqttUsername));
     // Passwords are never returned by GET; an empty form field preserves the secret.
@@ -366,22 +375,26 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
         strlcpy(cfg.mqttPassword, doc["mqttPassword"], sizeof(cfg.mqttPassword));
     if (doc["mqttDiscoveryEnabled"].is<bool>())
         cfg.mqttDiscoveryEnabled = doc["mqttDiscoveryEnabled"].as<bool>();
-    if (doc["webUsername"])     strncpy(cfg.webUsername,  doc["webUsername"],  sizeof(cfg.webUsername)  - 1);
+    if (doc["webUsername"].is<const char*>()) strlcpy(cfg.webUsername, doc["webUsername"], sizeof(cfg.webUsername));
     if (doc["webPassword"].is<const char*>() && doc["webPassword"].as<const char*>()[0])
         strlcpy(cfg.webPassword, doc["webPassword"], sizeof(cfg.webPassword));
-    if (doc["meterPsuVoltage"]) cfg.meterPsuVoltage = doc["meterPsuVoltage"];
-    if (doc["ant1Name"])        strncpy(cfg.ant1Name, doc["ant1Name"], sizeof(cfg.ant1Name) - 1);
-    if (doc["ant2Name"])        strncpy(cfg.ant2Name, doc["ant2Name"], sizeof(cfg.ant2Name) - 1);
+    if (!doc["meterPsuVoltage"].isUnbound()) {
+        if (!doc["meterPsuVoltage"].is<float>()) { sendJson(res, 400, "{\"error\":\"invalid voltage\"}"); return; }
+        cfg.meterPsuVoltage = doc["meterPsuVoltage"];
+    }
+    if (doc["ant1Name"].is<const char*>()) strlcpy(cfg.ant1Name, doc["ant1Name"], sizeof(cfg.ant1Name));
+    if (doc["ant2Name"].is<const char*>()) strlcpy(cfg.ant2Name, doc["ant2Name"], sizeof(cfg.ant2Name));
     if (doc["useStaticIP"].is<bool>())  cfg.useStaticIP = doc["useStaticIP"];
-    if (doc["staticIP"].is<const char*>())      strncpy(cfg.staticIP,      doc["staticIP"],      sizeof(cfg.staticIP)      - 1);
-    if (doc["staticNetmask"].is<const char*>()) strncpy(cfg.staticNetmask, doc["staticNetmask"], sizeof(cfg.staticNetmask) - 1);
-    if (doc["staticGateway"].is<const char*>()) strncpy(cfg.staticGateway, doc["staticGateway"], sizeof(cfg.staticGateway) - 1);
-    if (doc["staticDNS"].is<const char*>())     strncpy(cfg.staticDNS,     doc["staticDNS"],     sizeof(cfg.staticDNS)     - 1);
+    if (doc["staticIP"].is<const char*>()) strlcpy(cfg.staticIP, doc["staticIP"], sizeof(cfg.staticIP));
+    if (doc["staticNetmask"].is<const char*>()) strlcpy(cfg.staticNetmask, doc["staticNetmask"], sizeof(cfg.staticNetmask));
+    if (doc["staticGateway"].is<const char*>()) strlcpy(cfg.staticGateway, doc["staticGateway"], sizeof(cfg.staticGateway));
+    if (doc["staticDNS"].is<const char*>()) strlcpy(cfg.staticDNS, doc["staticDNS"], sizeof(cfg.staticDNS));
 #ifdef WITH_DISPLAY
-    if (doc["remoteHost"].is<const char*>())    strncpy(cfg.remoteHost, doc["remoteHost"], sizeof(cfg.remoteHost) - 1);
+    if (doc["remoteHost"].is<const char*>()) strlcpy(cfg.remoteHost, doc["remoteHost"], sizeof(cfg.remoteHost));
 #endif
     cfg.configured = true;
 
+    if (!ldg::validDeviceConfig(cfg)) { sendJson(res, 400, "{\"error\":\"invalid configuration\"}"); return; }
     if (configManager.update(cfg)) {
         sendJson(res, 200, "{\"result\":\"ok\",\"restart\":true}");
         delay(500);
@@ -402,6 +415,8 @@ static void runCommand(hsv::HTTPResponse* res, uint8_t cmd) {
         ok = self->getCmdHandler()(cmd);
     } else if (self->getTuner()) {
         switch (cmd) {
+            case TUNER_CMD_SELECT_ANT_A: ok = self->getTuner()->selectAntenna(ANT_A); break;
+            case TUNER_CMD_SELECT_ANT_B: ok = self->getTuner()->selectAntenna(ANT_B); break;
             case TUNER_CMD_TOGGLE_ANT:  ok = self->getTuner()->toggleAntenna();   break;
             case TUNER_CMD_MEM_TUNE:    ok = self->getTuner()->memoryTune();      break;
             case TUNER_CMD_FULL_TUNE:   ok = self->getTuner()->fullTune();        break;
@@ -425,6 +440,8 @@ static void h_ws_token(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     sendJson(res, 200, body);
 }
 
+static void h_cmd_antenna_1(hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (authenticate(req, res)) runCommand(res, TUNER_CMD_SELECT_ANT_A); }
+static void h_cmd_antenna_2(hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (authenticate(req, res)) runCommand(res, TUNER_CMD_SELECT_ANT_B); }
 static void h_cmd_toggle      (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (!authenticate(req, res)) return; runCommand(res, TUNER_CMD_TOGGLE_ANT); }
 static void h_cmd_memory_tune (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (!authenticate(req, res)) return; runCommand(res, TUNER_CMD_MEM_TUNE); }
 static void h_cmd_full_tune   (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (!authenticate(req, res)) return; runCommand(res, TUNER_CMD_FULL_TUNE); }
@@ -438,8 +455,11 @@ static void h_telemetry(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     std::string body = readRequestBody(req);
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, body);
-    if (err) { sendJson(res, 400, "{\"error\":\"invalid json\"}"); return; }
+    if (err || !doc.is<JsonObject>()) { sendJson(res, 400, "{\"error\":\"invalid json object\"}"); return; }
 
+    if (!ldg::validRemoteStatus(doc.as<JsonVariantConst>())) {
+        sendJson(res, 400, "{\"error\":\"invalid telemetry snapshot\"}"); return;
+    }
     tuner_state_t state = ldg::readWebState(doc.as<JsonVariantConst>());
     state.remote = true;
     if (s_instance) {
@@ -482,6 +502,7 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
                          remote_telemetry_handler_t remoteTelemetryHandler,
                          mqtt_status_getter_t mqttStatusGetter,
                          ldg::MeterScale* meterScale) {
+    Security::begin();
     m_tuner = tuner;
     m_cmdHandler = cmdHandler;
     m_stateGetter = stateGetter;
@@ -510,6 +531,8 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "GET",  &h_config_get));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "POST", &h_config_post));
     m_server->registerNode(new hsv::ResourceNode("/api/telemetry",      "POST", &h_telemetry));
+    m_server->registerNode(new hsv::ResourceNode("/api/command/antenna_1", "POST", &h_cmd_antenna_1));
+    m_server->registerNode(new hsv::ResourceNode("/api/command/antenna_2", "POST", &h_cmd_antenna_2));
     m_server->registerNode(new hsv::ResourceNode("/api/command/toggle",      "POST", &h_cmd_toggle));
     m_server->registerNode(new hsv::ResourceNode("/api/command/memory_tune", "POST", &h_cmd_memory_tune));
     m_server->registerNode(new hsv::ResourceNode("/api/command/full_tune",   "POST", &h_cmd_full_tune));
@@ -540,8 +563,7 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
 void LdgWebServer::loop() {
     if (m_server) m_server->loop();
 
-    // Mirror the meter into SSE state every 500ms so polling subscribers see
-    // updates without us needing an explicit push from every meter source.
+    // Publish fresh validity and shared scale changes even when UART is idle.
     const uint32_t scaleRevision = m_meterScale ? m_meterScale->snapshot().revision : 0;
     if (millis() - m_lastMeterUpdate > 500 || scaleRevision != m_lastMeterScaleRevision) {
         if (m_stateGetter) pushMeterEvent(m_stateGetter());
@@ -556,14 +578,14 @@ void LdgWebServer::loop() {
     // after HTTPServer::loop(), so it cannot race with the library's
     // creation/deletion of MeterWebsocketHandler instances.
     uint32_t currSeq;
-    char buf[sizeof(s_sse.meterJson)];
-    portENTER_CRITICAL(&s_sse.mux);
-    currSeq = s_sse.meterSeq;
+    char buf[sizeof(s_feed.meterJson)];
+    portENTER_CRITICAL(&s_feed.mux);
+    currSeq = s_feed.meterSeq;
     if (currSeq != m_lastWsMeterSeq) {
-        strncpy(buf, s_sse.meterJson, sizeof(buf));
+        strncpy(buf, s_feed.meterJson, sizeof(buf));
         buf[sizeof(buf) - 1] = '\0';
     }
-    portEXIT_CRITICAL(&s_sse.mux);
+    portEXIT_CRITICAL(&s_feed.mux);
     if (currSeq != m_lastWsMeterSeq) {
         MeterWebsocketHandler::broadcastMeter(buf);
         m_lastWsMeterSeq = currSeq;
@@ -572,19 +594,10 @@ void LdgWebServer::loop() {
 
 void LdgWebServer::pushMeterEvent(const tuner_state_t& state) {
     String payload = serializeState(state);
-    portENTER_CRITICAL(&s_sse.mux);
-    strncpy(s_sse.meterJson, payload.c_str(), sizeof(s_sse.meterJson));
-    s_sse.meterJson[sizeof(s_sse.meterJson) - 1] = '\0';
-    s_sse.meterSeq++;
-    portEXIT_CRITICAL(&s_sse.mux);
-}
-
-void LdgWebServer::pushStatusEvent(const char* status) {
-    if (!status) return;
-    portENTER_CRITICAL(&s_sse.mux);
-    strncpy(s_sse.statusJson, status, sizeof(s_sse.statusJson));
-    s_sse.statusJson[sizeof(s_sse.statusJson) - 1] = '\0';
-    s_sse.statusSeq++;
-    portEXIT_CRITICAL(&s_sse.mux);
+    portENTER_CRITICAL(&s_feed.mux);
+    strncpy(s_feed.meterJson, payload.c_str(), sizeof(s_feed.meterJson));
+    s_feed.meterJson[sizeof(s_feed.meterJson) - 1] = '\0';
+    s_feed.meterSeq++;
+    portEXIT_CRITICAL(&s_feed.mux);
 }
 

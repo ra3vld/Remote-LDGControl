@@ -12,7 +12,7 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
   - Shared 100/1000 W scale: changing it on the touchscreen or in any browser
     updates the display and all connected pages. The scale starts at 1000 W
     after a device restart; switching it does not write settings to flash.
-- **Web Interface**: Responsive browser UI with Server-Sent Events (SSE) for live updates
+- **Web Interface**: Responsive browser UI with WebSocket live updates
 - **MQTT Integration**: Per-device telemetry, adaptive 1/30-second updates, and Home Assistant auto discovery (six sensors and six command buttons)
 - **Touchscreen Display**: Sunton ESP32-3248S035C or BTT TFT35-SPI with custom cross-needle meter
 - **Three Firmware Targets**:
@@ -192,7 +192,10 @@ Go to **Settings** (or `GET /api/config`) to configure:
 | Meter PSU Voltage | Tuner's power supply voltage for accurate power calculation (default 13.8V). This is the voltage at the tuner's 12V input, not the ESP32's supply. |
 | Remote Unit ID | ID for remote unit (default 1) |
 
-Settings are saved to NVS and persist across reboots. Changing settings triggers a restart.
+Settings are validated and saved as one versioned NVS blob before replacing
+the running configuration. Existing per-key settings are read on upgrade and
+migrate on the next successful save. A failed save reports an error without
+restarting. Successful settings changes trigger a restart.
 
 ### Reset to Defaults
 
@@ -214,6 +217,7 @@ All endpoints require HTTP Basic Auth.
 | GET | `/api/config` | Current configuration |
 | POST | `/api/config` | Update configuration (restarts device) |
 | POST | `/api/command/toggle` | Toggle antenna A/B |
+| POST | `/api/command/antenna_1`, `/api/command/antenna_2` | Select the requested antenna; repeated requests are idempotent |
 | POST | `/api/command/memory_tune` | Memory tune |
 | POST | `/api/command/full_tune` | Full tune |
 | POST | `/api/command/bypass` | Toggle bypass |
@@ -223,12 +227,16 @@ The scale endpoint returns `meter_scale` and `meter_scale_revision`. Both fields
 are also included in `/api/status` and live WebSocket meter updates, including
 when the tuner is idle. Invalid scale requests return HTTP 400. To install this
 feature, upload both the application and LittleFS (`uploadfs`) and reload the
-browser page. Run `pio test -e native` and `node tests/test_meter_scale_web.cjs`
+browser page. Run `pio test -e native`, `node tests/test_meter_scale_web.cjs` and
+`node tests/test_control_web.cjs`
 for the shared-state and page synchronization regression checks.
 
-### Server-Sent Events (SSE)
+### WebSocket telemetry
 
-Connect to `http://<esp32-ip>/api/events` for real-time meter updates. The browser UI uses this automatically. Remote units also connect here to receive commands.
+The browser obtains a single-use token from authenticated `GET /api/ws-token`,
+then opens `/api/ws?t=<token>` for JSON meter snapshots. The `/api/events` SSE
+route is not used. HTTP Basic Auth protects the page, status, token and command
+endpoints.
 
 ## MQTT and Home Assistant
 
@@ -270,7 +278,7 @@ actual base topic in Settings or `GET /api/config` (`mqttBaseTopic`).
 
 **Migration:** the former shared `ldg/tuner/...` and `ldg/tuner/remote/...` topics
 are no longer published or subscribed. Update existing MQTT clients and automations.
-Display ↔ remote communication continues over HTTP/SSE (HTTPS with
+Display ↔ remote communication uses HTTP status polling and command POSTs (HTTPS with
 `TLS_ENABLED=1`) and needs no MQTT broker.
 
 | Topic relative to the base | Direction | Payload / retention |
@@ -288,8 +296,8 @@ Example `/state` payload:
 
 The snapshot always uses the active tuner. A display controller follows the
 remote tuner, including its band, mode, and antenna, while connected; it falls
-back to its local UART tuner after a remote disconnect or a 60-second telemetry
-timeout. `source` is `local` or `remote`. Commands follow the same active source.
+back to its local UART tuner after a 3-second remote timeout. Local meter readings
+also expire after 3 seconds without a valid UART frame. `source` is `local` or `remote`. Commands follow the same active source.
 
 ### Adaptive state updates
 
@@ -309,7 +317,7 @@ Any of these triggers the fast interval:
 Intermediate changes are coalesced into the latest snapshot. First connection,
 reconnection, Home Assistant discovery, and completed web/MQTT commands request an
 immediate state update. A failed publish does not advance the timer or baseline.
-Thresholds are fixed in firmware. Web/SSE and display refresh rates are unchanged.
+Thresholds are fixed in firmware. WebSocket and display refresh rates are unchanged.
 
 ### Commands and discovery lifecycle
 
@@ -411,37 +419,32 @@ When the tuner is located near the antenna (e.g., in a shack attic or external e
 
 ### Architecture
 
-```
-[Display Unit] <---WiFi AP---> [Remote Unit] <---TTL---> [LDG Tuner]
-  (in shack)       HTTP/SSE       (at antenna)
-  - Web UI
-  - SSE server                  - SSE client (receives commands)
-  - Touchscreen                 - HTTP POST (sends telemetry)
-  - HTTP POST receiver          - Executes commands
-```
+Both controllers join the same reachable Wi-Fi network. In the display unit's
+Settings, set **Remote Unit Host** to the headless unit's IP or hostname. Keep
+it empty for a directly attached tuner (the default for new configurations).
+Both units must use matching web credentials and `TLS_ENABLED` values.
 
-No MQTT broker required for the link. The remote unit connects to the display unit's WiFi AP and communicates over HTTP/SSE.
+The display polls the remote unit's authenticated `GET /api/status` every
+500 ms and sends commands to its `/api/command/*` endpoints. Browsers use
+WebSocket telemetry independently. The link needs no MQTT broker or SSE route.
+A peer already following another remote source is rejected to prevent loops.
 
-### How It Works
+UART parsing, local commands, remote networking, MQTT, web serving and LVGL
+have separate owners. Display buttons enqueue commands without waiting for
+UART or DNS. All interfaces select the same active tuner. A queued remote
+command fails if its source disappears; it is never redirected to the local
+tuner. Lost command responses are not retried automatically.
 
-**Remote Unit** (`esp32-remote`):
-- Connects to display unit's WiFi AP
-- Opens SSE connection to display unit for commands
-- POSTs telemetry to display unit every 200ms
-- Uses HTTP Basic Auth (configured via web UI)
-
-**Display Unit** (`esp32-display`):
-- Creates WiFi AP for remote unit
-- Accepts telemetry POSTs, pushes to SSE clients (browser UI)
-- Pushes commands to SSE when web UI/MQTT commands arrive
-- Falls back to local tuner when remote disconnects
+The wire protocol provides antenna toggle only. When the initial antenna is
+unknown, an absolute selection may require two acknowledged toggles to reach
+the requested port. Repeated requests for a confirmed port do not toggle it.
 
 ### MQTT (Optional)
 
 Both units can independently connect to a broker and appear as separate Home
 Assistant devices. Each uses its own `ldg/tuner/<mac>/...` topics. A display
 controller publishes its active tuner; the headless unit publishes its local
-tuner. MQTT does not carry the display ↔ remote link; that remains HTTP/SSE
+tuner. MQTT does not carry the display ↔ remote link; that remains HTTP status polling and command POSTs
 (HTTPS with `TLS_ENABLED=1`).
 
 ## Security

@@ -39,7 +39,7 @@ static bool tsTouched() {
 #endif
 
 DisplayUI::DisplayUI()
-    : m_tft(nullptr), m_tuner(nullptr), m_meterScale(nullptr),
+    : m_tft(nullptr), m_commandHandler(nullptr), m_meterScale(nullptr),
       m_scr(nullptr), m_meter(nullptr),
       m_bandLabel(nullptr), m_scaleLabel(nullptr),
       m_modeLabel(nullptr),
@@ -59,8 +59,8 @@ DisplayUI::~DisplayUI() {
     s_instance = nullptr;
 }
 
-bool DisplayUI::begin(TunerProtocol* tuner, ldg::MeterScale* meterScale) {
-    m_tuner = tuner;
+bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterScale) {
+    m_commandHandler = commandHandler;
     m_meterScale = meterScale;
 #ifdef BOARD_ESP32_3248S035C
     pinMode(TFT_BL, OUTPUT);
@@ -252,11 +252,32 @@ void DisplayUI::updateMeterScale() {
     lv_obj_invalidate(m_meter);
 }
 
+void DisplayUI::updateState(const tuner_state_t& state) {
+    tuner_meter_t meter = state.meter;
+    if (!state.meterValid) {
+        meter = tuner_meter_t{};
+        meter.swr = NAN;
+    }
+    if (!std::isfinite(meter.forward_power_watts)) meter.forward_power_watts = 0;
+    if (!std::isfinite(meter.reflected_power_watts)) meter.reflected_power_watts = 0;
+    updateMeter(&meter);
+    updateStatus(state.mode, state.antenna);
+}
+
+void DisplayUI::setCommandPending(bool pending) {
+    if (m_commandPending == pending) return;
+    m_commandPending = pending;
+    for (lv_obj_t* button : {m_btnMemTune, m_btnFullTune, m_btnAnt1, m_btnAnt2, m_btnBypass, m_btnAuto}) {
+        if (pending) lv_obj_add_state(button, LV_STATE_DISABLED);
+        else lv_obj_clear_state(button, LV_STATE_DISABLED);
+    }
+}
+
 void DisplayUI::updateMeter(const tuner_meter_t* meter) {
     const float forward = float(meter->forward_power_watts);
     const float reflected = float(meter->reflected_power_watts);
     const float swr = float(meter->swr);
-    if (forward != m_fwdPower || reflected != m_refPower || swr != m_swr) {
+    if (forward != m_fwdPower || reflected != m_refPower || (swr != m_swr && !(std::isnan(swr) && std::isnan(m_swr)))) {
         m_fwdPower = forward;
         m_refPower = reflected;
         m_swr = swr;
@@ -461,7 +482,8 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     // ----- SWR text -----
     if (m_swrTextValue != m_swr) {
         m_swrTextValue = m_swr;
-        snprintf(m_swrText, sizeof(m_swrText), "%.1f:1", m_swr);
+        if (std::isfinite(m_swr)) snprintf(m_swrText, sizeof(m_swrText), "%.1f:1", m_swr);
+        else snprintf(m_swrText, sizeof(m_swrText), "--");
     }
     lv_draw_label_dsc_t swr_dsc;
     lv_draw_label_dsc_init(&swr_dsc);
@@ -487,29 +509,29 @@ void DisplayUI::displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_colo
 }
 
 void DisplayUI::btnMemTuneEvent(lv_event_t* e) {
-    if (s_instance && s_instance->m_tuner) s_instance->m_tuner->memoryTune();
+    if (s_instance && s_instance->m_commandHandler) s_instance->m_commandHandler(TUNER_CMD_MEM_TUNE);
 }
 
 void DisplayUI::btnFullTuneEvent(lv_event_t* e) {
-    if (s_instance && s_instance->m_tuner) s_instance->m_tuner->fullTune();
+    if (s_instance && s_instance->m_commandHandler) s_instance->m_commandHandler(TUNER_CMD_FULL_TUNE);
 }
 
 void DisplayUI::btnAnt1Event(lv_event_t* e) {
-    if (s_instance && s_instance->m_tuner && s_instance->m_activeAnt != ANT_A)
-        s_instance->m_tuner->toggleAntenna();
+    if (s_instance && s_instance->m_commandHandler && s_instance->m_activeAnt != ANT_A)
+        s_instance->m_commandHandler(TUNER_CMD_SELECT_ANT_A);
 }
 
 void DisplayUI::btnAnt2Event(lv_event_t* e) {
-    if (s_instance && s_instance->m_tuner && s_instance->m_activeAnt != ANT_B)
-        s_instance->m_tuner->toggleAntenna();
+    if (s_instance && s_instance->m_commandHandler && s_instance->m_activeAnt != ANT_B)
+        s_instance->m_commandHandler(TUNER_CMD_SELECT_ANT_B);
 }
 
 void DisplayUI::btnBypassEvent(lv_event_t* e) {
-    if (s_instance && s_instance->m_tuner) s_instance->m_tuner->bypass();
+    if (s_instance && s_instance->m_commandHandler) s_instance->m_commandHandler(TUNER_CMD_BYPASS);
 }
 
 void DisplayUI::btnAutoEvent(lv_event_t* e) {
-    if (s_instance && s_instance->m_tuner) s_instance->m_tuner->setAutoMode();
+    if (s_instance && s_instance->m_commandHandler) s_instance->m_commandHandler(TUNER_CMD_AUTO_MODE);
 }
 
 void DisplayUI::meterTapEvent(lv_event_t* e) {

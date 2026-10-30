@@ -503,11 +503,14 @@
         // Horizontal = full scale, Vertical = zero
         // ============================================================
         const canvas = document.getElementById('meterCanvas');
-        const ctx = canvas.getContext('2d');
+        let ctx = canvas.getContext('2d');
+        let meterFace = null;
+        let meterFaceKey = '';
+        let lastMeterDrawKey = '';
 
         const meterState = {
-            fwdPower: 0,
-            refPower: 0,
+            fwdPower: null,
+            refPower: null,
             swr: null,
             maxPower: 1000,
             highScale: true,
@@ -517,7 +520,7 @@
         let meterScaleEpoch = 0;
         let scaleRequestPending = false;
 
-        function drawMeter() {
+        function drawMeterFace() {
             const w = canvas.width;
             const h = canvas.height;
             const pad = 40;
@@ -615,6 +618,29 @@
             ctx.arc(refPx, refPy, 10, 0, 2 * Math.PI);
             ctx.fill();
 
+        }
+
+        function drawMeter() {
+            const w = canvas.width, h = canvas.height;
+            const faceKey = [w, h, meterState.maxPower].join(':');
+            const drawKey = [faceKey, meterState.fwdPower, meterState.refPower, meterState.swr].join(':');
+            if (drawKey === lastMeterDrawKey) return;
+            if (!meterFace || meterFaceKey !== faceKey) {
+                meterFace = document.createElement('canvas');
+                meterFace.width = w;
+                meterFace.height = h;
+                const destination = ctx;
+                try {
+                    ctx = meterFace.getContext('2d');
+                    drawMeterFace();
+                } finally { ctx = destination; }
+                meterFaceKey = faceKey;
+            }
+            ctx.clearRect(0, 0, w, h);
+            ctx.drawImage(meterFace, 0, 0);
+            const pad = 40, arm = h - 2 * pad, cx = w / 2;
+            const fwdPx = w - pad, fwdPy = h - pad, refPx = pad, refPy = h - pad;
+            lastMeterDrawKey = drawKey;
             // Needles: fixed length = arm, tip walks along the per-pivot arc.
             //   Forward:  φ = π     + fwdFrac·(π/2)    (left → up)
             //   Reflected:φ = 2π − refFrac·(π/2)       (right → up)
@@ -656,10 +682,10 @@
             ctx.fillStyle = '#22c55e';
             ctx.font = 'bold 22px -apple-system, sans-serif';
             ctx.textAlign = 'right';
-            ctx.fillText(meterState.fwdPower.toFixed(1) + 'W', fwdPx - 10, fwdPy + 35);
+            ctx.fillText(meterState.fwdPower === null ? '--' : meterState.fwdPower.toFixed(1) + 'W', fwdPx - 10, fwdPy + 35);
             ctx.fillStyle = '#ef4444';
             ctx.textAlign = 'left';
-            ctx.fillText(meterState.refPower.toFixed(1) + 'W', refPx + 10, refPy + 35);
+            ctx.fillText(meterState.refPower === null ? '--' : meterState.refPower.toFixed(1) + 'W', refPx + 10, refPy + 35);
 
             // Numeric SWR readout between the power values.
             const swr = meterState.swr;
@@ -783,8 +809,9 @@
         let activeAntenna = 0; // 0=unknown, 1=ANT1, 2=ANT2
 
         function selectAntenna(ant) {
-            if (ant === activeAntenna) return;
-            sendCommand('toggle');
+            if (ant !== 1 && ant !== 2) return;
+            if (ant === activeAntenna || commandPending) return;
+            return sendCommand('antenna_' + ant);
         }
 
         function updateAntennaButtons(antenna) {
@@ -797,8 +824,8 @@
 
         function updateMeter(data) {
             applyMeterScale(data);
-            meterState.fwdPower = data.fwd_power || 0;
-            meterState.refPower = data.ref_power || 0;
+            meterState.fwdPower = Number.isFinite(data.fwd_power) && data.fwd_power >= 0 ? data.fwd_power : null;
+            meterState.refPower = Number.isFinite(data.ref_power) && data.ref_power >= 0 ? data.ref_power : null;
             meterState.swr = Number.isFinite(data.swr) && data.swr >= 1 ? data.swr : null;
 
             if (data.band) {
@@ -862,6 +889,7 @@
 
             ws.onclose = () => {
                 statusEl.innerHTML = '<span class="status-dot offline"></span> Disconnected';
+                updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0 });
                 if (!wsReconnectTimer) {
                     wsReconnectTimer = setTimeout(() => {
                         wsReconnectTimer = null;
@@ -875,11 +903,18 @@
             };
         }
 
+        let commandPending = false;
         async function sendCommand(cmd) {
+            if (commandPending) return false;
+            commandPending = true;
+            document.querySelectorAll('.button-stack button').forEach(button => button.disabled = true);
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 15000);
             // WebSocket is non-blocking server-side, so commands no longer
             // need the close-then-reopen dance the SSE implementation used.
             try {
-                const resp = await fetch('/api/command/' + cmd, { method: 'POST' });
+                const resp = await fetch('/api/command/' + cmd, { method: 'POST', signal: controller.signal });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
                 if (data.result === 'success') {
                     showToast(cmd.replace('_', ' ') + ' sent');
@@ -887,7 +922,11 @@
                     showToast('Command failed', 'error');
                 }
             } catch (err) {
-                showToast('Connection error', 'error');
+                showToast('Command result unavailable: ' + err.message, 'error');
+            } finally {
+                clearTimeout(timeout);
+                commandPending = false;
+                document.querySelectorAll('.button-stack button').forEach(button => button.disabled = false);
             }
         }
 

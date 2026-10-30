@@ -17,15 +17,18 @@ public:
     DisplayUI();
     ~DisplayUI();
 
-    bool begin(TunerProtocol* tuner, ldg::MeterScale* meterScale);
+    bool begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterScale);
     void loop();
     void updateMeter(const tuner_meter_t* meter);
     void updateStatus(tuner_mode_t mode, tuner_ant_t antenna);
     void updateNetworkInfo();
+    void updateState(const tuner_state_t& state);
+    void setCommandPending(bool pending);
 
 private:
     TFT_eSPI* m_tft;
-    TunerProtocol* m_tuner;
+    bool (*m_commandHandler)(uint8_t);
+    bool m_commandPending = false;
     ldg::MeterScale* m_meterScale;
 
     // LVGL objects

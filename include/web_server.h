@@ -29,11 +29,8 @@ public:
                ldg::MeterScale* meterScale = nullptr);
     void loop();
 
-    // SSE: push meter event to all connected clients
+    // Publish a value snapshot for WebSocket subscribers.
     void pushMeterEvent(const tuner_state_t& state);
-
-    // SSE: push status event
-    void pushStatusEvent(const char* status);
 
     // Accessors for the static handler functions (which receive a raw
     // HTTPRequest/HTTPResponse and need to reach back into instance state).

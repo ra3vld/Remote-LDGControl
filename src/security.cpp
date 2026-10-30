@@ -14,12 +14,12 @@ uint32_t Security::s_tokenExpiry = 0;
 
 RateLimiter::RateLimiter(uint16_t maxRequests, uint32_t windowMs)
     : m_maxRequests(maxRequests), m_windowMs(windowMs) {
-    memset(m_clients, 0, sizeof(m_clients));
+    reset();
 }
 
 RateLimiter::ClientRecord* RateLimiter::findClient(const IPAddress& ip) {
     for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
-        if (m_clients[i].ip == ip && m_clients[i].windowStart > 0) {
+        if (m_clients[i].ip == ip && m_clients[i].used) {
             return &m_clients[i];
         }
     }
@@ -28,12 +28,14 @@ RateLimiter::ClientRecord* RateLimiter::findClient(const IPAddress& ip) {
 
 RateLimiter::ClientRecord* RateLimiter::getFreeSlot() {
     for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
-        if (m_clients[i].windowStart == 0) {
+        if (!m_clients[i].used) {
             return &m_clients[i];
         }
     }
-    // Evict oldest
-    return &m_clients[0];
+    uint8_t oldest = 0;
+    for (uint8_t i = 1; i < MAX_CLIENTS; ++i)
+        if (uint32_t(millis() - m_clients[i].windowStart) > uint32_t(millis() - m_clients[oldest].windowStart)) oldest = i;
+    return &m_clients[oldest];
 }
 
 bool RateLimiter::allowRequest(const IPAddress& clientIP) {
@@ -42,13 +44,14 @@ bool RateLimiter::allowRequest(const IPAddress& clientIP) {
 
     if (!client) {
         client = getFreeSlot();
+        client->used = true;
         client->ip = clientIP;
         client->count = 0;
         client->windowStart = now;
     }
 
     // Reset window if expired
-    if (now - client->windowStart > m_windowMs) {
+    if (now - client->windowStart >= m_windowMs) {
         client->count = 0;
         client->windowStart = now;
     }
@@ -62,7 +65,7 @@ bool RateLimiter::allowRequest(const IPAddress& clientIP) {
 }
 
 void RateLimiter::reset() {
-    memset(m_clients, 0, sizeof(m_clients));
+    for (auto& client : m_clients) client = ClientRecord{};
 }
 
 // ============================================================
@@ -71,12 +74,12 @@ void RateLimiter::reset() {
 
 LoginTracker::LoginTracker(uint8_t maxAttempts, uint32_t lockoutMs)
     : m_maxAttempts(maxAttempts), m_lockoutMs(lockoutMs) {
-    memset(m_records, 0, sizeof(m_records));
+    reset();
 }
 
 LoginTracker::LoginRecord* LoginTracker::findRecord(const IPAddress& ip) {
     for (uint8_t i = 0; i < MAX_RECORDS; i++) {
-        if (m_records[i].ip == ip) {
+        if (m_records[i].used && m_records[i].ip == ip) {
             return &m_records[i];
         }
     }
@@ -85,7 +88,7 @@ LoginTracker::LoginRecord* LoginTracker::findRecord(const IPAddress& ip) {
 
 LoginTracker::LoginRecord* LoginTracker::getFreeSlot() {
     for (uint8_t i = 0; i < MAX_RECORDS; i++) {
-        if (m_records[i].lockoutUntil == 0 && m_records[i].failures == 0) {
+        if (!m_records[i].used || (!m_records[i].locked && m_records[i].failures == 0)) {
             return &m_records[i];
         }
     }
@@ -101,14 +104,15 @@ bool LoginTracker::canAttempt(const IPAddress& clientIP) {
     }
 
     // Check if lockout has expired
-    if (record->lockoutUntil > 0 && now < record->lockoutUntil) {
+    if (record->locked && int32_t(now - record->lockoutUntil) < 0) {
         return false;
     }
 
     // Lockout expired, reset
-    if (record->lockoutUntil > 0 && now >= record->lockoutUntil) {
+    if (record->locked && int32_t(now - record->lockoutUntil) >= 0) {
         record->failures = 0;
         record->lockoutUntil = 0;
+        record->locked = false;
     }
 
     return true;
@@ -119,6 +123,7 @@ void LoginTracker::recordSuccess(const IPAddress& clientIP) {
     if (record) {
         record->failures = 0;
         record->lockoutUntil = 0;
+        record->locked = false;
     }
 }
 
@@ -128,20 +133,23 @@ void LoginTracker::recordFailure(const IPAddress& clientIP) {
 
     if (!record) {
         record = getFreeSlot();
+        record->used = true;
         record->ip = clientIP;
         record->failures = 0;
         record->lockoutUntil = 0;
+        record->locked = false;
     }
 
     record->failures++;
 
     if (record->failures >= m_maxAttempts) {
         record->lockoutUntil = now + m_lockoutMs;
+        record->locked = true;
     }
 }
 
 void LoginTracker::reset() {
-    memset(m_records, 0, sizeof(m_records));
+    for (auto& record : m_records) record = LoginRecord{};
 }
 
 // ============================================================
@@ -149,6 +157,7 @@ void LoginTracker::reset() {
 // ============================================================
 
 void Security::begin() {
+    if (s_rateLimiter) return;
     s_rateLimiter = new RateLimiter(WEB_RATE_LIMIT_REQUESTS, WEB_RATE_LIMIT_WINDOW_MS);
     s_loginTracker = new LoginTracker(MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_MS);
     generateToken();
@@ -160,14 +169,17 @@ bool Security::verifyAuth(const String& username, const String& password) {
 }
 
 String Security::generateToken() {
-    s_currentToken = String(random(0xFFFFFF), HEX);
-    s_currentToken += String(millis(), HEX);
-    s_tokenExpiry = millis() + 3600000; // 1 hour
+    uint8_t bytes[16];
+    esp_fill_random(bytes, sizeof(bytes));
+    char hex[33];
+    for (int i = 0; i < 16; ++i) snprintf(hex + 2 * i, 3, "%02x", bytes[i]);
+    s_currentToken = String(hex);
+    s_tokenExpiry = millis() + 3600000;
     return s_currentToken;
 }
 
 bool Security::validateToken(const String& token) {
-    if (millis() > s_tokenExpiry) {
+    if (int32_t(millis() - s_tokenExpiry) >= 0) {
         generateToken();
         return false;
     }
@@ -182,29 +194,21 @@ LoginTracker& Security::getLoginTracker() {
     return *s_loginTracker;
 }
 
-bool Security::isAuthorized(const IPAddress& clientIP, const String& username,
-                           const String& password, const String& csrfToken) {
-    // Check rate limit
-    if (!s_rateLimiter->allowRequest(clientIP)) {
-        return false;
-    }
-
-    // Check login lockout
-    if (!s_loginTracker->canAttempt(clientIP)) {
-        return false;
-    }
-
-    // Verify credentials
+Security::Authorization Security::authorize(const IPAddress& clientIP, const String& username,
+                                            const String& password) {
+    if (!s_rateLimiter) begin();
+    if (!s_rateLimiter->allowRequest(clientIP)) return Authorization::RateLimited;
+    if (!s_loginTracker->canAttempt(clientIP)) return Authorization::Locked;
     if (!verifyAuth(username, password)) {
         s_loginTracker->recordFailure(clientIP);
-        return false;
+        return Authorization::Unauthorized;
     }
-
-    // Validate CSRF token if provided
-    if (!csrfToken.isEmpty() && !validateToken(csrfToken)) {
-        return false;
-    }
-
     s_loginTracker->recordSuccess(clientIP);
-    return true;
+    return Authorization::Allowed;
+}
+
+bool Security::isAuthorized(const IPAddress& clientIP, const String& username,
+                           const String& password, const String& csrfToken) {
+    return authorize(clientIP, username, password) == Authorization::Allowed &&
+        (csrfToken.length() == 0 || validateToken(csrfToken));
 }

@@ -2,6 +2,7 @@
 #include "voltage_sensor.h"
 #include "config.h"
 #include <driver/uart.h>
+#include <new>
 
 namespace {
 // RAII scoped acquire of the TunerProtocol mutex. Blocks indefinitely by
@@ -46,15 +47,14 @@ TunerProtocol::~TunerProtocol() {
 
 bool TunerProtocol::begin(uint8_t rxPin, uint8_t txPin, uint32_t baud) {
     m_mutex = xSemaphoreCreateRecursiveMutex();
-    m_serial = new HardwareSerial(TUNER_UART_NUM);
+    m_serial = new (std::nothrow) HardwareSerial(TUNER_UART_NUM);
+    if (!m_mutex || !m_serial) return false;
     m_serial->begin(baud, SERIAL_8N1, rxPin, txPin);
     m_connected = true;
 
     // Start in meter mode to receive telemetry
     delay(100);
-    startMeter();
-
-    return true;
+    return startMeter();
 }
 
 bool TunerProtocol::sendWake() {
@@ -84,144 +84,89 @@ bool TunerProtocol::sendCommand(uint8_t cmd) {
     return true;
 }
 
-void TunerProtocol::switchToControlMode() {
+bool TunerProtocol::switchToControlMode() {
     m_state = State::RESPONSE;
-    sendCommand(TUNER_CMD_METER_STOP);
+    m_meterIdx = m_eomCount = 0;
+    if (!sendCommand(TUNER_CMD_METER_STOP)) return false;
+    // Discard the final meter frame that was already in flight before X.
+    while (m_serial->available()) m_serial->read();
+    return true;
 }
 
-void TunerProtocol::switchToMeterMode() {
+bool TunerProtocol::switchToMeterMode() {
+    m_meterIdx = m_eomCount = 0;
     m_state = State::METER;
-    sendCommand(TUNER_CMD_METER_START);
-    m_meterActive = true;
+    m_meterActive = sendCommand(TUNER_CMD_METER_START);
+    return m_meterActive;
 }
 
 char TunerProtocol::waitForResponse(uint32_t timeoutMs) {
-    uint32_t start = millis();
+    const uint32_t start = millis();
     m_waitingForResponse = true;
     m_pendingResponse = 0;
-
     while (millis() - start < timeoutMs) {
         process();
-        if (m_pendingResponse != 0) {
-            char resp = m_pendingResponse;
-            m_pendingResponse = 0;
-            m_waitingForResponse = false;
-            return resp;
-        }
+        if (m_pendingResponse != 0) break;
         delay(1);
     }
-
     m_waitingForResponse = false;
-    return TUNER_RESP_ERROR;
+    return m_pendingResponse ? m_pendingResponse : TUNER_RESP_ERROR;
+}
+
+char TunerProtocol::controlResponse(uint8_t cmd) {
+    TunerLock lock(m_mutex);
+    if (!lock) return TUNER_RESP_ERROR;
+    char response = TUNER_RESP_ERROR;
+    if (switchToControlMode() && sendCommand(cmd)) response = waitForResponse();
+    if (cmd == TUNER_CMD_TOGGLE_ANT) {
+        if (response == TUNER_RESP_ANT_A) m_antenna = ANT_A;
+        else if (response == TUNER_RESP_ANT_B) m_antenna = ANT_B;
+        else m_antenna = ANT_UNKNOWN;
+    } else if (cmd == TUNER_CMD_AUTO_MODE && response == TUNER_RESP_AUTO) m_mode = MODE_AUTO;
+    else if (cmd == TUNER_CMD_MANUAL_MODE && response == TUNER_RESP_MANUAL) m_mode = MODE_MANUAL;
+    else if (cmd == TUNER_CMD_BYPASS && response == TUNER_RESP_BYPASS) m_mode = MODE_BYPASS;
+    publishSnapshot(response != TUNER_RESP_ERROR);
+    // A command is unsuccessful if metering could not be restored either.
+    if (!switchToMeterMode()) return TUNER_RESP_ERROR;
+    return response;
 }
 
 bool TunerProtocol::toggleAntenna() {
+    const char response = controlResponse(TUNER_CMD_TOGGLE_ANT);
+    return response == TUNER_RESP_ANT_A || response == TUNER_RESP_ANT_B;
+}
+
+bool TunerProtocol::selectAntenna(tuner_ant_t antenna) {
+    if (antenna != ANT_A && antenna != ANT_B) return false;
     TunerLock lock(m_mutex);
     if (!lock) return false;
-    switchToControlMode();
-    char resp = ' ';
-    if (sendCommand(TUNER_CMD_TOGGLE_ANT)) {
-        resp = waitForResponse();
-    }
-    switchToMeterMode();
-
-    if (resp == TUNER_RESP_ANT_A) {
-        m_antenna = ANT_A;
-    } else if (resp == TUNER_RESP_ANT_B) {
-        m_antenna = ANT_B;
-    }
-
-    return (resp != TUNER_RESP_ERROR);
+    // The wire protocol only offers a toggle. Its acknowledgement tells us
+    // the selected port, including when the initial port was unknown.
+    if (getState().antenna == antenna) return true;
+    if (!toggleAntenna()) return false;
+    return m_antenna == antenna || (toggleAntenna() && m_antenna == antenna);
 }
 
 bool TunerProtocol::memoryTune() {
-    TunerLock lock(m_mutex);
-    if (!lock) return false;
-    switchToControlMode();
-    char resp = ' ';
-    if (sendCommand(TUNER_CMD_MEM_TUNE)) {
-        resp = waitForResponse();
-    }
-    switchToMeterMode();
-    return (resp != TUNER_RESP_ERROR);
+    const char response = controlResponse(TUNER_CMD_MEM_TUNE);
+    return response == TUNER_RESP_GOOD || response == TUNER_RESP_OKAY;
 }
 
 bool TunerProtocol::fullTune() {
-    TunerLock lock(m_mutex);
-    if (!lock) return false;
-    switchToControlMode();
-    char resp = ' ';
-    if (sendCommand(TUNER_CMD_FULL_TUNE)) {
-        resp = waitForResponse();
-    }
-    switchToMeterMode();
-    return (resp != TUNER_RESP_ERROR);
+    const char response = controlResponse(TUNER_CMD_FULL_TUNE);
+    return response == TUNER_RESP_GOOD || response == TUNER_RESP_OKAY;
 }
 
-bool TunerProtocol::bypass() {
-    TunerLock lock(m_mutex);
-    if (!lock) return false;
-    switchToControlMode();
-    char resp = ' ';
-    if (sendCommand(TUNER_CMD_BYPASS)) {
-        resp = waitForResponse();
-    }
-    switchToMeterMode();
-
-    if (resp == TUNER_RESP_BYPASS) {
-        m_mode = MODE_BYPASS;
-    }
-    return (resp != TUNER_RESP_ERROR);
-}
-
-bool TunerProtocol::setAutoMode() {
-    TunerLock lock(m_mutex);
-    if (!lock) return false;
-    switchToControlMode();
-    char resp = ' ';
-    if (sendCommand(TUNER_CMD_AUTO_MODE)) {
-        resp = waitForResponse();
-    }
-    switchToMeterMode();
-
-    if (resp == TUNER_RESP_AUTO) {
-        m_mode = MODE_AUTO;
-    }
-    return (resp != TUNER_RESP_ERROR);
-}
-
-bool TunerProtocol::setManualMode() {
-    TunerLock lock(m_mutex);
-    if (!lock) return false;
-    switchToControlMode();
-    char resp = ' ';
-    if (sendCommand(TUNER_CMD_MANUAL_MODE)) {
-        resp = waitForResponse();
-    }
-    switchToMeterMode();
-
-    if (resp == TUNER_RESP_MANUAL) {
-        m_mode = MODE_MANUAL;
-    }
-    return (resp != TUNER_RESP_ERROR);
-}
-
+bool TunerProtocol::bypass() { return controlResponse(TUNER_CMD_BYPASS) == TUNER_RESP_BYPASS; }
+bool TunerProtocol::setAutoMode() { return controlResponse(TUNER_CMD_AUTO_MODE) == TUNER_RESP_AUTO; }
+bool TunerProtocol::setManualMode() { return controlResponse(TUNER_CMD_MANUAL_MODE) == TUNER_RESP_MANUAL; }
 bool TunerProtocol::sync() {
-    TunerLock lock(m_mutex);
-    if (!lock) return false;
-    switchToControlMode();
-    char resp = ' ';
-    if (sendCommand(TUNER_CMD_SYNC)) {
-        resp = waitForResponse();
-    }
-    switchToMeterMode();
-    return (resp != TUNER_RESP_ERROR);
+    // The documented sync response is an opaque status byte, unlike the
+    // command-specific ASCII acknowledgements above.
+    return controlResponse(TUNER_CMD_SYNC) != TUNER_RESP_ERROR;
 }
 
 bool TunerProtocol::startMeter() {
-    // begin() invokes this before m_mutex is created, and again after creation
-    // via the public API. The TunerLock helper no-ops on a null mutex, so this
-    // is safe in both paths.
     TunerLock lock(m_mutex);
     bool result = sendCommand(TUNER_CMD_METER_START);
     if (result) {
@@ -241,36 +186,40 @@ bool TunerProtocol::stopMeter() {
     return result;
 }
 
-const tuner_meter_t* TunerProtocol::getMeterData() const {
-    return &m_meterData;
+void TunerProtocol::publishSnapshot(bool received, bool meterReceived) {
+    portENTER_CRITICAL(&m_snapshotMux);
+    if (meterReceived) m_lastMeterMs = millis();
+    m_snapshot.meter = m_meterData;
+    m_snapshot.meterValid = m_hasMeterData;
+    m_snapshot.mode = m_mode;
+    m_snapshot.antenna = m_antenna;
+    if (received) { m_seenResponse = true; m_lastResponseMs = millis(); }
+    portEXIT_CRITICAL(&m_snapshotMux);
 }
 
 tuner_state_t TunerProtocol::getState() const {
-    TunerLock lock(m_mutex);
-    tuner_state_t state;
-    if (lock) {
-        state.meter = m_meterData;
-        state.meterValid = m_hasMeterData;
-        state.mode = m_mode;
-        state.antenna = m_antenna;
-    }
+    portENTER_CRITICAL(&m_snapshotMux);
+    tuner_state_t state = m_snapshot;
+    const uint32_t meterAge = millis() - m_lastMeterMs;
+    const bool connected = m_seenResponse && millis() - m_lastResponseMs <= TELEMETRY_TIMEOUT_MS;
+    portEXIT_CRITICAL(&m_snapshotMux);
+    state.meterValid = state.meterValid && meterAge <= TELEMETRY_TIMEOUT_MS;
+    if (!connected) { state.mode = MODE_UNKNOWN; state.antenna = ANT_UNKNOWN; }
     return state;
 }
 
-tuner_mode_t TunerProtocol::getMode() const {
-    return m_mode;
-}
-
-tuner_ant_t TunerProtocol::getAntenna() const {
-    return m_antenna;
-}
+tuner_mode_t TunerProtocol::getMode() const { return getState().mode; }
+tuner_ant_t TunerProtocol::getAntenna() const { return getState().antenna; }
 
 void TunerProtocol::setMeterCallback(meter_callback_t callback) {
     m_meterCallback = callback;
 }
 
 bool TunerProtocol::isConnected() const {
-    return m_connected;
+    portENTER_CRITICAL(&m_snapshotMux);
+    const bool connected = m_seenResponse && millis() - m_lastResponseMs <= TELEMETRY_TIMEOUT_MS;
+    portEXIT_CRITICAL(&m_snapshotMux);
+    return connected;
 }
 
 double TunerProtocol::calculatePower(uint16_t raw, double psuVoltage) {
@@ -341,8 +290,9 @@ void TunerProtocol::publishMeterData() {
     m_meterData.reflected_power_raw = ref_raw;
     m_meterData.band_indicator = band_raw;
 
-    m_meterData.forward_power_watts = calculatePower(fwd_raw, voltageSensor.readVoltage());
-    m_meterData.reflected_power_watts = calculatePower(ref_raw, voltageSensor.readVoltage());
+    const double voltage = voltageSensor.readVoltage();
+    m_meterData.forward_power_watts = calculatePower(fwd_raw, voltage);
+    m_meterData.reflected_power_watts = calculatePower(ref_raw, voltage);
 
     // Calculate SWR
     if (m_meterData.reflected_power_watts > 0.0) {
@@ -355,6 +305,7 @@ void TunerProtocol::publishMeterData() {
     m_meterData.band = decodeBand(band_raw);
 
     m_hasMeterData = true;
+    publishSnapshot(true, true);
     if (m_meterCallback) {
         m_meterCallback(&m_meterData);
     }
@@ -374,11 +325,11 @@ void TunerProtocol::process() {
         switch (m_state) {
             case State::RESPONSE:
                 if (b >= 0x30) {
-                    if (m_waitingForResponse) {
+                    if (m_waitingForResponse && !m_pendingResponse) {
                         m_pendingResponse = (char)b;
                     }
                 } else {
-                    if (m_waitingForResponse) {
+                    if (m_waitingForResponse && !m_pendingResponse) {
                         m_pendingResponse = TUNER_RESP_ERROR;
                     }
                 }
@@ -396,7 +347,7 @@ void TunerProtocol::process() {
                         m_eomCount = 0;
                         m_meterIdx = 0;
                     }
-                }
+                } else { m_eomCount = 0; }
                 break;
         }
     }

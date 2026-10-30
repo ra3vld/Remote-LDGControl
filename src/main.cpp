@@ -9,6 +9,10 @@
 #include <ESPmDNS.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <freertos/queue.h>
+#include "voltage_sensor.h"
+#include "remote_protocol.h"
 #include "config_manager.h"
 #include "tuner_protocol.h"
 #include "mqtt_handler.h"
@@ -23,42 +27,34 @@ TunerProtocol tuner;
 MqttHandler mqtt;
 LdgWebServer webServer;
 ldg::MeterScale meterScale;
+static std::atomic<bool> s_webReady{false};
 
 #ifdef WITH_DISPLAY
 DisplayUI display;
-static std::atomic<bool> s_remoteDisplayPending{false};
 
 #if TLS_ENABLED
 using WebClient = WiFiClientSecure;
 #else
 using WebClient = WiFiClient;
 #endif
-static WebClient s_remoteClient;
-static bool             s_remoteConnected  = false;
-static uint32_t         s_lastRemoteReconnect = 0;
-
-static String buildBasicAuth(const char* user, const char* pass) {
-    String src = String(user) + ":" + pass;
-    const char* b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    String out;
-    const uint8_t* bytes = (const uint8_t*)src.c_str();
-    int len = src.length();
-    for (int i = 0; i < len; i += 3) {
-        uint32_t n = (uint32_t)bytes[i] << 16;
-        if (i + 1 < len) n |= (uint32_t)bytes[i + 1] << 8;
-        if (i + 2 < len) n |= (uint32_t)bytes[i + 2];
-        out += b64[(n >> 18) & 0x3F];
-        out += b64[(n >> 12) & 0x3F];
-        out += (i + 1 < len) ? b64[(n >>  6) & 0x3F] : '=';
-        out += (i + 2 < len) ? b64[ n        & 0x3F] : '=';
-    }
-    return out;
-}
+static uint32_t s_lastRemotePoll = 0;
 #endif
 
 // WiFi management
 static uint32_t lastWiFiCheck = 0;
 static bool wifiConnected = false;
+
+struct CommandRequest {
+    uint8_t command;
+    bool remote;
+    SemaphoreHandle_t completed;
+    bool* result;
+};
+static QueueHandle_t s_commands = nullptr;
+#ifdef WITH_DISPLAY
+static QueueHandle_t s_remoteCommands = nullptr;
+#endif
+static std::atomic<unsigned> s_pendingCommands{0};
 
 // Remote snapshots may also arrive from the web-server task (POST telemetry).
 static portMUX_TYPE s_activeMux = portMUX_INITIALIZER_UNLOCKED;
@@ -67,21 +63,23 @@ static uint32_t s_lastRemoteTelemetry = 0;
 
 bool activeRemoteConnected() {
     portENTER_CRITICAL(&s_activeMux);
-    const bool connected = s_activeState.remoteConnected();
+    const bool connected = s_activeState.remoteConnected() &&
+        millis() - s_lastRemoteTelemetry <= 3000;
     portEXIT_CRITICAL(&s_activeMux);
     return connected;
 }
 
 tuner_state_t getActiveState() {
     portENTER_CRITICAL(&s_activeMux);
-    const bool remote = s_activeState.remoteConnected();
+    const bool remote = s_activeState.remoteConnected() &&
+        millis() - s_lastRemoteTelemetry <= 3000;
     const tuner_state_t state = s_activeState.select(tuner_state_t{});
     portEXIT_CRITICAL(&s_activeMux);
     return remote ? state : tuner.getState();
 }
 
 // ============================================================
-// WiFi Setup (using WiFiManager)
+// Wi-Fi setup
 // ============================================================
 
 void setupWiFi() {
@@ -92,7 +90,7 @@ void setupWiFi() {
 #endif
     WiFi.setHostname(hostname);
 
-    // WiFiManager handles captive portal and credential storage
+    // ConfigManager owns the captive portal and credential storage.
     bool connected = configManager.setupWiFi();
 
     if (connected) {
@@ -131,11 +129,7 @@ void onRemoteTelemetry(const tuner_state_t& state) {
     s_activeState.updateRemote(state);
     s_lastRemoteTelemetry = millis();
     portEXIT_CRITICAL(&s_activeMux);
-#ifdef WITH_DISPLAY
-    // POST telemetry runs on the web task; LVGL belongs to the main task.
-    s_remoteDisplayPending.store(true);
-#endif
-    webServer.pushMeterEvent(getActiveState());
+    if (s_webReady.load()) webServer.pushMeterEvent(getActiveState());
 }
 
 void onRemoteDisconnected() {
@@ -143,11 +137,7 @@ void onRemoteDisconnected() {
     s_activeState.disconnectRemote();
     portEXIT_CRITICAL(&s_activeMux);
     const tuner_state_t local = tuner.getState();
-    webServer.pushMeterEvent(local);
-#ifdef WITH_DISPLAY
-    display.updateMeter(&local.meter);
-    display.updateStatus(local.mode, local.antenna);
-#endif
+    if (s_webReady.load()) webServer.pushMeterEvent(local);
     Serial.println("Remote unit disconnected; using local tuner");
 }
 
@@ -155,165 +145,76 @@ void onRemoteDisconnected() {
 // Local Meter Callback
 // ============================================================
 
-void onMeterUpdate(const tuner_meter_t* meter) {
+void onMeterUpdate(const tuner_meter_t*) {
     if (activeRemoteConnected()) return;
 
-    // Push directly into the SSE state from the main task so subscribers keep
-    // getting fresh readings even when the web-server task is currently inside
-    // a long-running SSE handler (webServer.loop()'s own 500 ms poll can't
-    // fire while a handler holds the slot).
-    webServer.pushMeterEvent(tuner.getState());
+    // The UART worker publishes value snapshots; it never calls LVGL.
+    if (s_webReady.load()) webServer.pushMeterEvent(tuner.getState());
 
-#ifdef WITH_DISPLAY
-    display.updateMeter(meter);
-    display.updateStatus(tuner.getMode(), tuner.getAntenna());
-#endif
 }
 
 // ============================================================
-// Remote Unit SSE Client (display build only)
+// Remote unit polling (network task only)
 // ============================================================
 
 #ifdef WITH_DISPLAY
-void connectRemoteUnit() {
-    if (s_remoteConnected || !wifiConnected) return;
-    uint32_t now = millis();
-    if (now - s_lastRemoteReconnect < 5000) return;
-    s_lastRemoteReconnect = now;
-
-    const DeviceConfig& cfg = configManager.get();
-    if (cfg.remoteHost[0] == '\0') return;
-
-    IPAddress remoteIP;
-    const char* host = cfg.remoteHost;
-    bool resolved = false;
-
-    if (remoteIP.fromString(host)) {
-        resolved = true;
-    } else if (WiFi.hostByName(host, remoteIP)) {
-        resolved = true;
-    }
-    if (!resolved) {
-        Serial.printf("Remote: can't resolve %s\n", host);
-        return;
-    }
-
-    Serial.printf("Connecting to remote SSE at %s:%d...\n",
-                  remoteIP.toString().c_str(), WEB_PORT);
-#if TLS_ENABLED
-    s_remoteClient.setInsecure();
-#endif
-
-    if (!s_remoteClient.connect(remoteIP, WEB_PORT)) {
-        Serial.println("Remote: connect failed");
-        return;
-    }
-
-    String auth = buildBasicAuth(cfg.webUsername, cfg.webPassword);
-    s_remoteClient.printf(
-        "GET /api/events HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "Authorization: Basic %s\r\n"
-        "Accept: text/event-stream\r\n"
-        "Connection: keep-alive\r\n"
-        "\r\n",
-        remoteIP.toString().c_str(),
-        auth.c_str()
-    );
-    s_remoteConnected = true;
-    Serial.println("Remote: SSE connected");
-}
-
-void processRemoteSSE() {
-    portENTER_CRITICAL(&s_activeMux);
-    const bool stale = s_activeState.remoteConnected() &&
-        millis() - s_lastRemoteTelemetry > HEARTBEAT_INTERVAL_MS * 2;
-    portEXIT_CRITICAL(&s_activeMux);
-    if (stale) {
-        s_remoteClient.stop();
-        s_remoteConnected = false;
-        onRemoteDisconnected();
-    }
-    if (!s_remoteConnected || !s_remoteClient.connected()) {
-        if (s_remoteConnected) {
-            Serial.println("Remote: SSE disconnected");
-            s_remoteClient.stop();
-            s_remoteConnected = false;
-            onRemoteDisconnected();
-        }
-        return;
-    }
-
-    while (s_remoteClient.available()) {
-        String line = s_remoteClient.readStringUntil('\n');
-        line.trim();
-        if (!line.startsWith("data:")) continue;
-
-        String payload = line.substring(5);
-        payload.trim();
-        JsonDocument doc;
-        if (deserializeJson(doc, payload)) continue;
-
-        if (doc.is<JsonObject>() && !doc["fwd_power"].isUnbound()) {
-            onRemoteTelemetry(ldg::readWebState(doc.as<JsonVariantConst>()));
-        }
-    }
-}
-
-bool proxyCommandToRemote(uint8_t cmd) {
-    const DeviceConfig& cfg = configManager.get();
-    if (cfg.remoteHost[0] == '\0') return false;
-
-    IPAddress remoteIP;
-    if (!remoteIP.fromString(cfg.remoteHost)) {
-        if (!WiFi.hostByName(cfg.remoteHost, remoteIP)) return false;
-    }
-
-    const char* endpoint = nullptr;
-    switch (cmd) {
-        case TUNER_CMD_TOGGLE_ANT:  endpoint = "/api/command/toggle";      break;
-        case TUNER_CMD_MEM_TUNE:    endpoint = "/api/command/memory_tune"; break;
-        case TUNER_CMD_FULL_TUNE:   endpoint = "/api/command/full_tune";   break;
-        case TUNER_CMD_BYPASS:      endpoint = "/api/command/bypass";      break;
-        case TUNER_CMD_AUTO_MODE:   endpoint = "/api/command/auto";        break;
-        case TUNER_CMD_MANUAL_MODE: endpoint = "/api/command/manual";      break;
-        default: return false;
-    }
-
+static bool remoteRequest(uint8_t command, JsonDocument& response) {
+    const DeviceConfig cfg = configManager.get();
+    if (!cfg.remoteHost[0] || WiFi.status() != WL_CONNECTED) return false;
     WebClient client;
 #if TLS_ENABLED
     client.setInsecure();
 #endif
-    if (!client.connect(remoteIP, WEB_PORT)) return false;
-
-    String auth = buildBasicAuth(cfg.webUsername, cfg.webPassword);
-    client.printf(
-        "POST %s HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "Authorization: Basic %s\r\n"
-        "Content-Length: 0\r\n"
-        "Connection: close\r\n\r\n",
-        endpoint,
-        remoteIP.toString().c_str(),
-        auth.c_str()
-    );
-
-    uint32_t deadline = millis() + 3000;
-    while (!client.available() && millis() < deadline) delay(10);
-    String status = client.readStringUntil('\n');
-    client.stop();
-    return status.indexOf("200") >= 0;
+    HTTPClient http;
+    http.setConnectTimeout(1000);
+    http.setTimeout(3000);
+    http.useHTTP10(true);
+    const char* endpoint = command ? ldg::commandEndpoint(command) : "/api/status";
+    if (!endpoint || !http.begin(client, String(WEB_SCHEME) + cfg.remoteHost + endpoint)) return false;
+    http.setAuthorization(cfg.webUsername, cfg.webPassword);
+    const int code = command ? http.POST("") : http.GET();
+    bool ok = false;
+    if (code == 200 && http.getSize() <= 4096) {
+        const String body = http.getString();
+        ok = body.length() <= 4096 && !deserializeJson(response, body) && response.is<JsonObject>();
+        if (ok && command) ok = ldg::remoteCommandSucceeded(code, response.as<JsonVariantConst>());
+    }
+    http.end();
+    return ok;
 }
-#endif // WITH_DISPLAY
+
+static void pollRemoteUnit() {
+    const uint32_t now = millis();
+    if (now - s_lastRemotePoll < 500) return;
+    s_lastRemotePoll = now;
+    const DeviceConfig cfg = configManager.get();
+    if (!cfg.remoteHost[0] || WiFi.status() != WL_CONNECTED) {
+        if (activeRemoteConnected()) onRemoteDisconnected();
+        return;
+    }
+    JsonDocument response;
+    if (remoteRequest(0, response) && ldg::validRemoteStatus(response.as<JsonVariantConst>())) {
+        onRemoteTelemetry(ldg::readWebState(response.as<JsonVariantConst>()));
+    } else {
+        portENTER_CRITICAL(&s_activeMux);
+        const bool wasRemote = s_activeState.remoteConnected();
+        const bool stale = millis() - s_lastRemoteTelemetry > 3000;
+        portEXIT_CRITICAL(&s_activeMux);
+        if (wasRemote && stale) onRemoteDisconnected();
+    }
+}
+#endif
 
 // ============================================================
 // Command Execution (for web/MQTT)
 // ============================================================
 
-bool executeCommand(uint8_t cmd) {
+static bool executeCommandNow(uint8_t cmd, bool remote) {
 #ifdef WITH_DISPLAY
-    if (activeRemoteConnected()) {
-        const bool result = proxyCommandToRemote(cmd);
+    if (remote) {
+        if (!activeRemoteConnected()) return false;
+        JsonDocument response;
+        const bool result = remoteRequest(cmd, response);
         mqtt.requestStatePublish();
         return result;
     }
@@ -321,6 +222,8 @@ bool executeCommand(uint8_t cmd) {
     bool result = false;
     switch (cmd) {
         case TUNER_CMD_TOGGLE_ANT:  result = tuner.toggleAntenna(); break;
+        case TUNER_CMD_SELECT_ANT_A: result = tuner.selectAntenna(ANT_A); break;
+        case TUNER_CMD_SELECT_ANT_B: result = tuner.selectAntenna(ANT_B); break;
         case TUNER_CMD_MEM_TUNE:    result = tuner.memoryTune();    break;
         case TUNER_CMD_FULL_TUNE:   result = tuner.fullTune();      break;
         case TUNER_CMD_BYPASS:      result = tuner.bypass();        break;
@@ -330,6 +233,71 @@ bool executeCommand(uint8_t cmd) {
     mqtt.requestStatePublish();
     return result;
 }
+
+// Synchronous callers wait on their own completion, never on the UI task.
+static bool submitCommand(uint8_t command, bool wait) {
+    const bool remote = activeRemoteConnected();
+    QueueHandle_t destination = s_commands;
+#ifdef WITH_DISPLAY
+    if (remote) destination = s_remoteCommands;
+#endif
+    if (!destination) return false;
+    SemaphoreHandle_t completed = wait ? xSemaphoreCreateBinary() : nullptr;
+    if (wait && !completed) return false;
+    bool result = false;
+    CommandRequest request{command, remote, completed, wait ? &result : nullptr};
+    s_pendingCommands.fetch_add(1);
+    if (xQueueSend(destination, &request, 0) != pdTRUE) {
+        s_pendingCommands.fetch_sub(1);
+        if (completed) vSemaphoreDelete(completed);
+        return false;
+    }
+    if (!wait) return true;
+    xSemaphoreTake(completed, portMAX_DELAY);
+    vSemaphoreDelete(completed);
+    return result;
+}
+
+bool executeCommand(uint8_t command) { return submitCommand(command, true); }
+#ifdef WITH_DISPLAY
+static bool enqueueDisplayCommand(uint8_t command) { return submitCommand(command, false); }
+#endif
+
+static void completeCommand(const CommandRequest& request) {
+    const bool result = executeCommandNow(request.command, request.remote);
+    if (request.result) *request.result = result;
+    s_pendingCommands.fetch_sub(1);
+    if (request.completed) xSemaphoreGive(request.completed);
+}
+
+static void tunerTask(void*) {
+    for (;;) {
+        tuner.process();
+        CommandRequest request;
+        if (xQueueReceive(s_commands, &request, 0) == pdTRUE) {
+            completeCommand(request);
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+static void mqttTask(void*) {
+    for (;;) {
+        mqtt.loop();
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+#ifdef WITH_DISPLAY
+static void remoteTask(void*) {
+    for (;;) {
+        CommandRequest request;
+        if (xQueueReceive(s_remoteCommands, &request, 0) == pdTRUE) completeCommand(request);
+        else pollRemoteUnit();
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+#endif
 
 // ============================================================
 // Setup
@@ -351,7 +319,7 @@ void setup() {
                   TLS_ENABLED ? "HTTPS" : "HTTP", TLS_ENABLED, WEB_PORT);
 
     // Load configuration from NVS
-    configManager.begin();
+    if (!configManager.begin()) Serial.println("ERROR: configuration persistence unavailable");
 
     setupFS();
 
@@ -370,48 +338,63 @@ void setup() {
         Serial.println("Tuner interface ready");
     }
 
+    voltageSensor.begin();
     tuner.setMeterCallback(onMeterUpdate);
+    s_commands = xQueueCreate(8, sizeof(CommandRequest));
+#ifdef WITH_DISPLAY
+    s_remoteCommands = xQueueCreate(8, sizeof(CommandRequest));
+#endif
+    if (!s_commands || xTaskCreatePinnedToCore(tunerTask, "tuner", 8192, nullptr, 2, nullptr, 1) != pdPASS) {
+        Serial.println("ERROR: tuner command task could not start");
+        if (s_commands) vQueueDelete(s_commands);
+        s_commands = nullptr;
+    }
 
 #ifdef WITH_DISPLAY
     Serial.println("Initializing display...");
-    display.begin(&tuner, &meterScale);
+    display.begin(enqueueDisplayCommand, &meterScale);
 #endif
 
-    // The WiFi setup portal may run indefinitely. Initialize MQTT before it,
-    // independently of STA status, and service it from the portal's idle loop.
+    // Construct MQTT once; its I/O runs independently after network setup.
     static WiFiClient mqttClient;
     mqtt.begin(mqttClient, executeCommand, getActiveState);
     configManager.setPortalIdleCallback([]() {
-        tuner.process();
-        mqtt.loop();
+        // UART is serviced independently, including during network setup.
 #ifdef WITH_DISPLAY
+        display.updateState(getActiveState());
+        display.setCommandPending(s_pendingCommands.load() != 0);
         display.loop();
 #endif
     });
 
     setupWiFi();
+    if (xTaskCreatePinnedToCore(mqttTask, "mqtt", 6144, nullptr, 1, nullptr, 0) != pdPASS)
+        Serial.println("ERROR: MQTT task could not start");
+#ifdef WITH_DISPLAY
+    if (!s_remoteCommands || xTaskCreatePinnedToCore(remoteTask, "remote", 8192, nullptr, 1, nullptr, 0) != pdPASS) {
+        Serial.println("ERROR: remote task could not start");
+        if (s_remoteCommands) vQueueDelete(s_remoteCommands);
+        s_remoteCommands = nullptr;
+    }
+#endif
 
 #ifdef WITH_DISPLAY
     display.updateNetworkInfo();
 #endif
 
-    if (!webServer.begin(&tuner, executeCommand, getActiveState,
+    const bool webStarted = webServer.begin(&tuner, executeCommand, getActiveState,
 #ifdef WITH_DISPLAY
                          onRemoteTelemetry,
 #else
                          nullptr,
 #endif
-                         []() { return mqtt.getStatus(); }, &meterScale)) {
+                         []() { return mqtt.getStatus(); }, &meterScale);
+    s_webReady.store(webStarted);
+    if (!webStarted) {
         Serial.printf("ERROR: web server failed to start - port %u may still be bound\n", WEB_PORT);
     }
 
-    // Spin the runtime web server on a dedicated FreeRTOS task so its
-    // handlers — especially the long-running SSE stream — cannot block
-    // loop()'s tuner.process(). Without this, an active SSE subscriber
-    // freezes the meter and queues every POST behind itself until the
-    // SSE session cap fires. UART access shared between this task and
-    // loop() is serialized by TunerProtocol's mutex. The 16 KB stack is
-    // retained for the SSE handlers and ArduinoJson serialization.
+    // HTTP and WebSocket processing never owns UART or LVGL state.
     xTaskCreatePinnedToCore(
         [](void*) {
             for (;;) {
@@ -429,8 +412,6 @@ void setup() {
 // ============================================================
 
 void loop() {
-    tuner.process();
-
     // WiFi reconnection — only manage STA when STA is actually configured.
     // In AP-only mode (captive portal still running, never configured) there
     // is no STA to reconnect, and WiFi.status() returns disconnected forever.
@@ -458,21 +439,11 @@ void loop() {
     // webServer.loop() is now driven by its own FreeRTOS task; see setup().
 
 #ifdef WITH_DISPLAY
-    connectRemoteUnit();
-    processRemoteSSE();
-    if (s_remoteDisplayPending.exchange(false)) {
-        const tuner_state_t state = getActiveState();
-        tuner_meter_t meter = state.meterValid ? state.meter : tuner_meter_t{};
-        // Keep invalid readings unknown on MQTT; the analog gauge needs finite coordinates.
-        if (!std::isfinite(meter.forward_power_watts)) meter.forward_power_watts = 0;
-        if (!std::isfinite(meter.reflected_power_watts)) meter.reflected_power_watts = 0;
-        if (!std::isfinite(meter.swr) || !state.meterValid) meter.swr = 1;
-        display.updateMeter(&meter);
-        display.updateStatus(state.mode, state.antenna);
-    }
+    const tuner_state_t state = getActiveState();
+    display.updateState(state);
+    display.setCommandPending(s_pendingCommands.load() != 0);
     display.loop();
 #endif
 
-    mqtt.loop();
     delay(1);
 }

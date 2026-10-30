@@ -69,7 +69,7 @@ async function page(server, initialSnapshot = true) {
     }
     let timerId = 0;
     const context = vm.createContext({
-        document: { hidden: false, getElementById: element, querySelectorAll: () => [], querySelector: element },
+        document: { hidden: false, createElement: () => element(Symbol()), getElementById: element, querySelectorAll: () => [], querySelector: element },
         location: { protocol: 'http:', host: 'board.test' }, WebSocket: Socket, AbortController,
         fetch: server.fetch.bind(server), setTimeout: () => ++timerId, clearTimeout() {}, console
     });
@@ -172,4 +172,5 @@ async function run() {
     console.log('PASS: shared scale, two pages, display touch, reload, late HTTP/status, reconnect, rollover and failed requests');
 }
 
-run().catch(error => { console.error(error); process.exitCode = 1; });
+module.exports = { board, page, tick, deferred };
+if (require.main === module) run().catch(error => { console.error(error); process.exitCode = 1; });

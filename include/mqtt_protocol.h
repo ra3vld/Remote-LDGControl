@@ -195,6 +195,10 @@ inline MqttCommand parseCommand(const uint8_t* payload, size_t length) {
         return command;
     }
     command.name = doc["command"].as<const char*>();
+    if (command.name == "antenna_1" || command.name == "antenna_2") {
+        command.byte = command.name == "antenna_1" ? TUNER_CMD_SELECT_ANT_A : TUNER_CMD_SELECT_ANT_B;
+        return command;
+    }
     static const uint8_t commands[] = {
         TUNER_CMD_MEM_TUNE, TUNER_CMD_FULL_TUNE, TUNER_CMD_BYPASS,
         TUNER_CMD_TOGGLE_ANT, TUNER_CMD_AUTO_MODE, TUNER_CMD_MANUAL_MODE
