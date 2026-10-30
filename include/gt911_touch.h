@@ -58,9 +58,9 @@ public:
             const uint16_t y = record[3] | (uint16_t(record[4]) << 8);
             if (x < 320 && y < 480) {
                 // Raw portrait 320x480 -> ST7796 MV landscape 480x320.
-                // Match rotation 1: swap axes without mirroring screen X.
+                // Rotation 1: raw X runs from screen bottom to top.
                 point.x = y;
-                point.y = x;
+                point.y = 319 - x;
                 point.pressed = true;
             }
         }

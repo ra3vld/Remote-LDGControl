@@ -83,8 +83,8 @@ void test_landscape_corners_and_centre() {
     Gt911Touch<FakeBus> touch(bus);
     TEST_ASSERT_TRUE(touch.begin());
     const uint16_t cases[][4] = {
-        {0, 0, 0, 0}, {319, 0, 0, 319},
-        {0, 479, 479, 0}, {319, 479, 479, 319}, {160, 240, 240, 160}
+        {0, 0, 0, 319}, {319, 0, 0, 0},
+        {0, 479, 479, 319}, {319, 479, 479, 0}, {160, 240, 240, 159}
     };
     for (const auto& c : cases) {
         bus.report(1, c[0], c[1]);
@@ -108,7 +108,7 @@ void test_release_and_multitouch_do_not_press() {
         const auto point = touch.poll(40);
         TEST_ASSERT_FALSE(point.pressed);
         TEST_ASSERT_EQUAL_UINT16(200, point.x);
-        TEST_ASSERT_EQUAL_UINT16(100, point.y);
+        TEST_ASSERT_EQUAL_UINT16(219, point.y);
         TEST_ASSERT_EQUAL_UINT8(0, bus.registers[0x814e]);
     }
 }
