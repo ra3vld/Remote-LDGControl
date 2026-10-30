@@ -1,0 +1,18 @@
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -304,6 +304,9 @@
+           raiseError(400, "Bad Request");
+           return;
+         }
++      } else {
++        // The LF may arrive in the next TCP segment. Return to updateBuffer().
++        return;
+       }
+     } else {
+       _parserLine.text += newChar;
+@@ -397,3 +400,5 @@
+       while (_bufferProcessed < _bufferUnusedIdx && !isClosed()) {
+         readLine(HTTPS_REQUEST_MAX_HEADER_LENGTH);
++        // A partial line must yield to the next network read.
++        if (!_parserLine.parsingFinished) break;
+         if (_parserLine.parsingFinished && _connectionState != STATE_ERROR) {
