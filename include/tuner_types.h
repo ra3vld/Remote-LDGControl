@@ -26,8 +26,8 @@
 #define TUNER_RESP_BYPASS       'P'
 #define TUNER_RESP_AUTO         'A'
 #define TUNER_RESP_MANUAL       'M'
-#define TUNER_RESP_ANT_A        'A'
-#define TUNER_RESP_ANT_B        'B'
+#define TUNER_RESP_ANT_A        '1'
+#define TUNER_RESP_ANT_B        '2'
 
 // Meter packet structure
 #define TUNER_METER_DATA_LEN    6

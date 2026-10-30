@@ -28,7 +28,7 @@ public:
     bool setAutoMode();
     bool setManualMode();
 
-    // Query tuner state
+    // Align the receive stream using the full documented synchronization string.
     bool sync();
 
     // Meter control
@@ -63,9 +63,11 @@ private:
     bool sendWake();
     bool switchToControlMode();
     bool switchToMeterMode();
+    char exchangeCommand(uint8_t cmd);
     char controlResponse(uint8_t cmd);
     void publishSnapshot(bool received = false, bool meterReceived = false);
-    char waitForResponse(uint32_t timeoutMs = 500);
+    char waitForResponse(uint8_t cmd, uint32_t timeoutMs);
+    void processResponseByte(uint8_t b);
     void processMeterByte(uint8_t b);
     void publishMeterData();
     tuner_band_t decodeBand(uint16_t indicator);
@@ -96,6 +98,13 @@ private:
     // Response handling
     volatile char m_pendingResponse;
     bool m_waitingForResponse;
+    uint8_t m_expectedCommand = 0;
+    uint8_t m_syncMatched = 0;
+    uint32_t m_lastAckMs = 0;
+    bool m_ackGuardActive = false;
+    // A timeout leaves an ambiguous reply in flight. Require Z before another
+    // control operation rather than attributing the late reply to that operation.
+    bool m_needsSync = false;
 
     // Commands and process() belong to the UART worker. The recursive mutex
     // also protects the command/response sequence against accidental callers.

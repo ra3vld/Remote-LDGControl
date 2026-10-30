@@ -124,7 +124,7 @@ inline const MqttEntity& mqttEntity(size_t index) {
         {"antenna", "Antenna", nullptr},
         {"memory_tune", "Memory tune", "memory_tune"},
         {"full_tune", "Full tune", "full_tune"},
-        {"bypass", "Toggle bypass", "bypass"},
+        {"bypass", "Bypass", "bypass"},
         {"toggle", "Toggle antenna", "toggle"},
         {"auto", "Auto mode", "auto"},
         {"manual", "Manual mode", "manual"}

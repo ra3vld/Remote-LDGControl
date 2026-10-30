@@ -1,9 +1,16 @@
 #pragma once
 
 #include "mqtt_protocol.h"
+#include "config.h"
 #include <cstring>
 
 namespace ldg {
+inline uint16_t remoteRequestTimeout(uint8_t command) {
+    // Include UART mode switches, optional resynchronization and network margin.
+    return command == TUNER_CMD_MEM_TUNE || command == TUNER_CMD_FULL_TUNE
+        ? TUNER_TUNE_TIMEOUT_MS + 5000 : command ? 5000 : 3000;
+}
+
 inline const char* commandEndpoint(uint8_t command) {
     switch (command) {
         case TUNER_CMD_TOGGLE_ANT: return "/api/command/toggle";

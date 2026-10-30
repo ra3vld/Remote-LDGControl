@@ -263,6 +263,27 @@ void test_active_source_keeps_remote_band_mode_and_antenna() {
     TEST_ASSERT_EQUAL_INT(ANT_A, state.antenna);
 }
 
+void test_long_remote_command_retains_source_but_expires_meter_values() {
+    ActiveTunerState active;
+    auto local = measured();
+    auto remote = measured(250);
+    remote.antenna = ANT_B;
+    active.updateRemote(remote);
+    TEST_ASSERT_TRUE(active.select(local, 3000, false).meterValid);
+    TEST_ASSERT_FALSE(active.remoteConnected(3001, false));
+    TEST_ASSERT_FALSE(active.select(local, 3001, false).remote);
+    TEST_ASSERT_TRUE(active.remoteConnected(20000, true));
+    const auto tuning = active.select(local, 20000, true);
+    TEST_ASSERT_TRUE(tuning.remote);
+    TEST_ASSERT_FALSE(tuning.meterValid);
+    TEST_ASSERT_EQUAL_INT(ANT_B, tuning.antenna);
+    active.updateRemote(remote);
+    TEST_ASSERT_TRUE(active.select(local, 0, false).meterValid);
+    active.disconnectRemote();
+    TEST_ASSERT_FALSE(active.remoteConnected(20000, true));
+    TEST_ASSERT_FALSE(active.select(local, 20000, true).remote);
+}
+
 struct Message {
     std::string topic, payload;
     bool retained;
@@ -475,6 +496,7 @@ int main() {
     RUN_TEST(test_identities_and_all_discovery_payloads);
     RUN_TEST(test_state_json_unknown_values_and_web_round_trip);
     RUN_TEST(test_active_source_keeps_remote_band_mode_and_antenna);
+    RUN_TEST(test_long_remote_command_retains_source_but_expires_meter_values);
     RUN_TEST(test_oversized_session_packet_reports_topic_and_retries);
     RUN_TEST(test_session_times_interval_from_completed_write);
     RUN_TEST(test_session_reconnect_ha_birth_and_discovery_cleanup);

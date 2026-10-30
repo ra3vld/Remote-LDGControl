@@ -2,9 +2,28 @@
 #include "voltage_sensor.h"
 #include "config.h"
 #include <driver/uart.h>
+#include <cmath>
 #include <new>
 
 namespace {
+constexpr char SYNC_RESPONSE[] = "000000000000000AzAz";
+constexpr uint8_t SYNC_ZERO_COUNT = 15;
+
+bool isCommandResponse(uint8_t command, uint8_t response) {
+    switch (command) {
+        case TUNER_CMD_TOGGLE_ANT:
+            return response == TUNER_RESP_ANT_A || response == TUNER_RESP_ANT_B;
+        case TUNER_CMD_MEM_TUNE:
+        case TUNER_CMD_FULL_TUNE:
+            return response == TUNER_RESP_GOOD || response == TUNER_RESP_OKAY ||
+                   response == TUNER_RESP_FAIL;
+        case TUNER_CMD_BYPASS: return response == TUNER_RESP_BYPASS;
+        case TUNER_CMD_AUTO_MODE: return response == TUNER_RESP_AUTO;
+        case TUNER_CMD_MANUAL_MODE: return response == TUNER_RESP_MANUAL;
+        default: return false;
+    }
+}
+
 // RAII scoped acquire of the TunerProtocol mutex. Blocks indefinitely by
 // default (control-command path); pass timeout=0 for the non-blocking try
 // used by process(). The mutex is recursive because waitForResponse()
@@ -72,14 +91,23 @@ bool TunerProtocol::sendWake() {
 bool TunerProtocol::sendCommand(uint8_t cmd) {
     if (!m_serial || !m_connected) return false;
 
+    // LDG specifies at least 200 ms after RECEIVING an acknowledgement. Apply
+    // the guard before even waking the tuner; a slow operation cannot consume it.
+    if (m_ackGuardActive) {
+        const uint32_t elapsed = millis() - m_lastAckMs;
+        if (elapsed < TUNER_CMD_DELAY_MS) delay(TUNER_CMD_DELAY_MS - elapsed);
+        m_ackGuardActive = false;
+    }
     if (!sendWake()) return false;
 
     if (m_serial->write(cmd) != 1) {
         return false;
     }
 
-    // Per documentation: minimum 200ms before next command
-    delay(TUNER_CMD_DELAY_MS);
+    // S/X have no acknowledgement. Give the mode switch and its final meter
+    // bytes time to settle. Commands with replies are read immediately below.
+    if (cmd == TUNER_CMD_METER_START || cmd == TUNER_CMD_METER_STOP)
+        delay(TUNER_CMD_DELAY_MS);
 
     return true;
 }
@@ -90,6 +118,7 @@ bool TunerProtocol::switchToControlMode() {
     if (!sendCommand(TUNER_CMD_METER_STOP)) return false;
     // Discard the final meter frame that was already in flight before X.
     while (m_serial->available()) m_serial->read();
+    m_meterActive = false;
     return true;
 }
 
@@ -100,34 +129,56 @@ bool TunerProtocol::switchToMeterMode() {
     return m_meterActive;
 }
 
-char TunerProtocol::waitForResponse(uint32_t timeoutMs) {
+char TunerProtocol::waitForResponse(uint8_t cmd, uint32_t timeoutMs) {
     const uint32_t start = millis();
     m_waitingForResponse = true;
     m_pendingResponse = 0;
-    while (millis() - start < timeoutMs) {
+    m_expectedCommand = cmd;
+    m_syncMatched = 0;
+    for (;;) {
         process();
         if (m_pendingResponse != 0) break;
+        if (millis() - start >= timeoutMs) break;
         delay(1);
     }
     m_waitingForResponse = false;
+    m_expectedCommand = 0;
     return m_pendingResponse ? m_pendingResponse : TUNER_RESP_ERROR;
+}
+
+char TunerProtocol::exchangeCommand(uint8_t cmd) {
+    if (!sendCommand(cmd)) return TUNER_RESP_ERROR;
+    const uint32_t timeout = (cmd == TUNER_CMD_MEM_TUNE || cmd == TUNER_CMD_FULL_TUNE)
+        ? TUNER_TUNE_TIMEOUT_MS
+        : cmd == TUNER_CMD_SYNC ? TUNER_SYNC_TIMEOUT_MS : TUNER_RESPONSE_TIMEOUT_MS;
+    return waitForResponse(cmd, timeout);
 }
 
 char TunerProtocol::controlResponse(uint8_t cmd) {
     TunerLock lock(m_mutex);
     if (!lock) return TUNER_RESP_ERROR;
     char response = TUNER_RESP_ERROR;
-    if (switchToControlMode() && sendCommand(cmd)) response = waitForResponse();
+    if (switchToControlMode()) {
+        bool ready = true;
+        if (m_needsSync && cmd != TUNER_CMD_SYNC) {
+            ready = exchangeCommand(TUNER_CMD_SYNC) == TUNER_CMD_SYNC;
+            if (ready) publishSnapshot(true);
+        }
+        if (ready) response = exchangeCommand(cmd);
+    }
+    m_needsSync = response == TUNER_RESP_ERROR;
     if (cmd == TUNER_CMD_TOGGLE_ANT) {
         if (response == TUNER_RESP_ANT_A) m_antenna = ANT_A;
         else if (response == TUNER_RESP_ANT_B) m_antenna = ANT_B;
         else m_antenna = ANT_UNKNOWN;
-    } else if (cmd == TUNER_CMD_AUTO_MODE && response == TUNER_RESP_AUTO) m_mode = MODE_AUTO;
-    else if (cmd == TUNER_CMD_MANUAL_MODE && response == TUNER_RESP_MANUAL) m_mode = MODE_MANUAL;
-    else if (cmd == TUNER_CMD_BYPASS && response == TUNER_RESP_BYPASS) m_mode = MODE_BYPASS;
+    } else if (cmd == TUNER_CMD_AUTO_MODE) m_mode = response == TUNER_RESP_AUTO ? MODE_AUTO : MODE_UNKNOWN;
+    else if (cmd == TUNER_CMD_MANUAL_MODE) m_mode = response == TUNER_RESP_MANUAL ? MODE_MANUAL : MODE_UNKNOWN;
+    else if (cmd == TUNER_CMD_BYPASS) m_mode = response == TUNER_RESP_BYPASS ? MODE_BYPASS : MODE_UNKNOWN;
+    else if ((cmd == TUNER_CMD_MEM_TUNE || cmd == TUNER_CMD_FULL_TUNE) && m_mode == MODE_BYPASS)
+        m_mode = MODE_UNKNOWN; // A tuning cycle may change relay state; no bypass status is returned.
     publishSnapshot(response != TUNER_RESP_ERROR);
     // A command is unsuccessful if metering could not be restored either.
-    if (!switchToMeterMode()) return TUNER_RESP_ERROR;
+    if (!switchToMeterMode()) { m_needsSync = true; return TUNER_RESP_ERROR; }
     return response;
 }
 
@@ -142,7 +193,11 @@ bool TunerProtocol::selectAntenna(tuner_ant_t antenna) {
     if (!lock) return false;
     // The wire protocol only offers a toggle. Its acknowledgement tells us
     // the selected port, including when the initial port was unknown.
-    if (getState().antenna == antenna) return true;
+    if (getState().antenna == antenna) {
+        // A known port needs no relay toggle, but a failed meter restart must
+        // still be recovered before reporting a successful operation.
+        return !m_needsSync || sync();
+    }
     if (!toggleAntenna()) return false;
     return m_antenna == antenna || (toggleAntenna() && m_antenna == antenna);
 }
@@ -161,29 +216,19 @@ bool TunerProtocol::bypass() { return controlResponse(TUNER_CMD_BYPASS) == TUNER
 bool TunerProtocol::setAutoMode() { return controlResponse(TUNER_CMD_AUTO_MODE) == TUNER_RESP_AUTO; }
 bool TunerProtocol::setManualMode() { return controlResponse(TUNER_CMD_MANUAL_MODE) == TUNER_RESP_MANUAL; }
 bool TunerProtocol::sync() {
-    // The documented sync response is an opaque status byte, unlike the
-    // command-specific ASCII acknowledgements above.
-    return controlResponse(TUNER_CMD_SYNC) != TUNER_RESP_ERROR;
+    return controlResponse(TUNER_CMD_SYNC) == TUNER_CMD_SYNC;
 }
 
 bool TunerProtocol::startMeter() {
     TunerLock lock(m_mutex);
-    bool result = sendCommand(TUNER_CMD_METER_START);
-    if (result) {
-        m_meterActive = true;
-        m_state = State::METER;
-    }
-    return result;
+    if (!lock) return false;
+    return switchToMeterMode();
 }
 
 bool TunerProtocol::stopMeter() {
     TunerLock lock(m_mutex);
-    bool result = sendCommand(TUNER_CMD_METER_STOP);
-    if (result) {
-        m_meterActive = false;
-        m_state = State::RESPONSE;
-    }
-    return result;
+    if (!lock) return false;
+    return switchToControlMode();
 }
 
 void TunerProtocol::publishSnapshot(bool received, bool meterReceived) {
@@ -294,12 +339,16 @@ void TunerProtocol::publishMeterData() {
     m_meterData.forward_power_watts = calculatePower(fwd_raw, voltage);
     m_meterData.reflected_power_watts = calculatePower(ref_raw, voltage);
 
-    // Calculate SWR
-    if (m_meterData.reflected_power_watts > 0.0) {
-        double ratio = sqrt(m_meterData.forward_power_watts / m_meterData.reflected_power_watts);
-        m_meterData.swr = abs((1.0 + ratio) / (1.0 - ratio));
-    } else {
-        m_meterData.swr = 1.0;
+    // Both raw readings share the same square-law conversion, so their ratio
+    // is the reflection coefficient. Without forward RF, or with reflected RF
+    // >= forward RF, a finite SWR would be misleading. NaN becomes JSON null.
+    const double forward = m_meterData.forward_power_watts;
+    const double reflected = m_meterData.reflected_power_watts;
+    m_meterData.swr = NAN;
+    if (std::isfinite(forward) && std::isfinite(reflected) && forward > 0.0 &&
+        ref_raw < fwd_raw) {
+        const double gamma = double(ref_raw) / double(fwd_raw);
+        m_meterData.swr = (1.0 + gamma) / (1.0 - gamma);
     }
 
     m_meterData.band = decodeBand(band_raw);
@@ -309,6 +358,26 @@ void TunerProtocol::publishMeterData() {
     if (m_meterCallback) {
         m_meterCallback(&m_meterData);
     }
+}
+
+void TunerProtocol::processResponseByte(uint8_t b) {
+    if (!m_waitingForResponse || m_pendingResponse) return;
+    if (m_expectedCommand == TUNER_CMD_SYNC) {
+        // Search for the whole signature across reads, ignoring noise. Extra
+        // leading zeroes retain the last 15 zeroes as a possible prefix.
+        if (b == uint8_t(SYNC_RESPONSE[m_syncMatched])) {
+            ++m_syncMatched;
+        } else {
+            m_syncMatched = b == '0' ? (m_syncMatched == SYNC_ZERO_COUNT ? SYNC_ZERO_COUNT : 1) : 0;
+        }
+        if (m_syncMatched != sizeof(SYNC_RESPONSE) - 1) return;
+        m_pendingResponse = TUNER_CMD_SYNC; // Internal completion marker, not a wire ACK.
+    } else {
+        if (!isCommandResponse(m_expectedCommand, b)) return;
+        m_pendingResponse = char(b);
+    }
+    m_lastAckMs = millis();
+    m_ackGuardActive = true;
 }
 
 void TunerProtocol::process() {
@@ -324,15 +393,7 @@ void TunerProtocol::process() {
 
         switch (m_state) {
             case State::RESPONSE:
-                if (b >= 0x30) {
-                    if (m_waitingForResponse && !m_pendingResponse) {
-                        m_pendingResponse = (char)b;
-                    }
-                } else {
-                    if (m_waitingForResponse && !m_pendingResponse) {
-                        m_pendingResponse = TUNER_RESP_ERROR;
-                    }
-                }
+                processResponseByte(b);
                 break;
 
             case State::METER:

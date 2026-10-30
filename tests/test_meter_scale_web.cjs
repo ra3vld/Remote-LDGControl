@@ -68,10 +68,14 @@ async function page(server, initialSnapshot = true) {
         close() { this.opened = false; this.onclose(); }
     }
     let timerId = 0;
+    let now = 0;
+    const timers = new Map();
     const context = vm.createContext({
         document: { hidden: false, createElement: () => element(Symbol()), getElementById: element, querySelectorAll: () => [], querySelector: element },
         location: { protocol: 'http:', host: 'board.test' }, WebSocket: Socket, AbortController,
-        fetch: server.fetch.bind(server), setTimeout: () => ++timerId, clearTimeout() {}, console
+        fetch: server.fetch.bind(server),
+        setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: now + delay }); return id; },
+        clearTimeout(id) { timers.delete(id); }, console
     });
     vm.runInContext(script, context, { filename: 'index.html' });
     await tick();
@@ -80,6 +84,13 @@ async function page(server, initialSnapshot = true) {
     if (initialSnapshot) socket.message(server.snapshot());
     return {
         context, socket, element,
+        async advance(ms) {
+            now += ms;
+            for (const [id, timer] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+                if (timer.at <= now && timers.delete(id)) timer.fn();
+            }
+            await tick();
+        },
         watts: () => vm.runInContext('meterState.maxPower', context),
         click: (id = 'meterCanvas') => element(id).events.click()
     };

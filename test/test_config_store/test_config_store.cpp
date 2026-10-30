@@ -84,10 +84,19 @@ void test_remote_results_and_source_contract() {
     TEST_ASSERT_NULL(ldg::commandEndpoint(0));
 }
 
+void test_remote_deadlines_allow_tuning_recovery_and_antenna_selection() {
+    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout('F') >= 23000);
+    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout('T') >= 23000);
+    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout(TUNER_CMD_SELECT_ANT_A) >= 4500);
+    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout(TUNER_CMD_SELECT_ANT_B) >= 4500);
+    TEST_ASSERT_EQUAL_UINT(3000, ldg::remoteRequestTimeout(0));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_failed_config_write_preserves_previous_snapshot);
     RUN_TEST(test_invalid_config_never_replaces_saved_credentials);
     RUN_TEST(test_remote_results_and_source_contract);
+    RUN_TEST(test_remote_deadlines_allow_tuning_recovery_and_antenna_selection);
     return UNITY_END();
 }

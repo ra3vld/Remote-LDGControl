@@ -63,6 +63,10 @@
 #define TUNER_UART_NUM          UART_NUM_2
 #define TUNER_CMD_DELAY_MS      250
 #define TUNER_WAKE_DELAY_MS     1
+#define TUNER_RESPONSE_TIMEOUT_MS 500
+// Full tuning takes up to 15 s; memory tuning can fall back to a full cycle.
+#define TUNER_TUNE_TIMEOUT_MS   20000
+#define TUNER_SYNC_TIMEOUT_MS   1000
 
 // ============================================================
 // Display Configuration (WITH_DISPLAY builds)

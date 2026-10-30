@@ -11,7 +11,11 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
         if (!url.startsWith('/api/command/')) return fetch.call(this, url, options);
         assert.equal(options.method, 'POST');
         commands.push(url);
-        if (this.holdCommand) await this.holdCommand.promise;
+        this.lastCommandSignal = options.signal;
+        if (this.holdCommand) await Promise.race([
+            this.holdCommand.promise,
+            new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
+        ]);
         if (this.failCommand) throw new Error('offline');
         return { ok: true, json: async () => ({ result: 'success' }) };
     };
@@ -29,6 +33,28 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     assert.equal(commands.length, 1);
     await vm.runInContext('selectAntenna(2)', ui.context);
     assert.equal(commands.at(-1), '/api/command/antenna_2');
+
+    server.holdCommand = deferred();
+    const tune = vm.runInContext("sendCommand('full_tune')", ui.context);
+    await tick();
+    await ui.advance(22000);
+    assert.equal(server.lastCommandSignal.aborted, false, 'Remote full tune must outlive the UART cycle');
+    assert.equal(vm.runInContext('commandPending', ui.context), true);
+    server.holdCommand.resolve();
+    await tune;
+    assert.match(ui.element('toast').textContent, /sent/);
+    await ui.advance(10000);
+    assert.equal(server.lastCommandSignal.aborted, false, 'Completed requests must clear their abort timer');
+
+    server.holdCommand = deferred();
+    const stalled = vm.runInContext("sendCommand('full_tune')", ui.context);
+    await tick();
+    await ui.advance(30000);
+    await stalled;
+    assert.equal(server.lastCommandSignal.aborted, true);
+    assert.equal(vm.runInContext('commandPending', ui.context), false);
+    assert.match(ui.element('toast').textContent, /result unavailable/);
+    delete server.holdCommand;
     server.failCommand = true;
     await vm.runInContext("sendCommand('full_tune')", ui.context);
     assert.equal(vm.runInContext('commandPending', ui.context), false);
@@ -48,8 +74,13 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     vm.runInContext('trigCalls = 0', ui.context);
     ui.socket.message({ meter_scale: 100, meter_scale_revision: 1, fwd_power: 200, ref_power: 1, swr: 1.2 });
     assert.equal(vm.runInContext('trigCalls', ui.context), 2040, 'New scale must rebuild its face once');
+    const labels = [];
+    ui.element('meterCanvas').getContext().fillText = text => labels.push(text);
+    ui.socket.message({ fwd_power: 0, ref_power: 17.74, swr: null });
+    assert.equal(vm.runInContext('meterState.swr', ui.context), null);
+    assert.ok(labels.includes('SWR --'), 'Invalid RF must not be displayed as a good match');
     ui.socket.close();
     assert.equal(vm.runInContext('meterState.swr', ui.context), null);
     assert.equal(vm.runInContext('activeAntenna', ui.context), 0);
-    console.log('PASS: absolute antenna commands, duplicate taps, failed requests, cache reuse (0/4/2040 trig calls) and disconnect invalidation');
+    console.log('PASS: antenna commands, duplicate taps, long tuning, bounded timeout, failed requests, cache reuse and disconnect invalidation');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -909,7 +909,8 @@
             commandPending = true;
             document.querySelectorAll('.button-stack button').forEach(button => button.disabled = true);
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000);
+            // Allow the full tuner cycle and the display-to-remote HTTP hop.
+            const timeout = setTimeout(() => controller.abort(), 30000);
             // WebSocket is non-blocking server-side, so commands no longer
             // need the close-then-reopen dance the SSE implementation used.
             try {

@@ -5,7 +5,7 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
 ## Features
 
 - **Tuner Control**: Full remote control via TTL serial interface
-  - Memory Tune, Full Tune, Bypass toggle
+  - Memory Tune, Full Tune, Bypass
   - Auto mode selection
   - Antenna A/B switching
 - **Real-time Metering**: Forward power, reflected power, SWR, band detection
@@ -220,7 +220,7 @@ All endpoints require HTTP Basic Auth.
 | POST | `/api/command/antenna_1`, `/api/command/antenna_2` | Select the requested antenna; repeated requests are idempotent |
 | POST | `/api/command/memory_tune` | Memory tune |
 | POST | `/api/command/full_tune` | Full tune |
-| POST | `/api/command/bypass` | Toggle bypass |
+| POST | `/api/command/bypass` | Bypass (passthrough) |
 | POST | `/api/command/auto` | Set auto mode |
 
 The scale endpoint returns `meter_scale` and `meter_scale_revision`. Both fields
@@ -263,7 +263,7 @@ on by default in the controller's web settings, including after upgrading older
 configurations. Each controller creates one HA device with:
 
 - Sensors: forward power (W), reflected power (W), SWR, band, mode, and antenna.
-- Buttons: Memory Tune, Full Tune, Toggle Bypass, Toggle Antenna, Auto Mode, Manual Mode.
+- Buttons: Memory Tune, Full Tune, Bypass, Toggle Antenna, Auto Mode, Manual Mode.
 
 Mode values are `auto`, `manual`, `bypass`, or `unknown`; antenna values are `A`,
 `B`, or `unknown`. Numeric readings are `null` until received or when non-finite.
@@ -297,7 +297,9 @@ Example `/state` payload:
 The snapshot always uses the active tuner. A display controller follows the
 remote tuner, including its band, mode, and antenna, while connected; it falls
 back to its local UART tuner after a 3-second remote timeout. Local meter readings
-also expire after 3 seconds without a valid UART frame. `source` is `local` or `remote`. Commands follow the same active source.
+also expire after 3 seconds without a valid UART frame. While a remote command
+is running, its source stays selected even if polling is paused for a long tune;
+stale meter values still expire. `source` is `local` or `remote`. Commands follow the same active source.
 
 ### Adaptive state updates
 
@@ -359,25 +361,38 @@ For checks with Home Assistant and an MQTT broker, see
 
 ### Command Sequence
 
-1. Send wake: two space characters (`0x20`) with 1ms delay
-2. Send command byte
-3. Wait 250ms minimum before next command
-4. Read response (control mode) or meter telemetry (meter mode)
+1. Stop telemetry with `X` (preceded by wake), allow 250 ms to settle, and drain the final meter bytes.
+2. Send wake: two space characters (`0x20`) with 1 ms delay, then the command byte.
+3. Read the command-specific acknowledgement. Memory/full tuning waits up to
+   20 seconds because a full cycle can take 15 seconds and memory tuning can fall back to it.
+4. Wait 250 ms **after receiving the acknowledgement**, then wake and restore telemetry with `S`.
+
+Other control replies have a 500 ms deadline; `Z` has a 1-second deadline and
+must match the complete synchronization string below. Unknown bytes do not
+acknowledge a command or establish a connection. A failed tune (`F`) is a valid
+reply but reports an unsuccessful operation. After a missing response, a full
+`Z` exchange must succeed before another control command is sent, so a late
+reply cannot be mistaken for the next operation's result. Commands are not retried.
 
 ### Commands
 
 | Byte | Function | Response |
 |------|----------|----------|
 | ` ` (0x20) | Wake (send 2x) | None |
-| `A` | Toggle antenna | `A` or `B` |
+| `A` | Toggle antenna | ASCII `1` or `2` (application/UI names remain `A`/`B`) |
 | `T` | Memory tune | `T` (good), `M` (okay), `F` (fail) |
 | `F` | Full tune | `T`, `M`, `F` |
-| `P` | Toggle bypass | `P` |
+| `P` | Bypass (passthrough) | `P` |
 | `C` | Auto mode | `A` |
 | `M` | Manual mode | `M` |
-| `Z` | Sync | Status byte |
+| `Z` | Sync receive stream | `000000000000000AzAz` (15 ASCII zeroes followed by `AzAz`) |
 | `S` | Start meter telemetry | None |
 | `X` | Stop meter telemetry | None |
+
+`Z` does not return operating mode or antenna status. These values are known
+only from acknowledged control commands; changes made at the tuner's front
+panel cannot be discovered from the power telemetry. `P` confirms bypass;
+the protocol specification does not promise a toggle or report an exit state.
 
 ### Meter Telemetry
 
@@ -396,6 +411,11 @@ P = ((1000 * V_psu * raw) / (65536 * 0.707))^2 / 50
 ```
 
 Where `V_psu` is the tuner's power supply voltage (configurable via web UI, default 13.8V).
+
+SWR uses the raw amplitude ratio: `(fwd_raw + ref_raw) / (fwd_raw - ref_raw)`.
+With no forward power, or reflected power greater than or equal to forward
+power, SWR is unknown (`null` in JSON, `--` on screen). Power readings remain
+available. Such readings must not be displayed as a good 1:1 match.
 
 ### Band Detection
 
@@ -428,6 +448,9 @@ The display polls the remote unit's authenticated `GET /api/status` every
 500 ms and sends commands to its `/api/command/*` endpoints. Browsers use
 WebSocket telemetry independently. The link needs no MQTT broker or SSE route.
 A peer already following another remote source is rejected to prevent loops.
+Tuning HTTP requests allow 25 seconds; browser commands allow 30 seconds for
+the UART cycle and remote hop. The remote status poll retains its 3-second
+timeout. A completed remote command is followed by a status poll.
 
 UART parsing, local commands, remote networking, MQTT, web serving and LVGL
 have separate owners. Display buttons enqueue commands without waiting for

@@ -60,22 +60,22 @@ static std::atomic<unsigned> s_pendingCommands{0};
 static portMUX_TYPE s_activeMux = portMUX_INITIALIZER_UNLOCKED;
 static ldg::ActiveTunerState s_activeState;
 static uint32_t s_lastRemoteTelemetry = 0;
+static bool s_remoteCommandActive = false; // Protected by s_activeMux.
 
 bool activeRemoteConnected() {
     portENTER_CRITICAL(&s_activeMux);
-    const bool connected = s_activeState.remoteConnected() &&
-        millis() - s_lastRemoteTelemetry <= 3000;
+    const bool connected = s_activeState.remoteConnected(
+        millis() - s_lastRemoteTelemetry, s_remoteCommandActive);
     portEXIT_CRITICAL(&s_activeMux);
     return connected;
 }
 
 tuner_state_t getActiveState() {
     portENTER_CRITICAL(&s_activeMux);
-    const bool remote = s_activeState.remoteConnected() &&
-        millis() - s_lastRemoteTelemetry <= 3000;
-    const tuner_state_t state = s_activeState.select(tuner_state_t{});
+    const tuner_state_t state = s_activeState.select(tuner_state_t{},
+        millis() - s_lastRemoteTelemetry, s_remoteCommandActive);
     portEXIT_CRITICAL(&s_activeMux);
-    return remote ? state : tuner.getState();
+    return state.remote ? state : tuner.getState();
 }
 
 // ============================================================
@@ -167,7 +167,7 @@ static bool remoteRequest(uint8_t command, JsonDocument& response) {
 #endif
     HTTPClient http;
     http.setConnectTimeout(1000);
-    http.setTimeout(3000);
+    http.setTimeout(ldg::remoteRequestTimeout(command));
     http.useHTTP10(true);
     const char* endpoint = command ? ldg::commandEndpoint(command) : "/api/status";
     if (!endpoint || !http.begin(client, String(WEB_SCHEME) + cfg.remoteHost + endpoint)) return false;
@@ -213,8 +213,17 @@ static bool executeCommandNow(uint8_t cmd, bool remote) {
 #ifdef WITH_DISPLAY
     if (remote) {
         if (!activeRemoteConnected()) return false;
+        // Polling shares this worker with commands. Keep its source selected
+        // while a long tune runs, but let old meter readings expire normally.
+        portENTER_CRITICAL(&s_activeMux);
+        s_remoteCommandActive = true;
+        portEXIT_CRITICAL(&s_activeMux);
         JsonDocument response;
         const bool result = remoteRequest(cmd, response);
+        pollRemoteUnit();
+        portENTER_CRITICAL(&s_activeMux);
+        s_remoteCommandActive = false;
+        portEXIT_CRITICAL(&s_activeMux);
         mqtt.requestStatePublish();
         return result;
     }

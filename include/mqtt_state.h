@@ -76,8 +76,17 @@ public:
         m_remote = tuner_state_t{};
     }
     bool remoteConnected() const { return m_connected; }
+    bool remoteConnected(uint32_t telemetryAge, bool commandActive) const {
+        return m_connected && (commandActive || telemetryAge <= 3000);
+    }
     tuner_state_t select(const tuner_state_t& local) const {
         return m_connected ? m_remote : local;
+    }
+    tuner_state_t select(const tuner_state_t& local, uint32_t telemetryAge, bool commandActive) const {
+        if (!remoteConnected(telemetryAge, commandActive)) return local;
+        tuner_state_t state = m_remote;
+        if (telemetryAge > 3000) state.meterValid = false;
+        return state;
     }
 
 private:

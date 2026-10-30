@@ -1,6 +1,10 @@
 #include <unity.h>
+#include <vector>
+#include <string>
+#include <utility>
 #include "tuner_protocol.h"
 #include "voltage_sensor.h"
+#include "mqtt_protocol.h"
 #include "../../src/tuner_protocol.cpp"
 
 uint32_t testMillis = 0;
@@ -9,14 +13,36 @@ HardwareSerial* HardwareSerial::latest = nullptr;
 std::function<void(HardwareSerial&, uint8_t)> HardwareSerial::written;
 VoltageSensor voltageSensor;
 double VoltageSensor::readVoltage() { return 13.8; }
-void setUp() { testMillis = 0; HardwareSerial::written = nullptr; }
+static std::vector<tuner_meter_t> received;
+
+// Literal wire fixtures from LDG MeterProtocol.pdf, pp. 5-6. In particular,
+// antenna acknowledgements are ASCII digits and Z returns this whole string.
+static const std::string syncReply = "000000000000000AzAz";
+static void respondSync(HardwareSerial& serial, uint8_t command) {
+    if (command == 'Z') for (char byte : syncReply) serial.bytes.push_back(byte);
+}
+static void onMeter(const tuner_meter_t* meter) { received.push_back(*meter); }
+static void begin(TunerProtocol& tuner) {
+    TEST_ASSERT_TRUE(tuner.begin(35, 22, 38400));
+    tuner.setMeterCallback(onMeter);
+}
+static std::vector<uint8_t> frame(uint16_t fwd = 375, uint16_t ref = 75, uint16_t band = 1160) {
+    return {uint8_t(fwd >> 8), uint8_t(fwd), uint8_t(ref >> 8), uint8_t(ref),
+            uint8_t(band >> 8), uint8_t(band), 0x3b, 0x3b};
+}
+static void feed(TunerProtocol& tuner, const std::vector<uint8_t>& bytes) {
+    for (uint8_t byte : bytes) HardwareSerial::latest->bytes.push_back(byte);
+    tuner.process();
+}
+void setUp() { testMillis = 0; HardwareSerial::written = nullptr; received.clear(); }
 void tearDown() {}
 
 void test_tune_response_and_uart_failure_are_not_success() {
     TunerProtocol tuner;
-    TEST_ASSERT_TRUE(tuner.begin(35, 22, 38400));
+    begin(tuner);
     for (const char response : {'F', 'E', 'P', 'T', 'M'}) {
         HardwareSerial::written = [response](HardwareSerial& serial, uint8_t command) {
+            respondSync(serial, command);
             if (command == 'F' || command == 'T') serial.bytes.push_back(response);
         };
         TEST_ASSERT_EQUAL(response == 'T' || response == 'M', tuner.fullTune());
@@ -31,13 +57,9 @@ void test_tune_response_and_uart_failure_are_not_success() {
 void test_meter_timeout_and_recovery_survive_clock_wrap() {
     testMillis = 0xfffff000u;
     TunerProtocol tuner;
-    TEST_ASSERT_TRUE(tuner.begin(35, 22, 38400));
+    begin(tuner);
     TEST_ASSERT_FALSE(tuner.isConnected());
-    auto feed = [&]() {
-        HardwareSerial::latest->bytes = {0x01, 0x77, 0x00, 0x4b, 0x04, 0x88, 0x3b, 0x3b};
-        tuner.process();
-    };
-    feed();
+    feed(tuner, frame());
     TEST_ASSERT_TRUE(tuner.isConnected());
     TEST_ASSERT_TRUE(tuner.getState().meterValid);
     const unsigned mutexTakes = testMutexTakes;
@@ -50,29 +72,31 @@ void test_meter_timeout_and_recovery_survive_clock_wrap() {
     testMillis += 1;
     TEST_ASSERT_FALSE(tuner.getState().meterValid);
     TEST_ASSERT_FALSE(tuner.isConnected());
-    feed();
+    feed(tuner, frame());
     TEST_ASSERT_TRUE(tuner.isConnected());
     TEST_ASSERT_TRUE(tuner.getState().meterValid);
 }
 
-void test_absolute_selection_resolves_unknown_and_repeated_requests_do_not_toggle() {
+void test_absolute_selection_uses_numeric_ack_and_does_not_repeat_toggle() {
     TunerProtocol tuner;
-    TEST_ASSERT_TRUE(tuner.begin(35, 22, 38400));
+    begin(tuner);
     uint8_t antenna = 1;
     unsigned toggles = 0;
     HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
         if (command == 'A') {
             antenna = antenna == 1 ? 2 : 1;
             ++toggles;
-            serial.bytes.push_back(antenna == 1 ? 'A' : 'B');
+            serial.bytes.push_back(antenna == 1 ? '1' : '2');
         }
     };
     TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_A));
+    TEST_ASSERT_EQUAL_INT(ANT_A, tuner.getAntenna());
     TEST_ASSERT_EQUAL_UINT(1, antenna);
     TEST_ASSERT_EQUAL_UINT(2, toggles);
     TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_A));
     TEST_ASSERT_EQUAL_UINT(2, toggles);
     TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+    TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getAntenna());
     TEST_ASSERT_EQUAL_UINT(2, antenna);
     TEST_ASSERT_EQUAL_UINT(3, toggles);
     TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
@@ -82,14 +106,15 @@ void test_absolute_selection_resolves_unknown_and_repeated_requests_do_not_toggl
 
 void test_command_specific_acknowledgements() {
     TunerProtocol tuner;
-    TEST_ASSERT_TRUE(tuner.begin(35, 22, 38400));
+    begin(tuner);
     HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        respondSync(serial, command);
         if (command == 'C') serial.bytes.push_back('P');
         if (command == 'M') serial.bytes.push_back('M');
         if (command == 'P') serial.bytes.push_back('P');
-        if (command == 'Z') serial.bytes.push_back('Z');
     };
     TEST_ASSERT_FALSE(tuner.setAutoMode());
+    TEST_ASSERT_FALSE(tuner.isConnected());
     TEST_ASSERT_TRUE(tuner.setManualMode());
     TEST_ASSERT_EQUAL_INT(MODE_MANUAL, tuner.getState().mode);
     TEST_ASSERT_TRUE(tuner.bypass());
@@ -97,11 +122,325 @@ void test_command_specific_acknowledgements() {
     TEST_ASSERT_TRUE(tuner.sync());
 }
 
+void test_full_and_memory_tune_wait_for_complete_long_cycle() {
+    for (uint8_t cmd : {'T', 'F'}) for (uint32_t duration : {2000u, 15000u, 20000u}) {
+        TunerProtocol tuner;
+        HardwareSerial::written = nullptr;
+        begin(tuner);
+        uint32_t sent = 0, ackAt = 0, meterAt = 0;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+            if (command == cmd) {
+                sent = millis(); ackAt = sent + duration;
+                serial.schedule(duration, {'T'});
+            }
+            if (command == 'S') meterAt = millis();
+        };
+        TEST_ASSERT_TRUE(cmd == 'T' ? tuner.memoryTune() : tuner.fullTune());
+        TEST_ASSERT_TRUE(uint32_t(meterAt - sent) >= duration);
+        TEST_ASSERT_TRUE(int32_t(meterAt - ackAt) >= 200);
+        TEST_ASSERT_TRUE(tuner.isConnected());
+    }
+}
+
+void test_post_ack_guard_includes_wake_and_survives_clock_wrap() {
+    for (uint32_t clock : {0u, 0xfffffc00u}) {
+        testMillis = clock;
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        uint32_t ackAt = 0, firstWakeAt = 0, meterAt = 0;
+        bool commandSent = false, wakeSeen = false;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+            if (command == 'C') {
+                commandSent = true;
+                ackAt = millis() + 300;
+                serial.schedule(300, {'A'});
+            } else if (commandSent && command == ' ' && !wakeSeen) {
+                firstWakeAt = millis(); wakeSeen = true;
+            } else if (command == 'S') meterAt = millis();
+        };
+        TEST_ASSERT_TRUE(tuner.setAutoMode());
+        TEST_ASSERT_TRUE(wakeSeen);
+        TEST_ASSERT_TRUE(int32_t(firstWakeAt - ackAt) >= 200);
+        TEST_ASSERT_TRUE(int32_t(meterAt - ackAt) >= 200);
+    }
+}
+
+void test_sync_requires_complete_signature_and_rejects_wrong_case() {
+    for (const std::string& reply : {std::string("0"), std::string("Z"), std::string("Q"),
+            std::string("000000000000000AzA"), std::string("000000000000000AzAZ"), syncReply}) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        HardwareSerial::written = [reply](HardwareSerial& serial, uint8_t command) {
+            if (command == 'Z') for (char byte : reply) serial.bytes.push_back(byte);
+        };
+        TEST_ASSERT_EQUAL(reply == syncReply, tuner.sync());
+        TEST_ASSERT_EQUAL(reply == syncReply, tuner.isConnected());
+    }
+}
+
+void test_sync_streamed_and_fragmented_replies_finish_before_meter_restart() {
+    for (size_t split = 0; split <= syncReply.size(); ++split) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        uint32_t lastByteAt = 0, meterAt = 0;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+            if (command == 'Z') {
+                serial.schedule(0, {syncReply.begin(), syncReply.begin() + split});
+                serial.schedule(300, {syncReply.begin() + split, syncReply.end()}, 20);
+                lastByteAt = millis() + (split == syncReply.size() ? 0 : 300 + 20 * (syncReply.size() - split - 1));
+            }
+            if (command == 'S') meterAt = millis();
+        };
+        TEST_ASSERT_TRUE(tuner.sync());
+        TEST_ASSERT_TRUE(int32_t(meterAt - lastByteAt) >= 200);
+        TEST_ASSERT_TRUE(tuner.isConnected());
+    }
+}
+
+void test_sync_finds_signature_after_noise_and_overlapping_zero_prefix() {
+    TunerProtocol tuner;
+    begin(tuner);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        if (command != 'Z') return;
+        const std::string damaged = "Q\n000000000000000AzAQ00000000000000000000AzAz";
+        serial.schedule(20, {damaged.begin(), damaged.end()}, 2);
+    };
+    TEST_ASSERT_TRUE(tuner.sync());
+    TEST_ASSERT_TRUE(tuner.isConnected());
+}
+
+void test_unknown_responses_never_establish_connection() {
+    using Command = bool (TunerProtocol::*)();
+    const Command commands[] = {&TunerProtocol::toggleAntenna, &TunerProtocol::setAutoMode,
+        &TunerProtocol::setManualMode, &TunerProtocol::bypass, &TunerProtocol::memoryTune, &TunerProtocol::fullTune};
+    for (Command command : commands) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        HardwareSerial::written = [](HardwareSerial& serial, uint8_t byte) {
+            if (byte != ' ' && byte != 'X' && byte != 'S') serial.bytes.push_back('Q');
+        };
+        TEST_ASSERT_FALSE((tuner.*command)());
+        TEST_ASSERT_FALSE(tuner.isConnected());
+    }
+}
+
+void test_noise_before_expected_ack_is_ignored_but_failed_tune_proves_communication() {
+    TunerProtocol tuner;
+    begin(tuner);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        if (command == 'C') serial.schedule(300, {0, '\r', '\n', 'Q', 'P', 'A'});
+        if (command == 'F') serial.schedule(2000, {'F'});
+    };
+    TEST_ASSERT_TRUE(tuner.setAutoMode());
+    TEST_ASSERT_EQUAL_INT(MODE_AUTO, tuner.getMode());
+    TEST_ASSERT_FALSE(tuner.fullTune());
+    TEST_ASSERT_TRUE(tuner.isConnected());
+}
+
+void test_timeout_requires_sync_before_next_command_and_discards_late_ack() {
+    TunerProtocol tuner;
+    begin(tuner);
+    uint32_t oldSent = 0, newSent = 0, newAck = 0, syncEnd = 0;
+    unsigned syncs = 0;
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+        if (command == 'F') {
+            oldSent = millis();
+            // Arrives during recovery Z, after the second X drained the UART.
+            serial.schedule(20750, {'T'});
+        }
+        if (command == 'Z') {
+            ++syncs;
+            syncEnd = millis() + 500 + syncReply.size() - 1;
+            serial.schedule(500, {syncReply.begin(), syncReply.end()}, 1);
+        }
+        if (command == 'T') {
+            newSent = millis(); newAck = newSent + 300;
+            serial.schedule(300, {'M'});
+        }
+    };
+    TEST_ASSERT_FALSE(tuner.fullTune());
+    TEST_ASSERT_TRUE(uint32_t(millis() - oldSent) >= 20000);
+    TEST_ASSERT_FALSE(tuner.isConnected());
+    TEST_ASSERT_TRUE(tuner.memoryTune());
+    TEST_ASSERT_EQUAL_UINT(1, syncs);
+    TEST_ASSERT_TRUE(int32_t(newSent - syncEnd) >= 200);
+    TEST_ASSERT_TRUE(int32_t(millis() - newAck) >= 0);
+    TEST_ASSERT_TRUE(tuner.isConnected());
+}
+
+void test_failed_sync_blocks_new_command_until_explicit_recovery() {
+    TunerProtocol tuner;
+    begin(tuner);
+    unsigned tunes = 0, syncs = 0;
+    bool allowSync = false;
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+        if (command == 'F') ++tunes; // Never answers: establish ambiguous state.
+        if (command == 'Z') { ++syncs; if (allowSync) respondSync(serial, command); }
+        if (command == 'M') serial.bytes.push_back('M');
+    };
+    TEST_ASSERT_FALSE(tuner.fullTune());
+    TEST_ASSERT_FALSE(tuner.fullTune());
+    TEST_ASSERT_EQUAL_UINT(1, tunes);
+    TEST_ASSERT_EQUAL_UINT(1, syncs);
+    allowSync = true;
+    TEST_ASSERT_TRUE(tuner.sync());
+    TEST_ASSERT_TRUE(tuner.setManualMode());
+    TEST_ASSERT_EQUAL_UINT(2, syncs);
+    TEST_ASSERT_EQUAL_INT(MODE_MANUAL, tuner.getMode());
+}
+
+void test_failure_to_restore_metering_is_reported_and_uncertain_mode_is_cleared() {
+    TunerProtocol tuner;
+    begin(tuner);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        respondSync(serial, command);
+        if (command == 'C') serial.bytes.push_back('A');
+        if (command == 'P') serial.bytes.push_back('P');
+        if (command == 'F') serial.bytes.push_back('T');
+    };
+    TEST_ASSERT_TRUE(tuner.setAutoMode());
+    TEST_ASSERT_EQUAL_INT(MODE_AUTO, tuner.getMode());
+    TEST_ASSERT_FALSE(tuner.setManualMode()); // Sent M, but acknowledgement was lost.
+    TEST_ASSERT_EQUAL_INT(MODE_UNKNOWN, tuner.getMode());
+    TEST_ASSERT_TRUE(tuner.bypass());
+    TEST_ASSERT_TRUE(tuner.fullTune());
+    TEST_ASSERT_EQUAL_INT(MODE_UNKNOWN, tuner.getMode());
+    HardwareSerial::latest->failCommand = 'S';
+    TEST_ASSERT_FALSE(tuner.setAutoMode());
+}
+
+void test_cached_antenna_does_not_skip_recovery_after_meter_restart_failure() {
+    TunerProtocol tuner;
+    begin(tuner);
+    unsigned toggles = 0, syncs = 0;
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+        if (command == 'Z') { ++syncs; respondSync(serial, command); }
+        if (command == 'A') serial.bytes.push_back(++toggles % 2 ? '2' : '1');
+    };
+    HardwareSerial::latest->failCommand = 'S';
+    TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_B));
+    TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getAntenna());
+    HardwareSerial::latest->failCommand = -1;
+    TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+    TEST_ASSERT_EQUAL_UINT(1, syncs);
+    TEST_ASSERT_EQUAL_UINT(1, toggles);
+    TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getAntenna());
+}
+
+void test_meter_all_chunk_partitions_and_consecutive_frames() {
+    TunerProtocol tuner;
+    begin(tuner);
+    const auto bytes = frame();
+    for (unsigned mask = 0; mask < 128; ++mask) {
+        received.clear();
+        for (unsigned i = 0; i < bytes.size(); ++i) {
+            HardwareSerial::latest->bytes.push_back(bytes[i]);
+            if (i == 7 || (mask & (1u << i))) tuner.process();
+            if (i < 7) TEST_ASSERT_TRUE(received.empty());
+        }
+        TEST_ASSERT_EQUAL_UINT(1, received.size());
+        TEST_ASSERT_EQUAL_UINT(375, received.back().forward_power_raw);
+        TEST_ASSERT_EQUAL_UINT(75, received.back().reflected_power_raw);
+        TEST_ASSERT_EQUAL_UINT(1160, received.back().band_indicator);
+        TEST_ASSERT_EQUAL_INT(BAND_20M, received.back().band);
+    }
+    received.clear();
+    std::vector<uint8_t> stream;
+    for (unsigned i = 0; i < 10; ++i) {
+        auto bytes = frame(100 + i, 10);
+        stream.insert(stream.end(), bytes.begin(), bytes.end());
+    }
+    feed(tuner, stream);
+    TEST_ASSERT_EQUAL_UINT(10, received.size());
+    TEST_ASSERT_EQUAL_UINT(109, received.back().forward_power_raw);
+}
+
+void test_meter_resynchronizes_after_single_byte_corruption() {
+    for (unsigned insert = 0; insert < 2; ++insert) for (unsigned pos = 0; pos < 8 + insert; ++pos) {
+        TunerProtocol tuner;
+        begin(tuner);
+        auto damaged = frame();
+        if (insert) damaged.insert(damaged.begin() + pos, 0x55);
+        else damaged.erase(damaged.begin() + pos);
+        for (int i = 0; i < 4; ++i) {
+            auto good = frame(999, 30);
+            damaged.insert(damaged.end(), good.begin(), good.end());
+        }
+        feed(tuner, damaged);
+        TEST_ASSERT_EQUAL_UINT(999, tuner.getState().meter.forward_power_raw);
+        TEST_ASSERT_EQUAL_UINT(30, tuner.getState().meter.reflected_power_raw);
+    }
+}
+
+void test_meter_payload_semicolons_and_band_boundaries() {
+    TunerProtocol tuner;
+    begin(tuner);
+    feed(tuner, frame(0x3b3b, 0x003b, 0x3b3b));
+    TEST_ASSERT_EQUAL_UINT(1, received.size());
+    TEST_ASSERT_EQUAL_UINT(0x3b3b, received.back().forward_power_raw);
+    TEST_ASSERT_EQUAL_UINT(0x003b, received.back().reflected_power_raw);
+    const uint16_t limits[][2] = {{8230,9145}, {4110,4710}, {3060,3080}, {2250,2355},
+        {1600,1630}, {1140,1180}, {900,915}, {766,782}, {655,662}, {550,590}, {320,360}};
+    for (unsigned band = 0; band < 11; ++band) for (int edge = 0; edge < 4; ++edge) {
+        const uint16_t indicator = edge == 0 ? limits[band][0] - 1 : edge == 1 ? limits[band][0] :
+            edge == 2 ? limits[band][1] : limits[band][1] + 1;
+        feed(tuner, frame(375, 75, indicator));
+        const tuner_band_t expected = edge == 1 || edge == 2
+            ? static_cast<tuner_band_t>(band + 1) : BAND_UNKNOWN;
+        TEST_ASSERT_EQUAL_INT(expected, tuner.getState().meter.band);
+    }
+}
+
+void test_swr_valid_measurements_and_invalid_rf_stay_unknown_in_json() {
+    TunerProtocol tuner;
+    begin(tuner);
+    feed(tuner, frame());
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 249.489352, tuner.getState().meter.forward_power_watts);
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 9.979574081, tuner.getState().meter.reflected_power_watts);
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 1.5, tuner.getState().meter.swr);
+    feed(tuner, frame(100, 0));
+    TEST_ASSERT_EQUAL_DOUBLE(1.0, tuner.getState().meter.swr);
+    for (auto raw : {std::pair<uint16_t,uint16_t>{0,0}, {0,100}, {1,100}, {100,100}}) {
+        feed(tuner, frame(raw.first, raw.second));
+        const tuner_state_t state = tuner.getState();
+        TEST_ASSERT_TRUE(state.meterValid); // Power readings remain useful.
+        TEST_ASSERT_TRUE(std::isnan(state.meter.swr));
+        JsonDocument written, parsed;
+        ldg::writeState(written, state, false);
+        std::string wire;
+        serializeJson(written, wire);
+        TEST_ASSERT_FALSE(deserializeJson(parsed, wire));
+        TEST_ASSERT_TRUE(parsed["swr"].isNull());
+        const auto restored = ldg::readWebState(parsed.as<JsonVariantConst>());
+        TEST_ASSERT_TRUE(restored.meterValid);
+        TEST_ASSERT_TRUE(std::isnan(restored.meter.swr));
+    }
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_tune_response_and_uart_failure_are_not_success);
     RUN_TEST(test_meter_timeout_and_recovery_survive_clock_wrap);
-    RUN_TEST(test_absolute_selection_resolves_unknown_and_repeated_requests_do_not_toggle);
+    RUN_TEST(test_absolute_selection_uses_numeric_ack_and_does_not_repeat_toggle);
     RUN_TEST(test_command_specific_acknowledgements);
+    RUN_TEST(test_full_and_memory_tune_wait_for_complete_long_cycle);
+    RUN_TEST(test_post_ack_guard_includes_wake_and_survives_clock_wrap);
+    RUN_TEST(test_sync_requires_complete_signature_and_rejects_wrong_case);
+    RUN_TEST(test_sync_streamed_and_fragmented_replies_finish_before_meter_restart);
+    RUN_TEST(test_sync_finds_signature_after_noise_and_overlapping_zero_prefix);
+    RUN_TEST(test_unknown_responses_never_establish_connection);
+    RUN_TEST(test_noise_before_expected_ack_is_ignored_but_failed_tune_proves_communication);
+    RUN_TEST(test_timeout_requires_sync_before_next_command_and_discards_late_ack);
+    RUN_TEST(test_failed_sync_blocks_new_command_until_explicit_recovery);
+    RUN_TEST(test_failure_to_restore_metering_is_reported_and_uncertain_mode_is_cleared);
+    RUN_TEST(test_cached_antenna_does_not_skip_recovery_after_meter_restart_failure);
+    RUN_TEST(test_meter_all_chunk_partitions_and_consecutive_frames);
+    RUN_TEST(test_meter_resynchronizes_after_single_byte_corruption);
+    RUN_TEST(test_meter_payload_semicolons_and_band_boundaries);
+    RUN_TEST(test_swr_valid_measurements_and_invalid_rf_stay_unknown_in_json);
     return UNITY_END();
 }
