@@ -508,7 +508,7 @@
         const meterState = {
             fwdPower: 0,
             refPower: 0,
-            swr: 1.0,
+            swr: null,
             maxPower: 1000,
             highScale: true,
             band: '--'
@@ -652,6 +652,7 @@
             ctx.fill();
 
             // Power readouts under each pivot
+            ctx.textBaseline = 'bottom';
             ctx.fillStyle = '#22c55e';
             ctx.font = 'bold 22px -apple-system, sans-serif';
             ctx.textAlign = 'right';
@@ -659,6 +660,14 @@
             ctx.fillStyle = '#ef4444';
             ctx.textAlign = 'left';
             ctx.fillText(meterState.refPower.toFixed(1) + 'W', refPx + 10, refPy + 35);
+
+            // Numeric SWR readout between the power values.
+            const swr = meterState.swr;
+            ctx.fillStyle = swr === null ? '#888'
+                : swr > 2.0 ? '#ef4444' : swr > 1.5 ? '#f59e0b' : '#22c55e';
+            ctx.font = 'bold 24px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('SWR ' + (swr === null ? '--' : swr.toFixed(1) + ':1'), cx, fwdPy + 35);
         }
 
         function drawSWRCurves(fwdPx, fwdPy, refPx, refPy, arm) {
@@ -790,7 +799,7 @@
             applyMeterScale(data);
             meterState.fwdPower = data.fwd_power || 0;
             meterState.refPower = data.ref_power || 0;
-            meterState.swr = data.swr || 1.0;
+            meterState.swr = Number.isFinite(data.swr) && data.swr >= 1 ? data.swr : null;
 
             if (data.band) {
                 meterState.band = data.band;
