@@ -75,9 +75,9 @@ void test_digital_power_is_visible_for_both_scales_and_distinguishes_zero_from_m
         TEST_ASSERT_NOT_NULL(forward);
         TEST_ASSERT_NOT_NULL(reflected);
         lv_area_t f, r; lv_obj_get_coords(forward, &f); lv_obj_get_coords(reflected, &r);
-        TEST_ASSERT_GREATER_THAN_INT(0, f.x1);
-        TEST_ASSERT_LESS_THAN_INT(r.x1, f.x2);
-        TEST_ASSERT_LESS_THAN_INT(300, r.x2);
+        TEST_ASSERT_GREATER_THAN_INT(0, r.x1);
+        TEST_ASSERT_LESS_THAN_INT(f.x1, r.x2);
+        TEST_ASSERT_LESS_THAN_INT(300, f.x2);
         TEST_ASSERT_LESS_THAN_INT(280, f.y2);
         TEST_ASSERT_LESS_THAN_INT(280, r.y2);
         bool painted = false;

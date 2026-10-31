@@ -143,8 +143,9 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
         lv_obj_set_style_text_color(label, lv_color_hex(color), LV_PART_MAIN);
         return label;
     };
-    m_fwdPowerLabel = powerLabel(8, "FWD --", 0x22c55e);
-    m_refPowerLabel = powerLabel(156, "REF --", 0xef4444);
+    // Match the browser and needle pivots: reflected left, forward right.
+    m_refPowerLabel = powerLabel(8, "REF --", 0xef4444);
+    m_fwdPowerLabel = powerLabel(156, "FWD --", 0x22c55e);
 
     // ============================================================
     // RIGHT PANEL: Info + buttons (~150px wide)
