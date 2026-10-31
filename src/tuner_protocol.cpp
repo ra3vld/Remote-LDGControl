@@ -166,8 +166,17 @@ char TunerProtocol::waitForResponse(uint8_t cmd, uint32_t timeoutMs) {
     return m_pendingResponse ? m_pendingResponse : TUNER_RESP_ERROR;
 }
 
+void TunerProtocol::resetCommandTrace(uint8_t exchange) {
+    m_exchange = exchange;
+    m_exchangeWritten = m_exchangeUartError = false;
+    m_commandRxNext = m_commandRxCount = 0;
+    m_commandRxBytes = 0;
+}
+
 char TunerProtocol::exchangeCommand(uint8_t cmd) {
+    resetCommandTrace(cmd);
     if (!sendCommand(cmd)) return TUNER_RESP_ERROR;
+    m_exchangeWritten = true;
     const uint32_t timeout = (cmd == TUNER_CMD_MEM_TUNE || cmd == TUNER_CMD_FULL_TUNE)
         ? TUNER_TUNE_TIMEOUT_MS
         : cmd == TUNER_CMD_SYNC ? TUNER_SYNC_TIMEOUT_MS : TUNER_RESPONSE_TIMEOUT_MS;
@@ -178,6 +187,7 @@ char TunerProtocol::controlResponse(uint8_t cmd) {
     TunerLock lock(m_mutex);
     if (!lock) return TUNER_RESP_ERROR;
     const uint32_t started = millis();
+    resetCommandTrace(0);
     char response = TUNER_RESP_ERROR;
     if (switchToControlMode()) {
         bool ready = true;
@@ -208,6 +218,15 @@ char TunerProtocol::controlResponse(uint8_t cmd) {
     m_diagnostics.response = response != TUNER_RESP_ERROR ? uint8_t(response) : 0;
     m_diagnostics.commandSuccess = meterRestored && response != TUNER_RESP_ERROR && !failedTune;
     m_diagnostics.commandDurationMs = millis() - started;
+    m_diagnostics.exchange = m_exchange;
+    m_diagnostics.exchangeWritten = m_exchangeWritten;
+    m_diagnostics.exchangeUartError = m_exchangeUartError;
+    m_diagnostics.meterRestarted = meterRestored;
+    m_diagnostics.commandRxBytes = m_commandRxBytes;
+    m_diagnostics.commandRxCount = m_commandRxCount;
+    const unsigned first = m_commandRxCount < sizeof(m_commandRx) ? 0 : m_commandRxNext;
+    for (unsigned i = 0; i < m_commandRxCount; ++i)
+        m_diagnostics.commandRx[i] = m_commandRx[(first + i) % sizeof(m_commandRx)];
     portEXIT_CRITICAL(&m_snapshotMux);
     if (!meterRestored) { m_needsSync = true; return TUNER_RESP_ERROR; }
     return response;
@@ -458,6 +477,7 @@ void TunerProtocol::process() {
             // Drain this batch, then find a new frame boundary. Never turn an
             // acknowledgement from a damaged batch into command success.
             discard = true;
+            if (m_waitingForResponse) m_exchangeUartError = true;
             m_meterIdx = m_eomCount = 0;
             if (m_state != State::RESPONSE) m_state = State::ERROR;
             else if (m_waitingForResponse) m_pendingResponse = TUNER_RESP_ERROR;
@@ -467,6 +487,12 @@ void TunerProtocol::process() {
         if (value < 0) break;
         const uint8_t b = uint8_t(value);
         tail[count++ % sizeof(tail)] = b;
+        if (m_waitingForResponse) {
+            m_commandRx[m_commandRxNext] = b;
+            m_commandRxNext = (m_commandRxNext + 1) % sizeof(m_commandRx);
+            if (m_commandRxCount < sizeof(m_commandRx)) ++m_commandRxCount;
+            ++m_commandRxBytes;
+        }
         if (discard) continue;
 
         switch (m_state) {

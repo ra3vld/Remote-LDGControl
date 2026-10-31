@@ -67,6 +67,7 @@ private:
     bool switchToControlMode();
     bool switchToMeterMode();
     char exchangeCommand(uint8_t cmd);
+    void resetCommandTrace(uint8_t exchange);
     char controlResponse(uint8_t cmd);
     void publishSnapshot(bool received = false, bool meterReceived = false);
     char waitForResponse(uint8_t cmd, uint32_t timeoutMs);
@@ -108,6 +109,12 @@ private:
     // A timeout leaves an ambiguous reply in flight. Require Z before another
     // control operation rather than attributing the late reply to that operation.
     bool m_needsSync = false;
+    // UART-worker owned. Freeze the latest exchange separately from live RX.
+    uint8_t m_exchange = 0;
+    bool m_exchangeWritten = false, m_exchangeUartError = false;
+    uint8_t m_commandRx[32]{};
+    uint8_t m_commandRxNext = 0, m_commandRxCount = 0;
+    uint32_t m_commandRxBytes = 0;
 
     // Commands and process() belong to the UART worker. The recursive mutex
     // also protects the command/response sequence against accidental callers.

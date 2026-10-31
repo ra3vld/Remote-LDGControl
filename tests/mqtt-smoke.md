@@ -19,6 +19,8 @@ Use an isolated test broker / HA installation for the following checks.
    `band_held: true`; the next valid band removes that marker. On the LCD,
    digital FWD/REF watts must match the live readings for both 100/1000 W
    scales, show `--` on expiry, and show `0.0W` on actual zero-power frames.
+   With zero readings, each LCD needle must rest on the opposite pivot and
+   its scale start; at full scale it must reach the corresponding top mark.
 4. With real meter frames arriving, vary power beyond the documented thresholds:
    regular state publications must be at least 1000 ms apart. Hold readings steady
    or vary below thresholds: the latest state must be sent after 30000 ms. Verify
@@ -28,6 +30,10 @@ Use an isolated test broker / HA installation for the following checks.
    execute, a non-retained `/command/response` must report its result, and state
    must refresh. Do not use retained command messages. Check actual antenna/mode
    and tune results on the tuner.
+   If AUTO/BYPASS is unconfirmed, save `/api/status.uart.last_command` after
+   each attempt, including `exchange`, `error`, `rx_hex` and `rx_bytes`.
+   Confirm the trace survives subsequent meter frames. A failed `Z` means the
+   requested command was not sent; a write or an unexpected reply is not an ACK.
 6. Restart HA, then the broker. Expect the same device/entity IDs, all 12 discovery
    configurations, the retained last-reading state, and command subscriptions
    after reconnect. The `held` attributes must distinguish preserved readings.

@@ -329,6 +329,9 @@ still unknown. `/state` also includes `telemetry_fresh` and a per-measurement
 three-second freshness check for power and SWR. The LCD also shows digital
 forward/reflected power in watts; missing readings show `--`, while real zero
 power shows `0.0W` independently of the selected dial scale.
+The dial radius, needle length and spacing between needle pivots are equal,
+including the 300x280 LCD dial. Thus each zero-scale endpoint meets the
+opposite pivot; reducing the dial height also moves its pivots inward.
 
 The last detected band is kept separately in the source snapshot, so the LCD
 and browser also keep it between transmissions. They mark it `(last)` when
@@ -371,6 +374,16 @@ The protocol cannot read back changes made at the tuner's front panel.
   (`null` when not received, `sync` for a complete Z response), `success`, and
   `duration_ms`. Success also requires restoring metering; a failed tune is
   reported as unsuccessful even when its `F` acknowledgement arrived.
+  `exchange` identifies the last attempted exchange (`Z` if recovery sync
+  prevented the requested command), `written` reports its transport write,
+  and `meter_restarted` reports the final `S` write. `error` distinguishes
+  `meter_stop_failed`, `write_failed`, `uart_error`, `timeout`,
+  `meter_restart_failed` and `tune_failed` (or is null on success).
+  `rx_hex` freezes the last 32 bytes received during that exchange, including
+  rejected bytes, and `rx_bytes` gives the full count. Subsequent meter frames
+  do not overwrite this trace. Capture this object after separate AUTO/BYPASS
+  attempts when diagnosing unconfirmed commands; do not infer success from
+  writing a command or accept an undocumented acknowledgement.
 
 Capture several status responses while the RF input and frequency are constant.
 Compare top-level `fwd_raw` / `ref_raw`, the wire bytes, frame counters and driver

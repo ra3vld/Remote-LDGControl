@@ -164,8 +164,23 @@ void test_partial_repaints_match_full_draw_for_both_scales_and_invalid_readings(
 void test_dial_moves_with_its_widget_instead_of_using_screen_coordinates() {
     auto* meter=lv_obj_get_child(lv_scr_act(),0);
     lv_obj_set_pos(meter,7,9); render();
-    const int x=280+7,y=260+9;
+    const int x=270+7,y=260+9;
     TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00aa00).full,TFT_eSPI::instance->pixels[y*480+x]);
+}
+void test_lcd_pivots_and_needle_ends_use_the_reduced_dial_radius() {
+    tuner_state_t state;
+    state.meterValid = true;
+    state.meter.forward_power_watts = state.meter.reflected_power_watts = 1000;
+    ui->updateState(state); render();
+    const auto& pixels = TFT_eSPI::instance->pixels;
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00aa00).full, pixels[260*480+270]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xaa0000).full, pixels[260*480+30]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00ff00).full, pixels[20*480+270]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xff0000).full, pixels[20*480+30]);
+    state.meter.forward_power_watts = state.meter.reflected_power_watts = 0;
+    ui->updateState(state); render();
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00aa00).full, pixels[260*480+270]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xaa0000).full, pixels[260*480+30]);
 }
 void test_mode_button_selects_the_opposite_confirmed_mode() {
     ui->updateStatus(MODE_AUTO,ANT_A); render();
@@ -225,6 +240,7 @@ int main() {
     RUN_TEST(test_meter_update_does_not_redraw_the_controls);
     RUN_TEST(test_partial_repaints_match_full_draw_for_both_scales_and_invalid_readings);
     RUN_TEST(test_dial_moves_with_its_widget_instead_of_using_screen_coordinates);
+    RUN_TEST(test_lcd_pivots_and_needle_ends_use_the_reduced_dial_radius);
     RUN_TEST(test_mode_button_selects_the_opposite_confirmed_mode);
     RUN_TEST(test_feedback_remains_pending_until_completion_and_then_expires);
     RUN_TEST(test_changed_antenna_names_refresh_without_recreating_the_screen);

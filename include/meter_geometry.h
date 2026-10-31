@@ -26,7 +26,11 @@ public:
         centerX = width / 2;
         centerY = height - 20;
         radius = centerY - 20;
-        const int halfBase = width / 2 - 20;
+        if (radius > width - 40) radius = width - 40;
+        radius -= radius % 2;
+        // A zero needle and its scale arc must reach the opposite pivot.
+        // Keep their spacing equal to the radius when the dial is not square.
+        const int halfBase = radius / 2;
         forwardPivot = {int16_t(centerX + halfBase), int16_t(centerY)};
         reflectedPivot = {int16_t(centerX - halfBase), int16_t(centerY)};
         buildTicks(0, forwardPivot, pi(), pi() / 2.0f);

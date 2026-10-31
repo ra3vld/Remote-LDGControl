@@ -332,6 +332,105 @@ void test_mode_commands_do_not_inherit_a_fault_from_the_drained_meter_batch() {
     }
 }
 
+static void commandStatus(JsonDocument& doc, TunerProtocol& tuner) {
+    ldg::writeTunerDiagnostics(doc.to<JsonObject>(), tuner.getDiagnostics(), millis());
+    std::string wire;
+    serializeJson(doc, wire);
+    TEST_ASSERT_FALSE(deserializeJson(doc, wire));
+}
+
+void test_command_trace_keeps_the_actual_reply_after_metering_overwrites_the_live_rx_tail() {
+    TunerProtocol tuner;
+    begin(tuner);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        if (command == 'C') serial.bytes.push_back('A');
+    };
+    TEST_ASSERT_TRUE(tuner.setAutoMode());
+    for (unsigned i = 0; i < 20; ++i) feed(tuner, frame());
+    JsonDocument doc;
+    commandStatus(doc, tuner);
+    JsonObject command = doc["last_command"].as<JsonObject>();
+    TEST_ASSERT_EQUAL_STRING("C", command["exchange"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("41", command["rx_hex"].as<const char*>());
+    TEST_ASSERT_EQUAL_UINT(1, command["rx_bytes"].as<unsigned>());
+    TEST_ASSERT_EQUAL_STRING("A", command["ack"].as<const char*>());
+    TEST_ASSERT_TRUE(command["written"].as<bool>());
+    TEST_ASSERT_TRUE(command["meter_restarted"].as<bool>());
+    TEST_ASSERT_FALSE(command["uart_error"].as<bool>());
+    TEST_ASSERT_TRUE(command["error"].isNull());
+    TEST_ASSERT_EQUAL_UINT(64, strlen(doc["rx_tail_hex"].as<const char*>()));
+}
+
+void test_command_trace_distinguishes_no_reply_unexpected_reply_and_blocking_sync() {
+    for (bool unexpected : {false, true}) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        HardwareSerial::written = [unexpected](HardwareSerial& serial, uint8_t command) {
+            if (command == 'P' && unexpected) serial.bytes.push_back('p');
+            if (command == 'Z') for (char b : std::string("000Az")) serial.bytes.push_back(b);
+        };
+        TEST_ASSERT_FALSE(tuner.bypass());
+        JsonDocument doc;
+        commandStatus(doc, tuner);
+        TEST_ASSERT_EQUAL_STRING("P", doc["last_command"]["exchange"].as<const char*>());
+        TEST_ASSERT_EQUAL_STRING("timeout", doc["last_command"]["error"].as<const char*>());
+        TEST_ASSERT_EQUAL_STRING(unexpected ? "70" : "", doc["last_command"]["rx_hex"].as<const char*>());
+        TEST_ASSERT_TRUE(doc["last_command"]["written"].as<bool>());
+        TEST_ASSERT_FALSE(tuner.setAutoMode()); // C is blocked by an incomplete Z reply.
+        commandStatus(doc, tuner);
+        TEST_ASSERT_EQUAL_STRING("C", doc["last_command"]["command"].as<const char*>());
+        TEST_ASSERT_EQUAL_STRING("Z", doc["last_command"]["exchange"].as<const char*>());
+        TEST_ASSERT_EQUAL_STRING("303030417a", doc["last_command"]["rx_hex"].as<const char*>());
+        TEST_ASSERT_EQUAL_STRING("timeout", doc["last_command"]["error"].as<const char*>());
+    }
+}
+
+void test_command_trace_is_bounded_and_keeps_uart_faults_without_accepting_the_ack() {
+    TunerProtocol tuner;
+    begin(tuner);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        if (command != 'P') return;
+        serial.receiveError(UART_FRAME_ERROR);
+        for (unsigned i = 0; i < 60; ++i) serial.bytes.push_back(i);
+        serial.bytes.push_back('P');
+    };
+    TEST_ASSERT_FALSE(tuner.bypass());
+    JsonDocument doc;
+    commandStatus(doc, tuner);
+    TEST_ASSERT_EQUAL_STRING("uart_error", doc["last_command"]["error"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["last_command"]["uart_error"].as<bool>());
+    TEST_ASSERT_TRUE(doc["last_command"]["ack"].isNull());
+    TEST_ASSERT_EQUAL_UINT(61, doc["last_command"]["rx_bytes"].as<unsigned>());
+    const char* tail = doc["last_command"]["rx_hex"].as<const char*>();
+    TEST_ASSERT_EQUAL_UINT(64, strlen(tail));
+    TEST_ASSERT_EQUAL_STRING("1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b50", tail);
+    const auto frozen = tuner.getDiagnostics();
+    feed(tuner, frame());
+    TEST_ASSERT_EQUAL_MEMORY(frozen.commandRx, tuner.getDiagnostics().commandRx, sizeof(frozen.commandRx));
+}
+
+void test_command_trace_distinguishes_write_failure_and_meter_restart_failure() {
+    for (uint8_t failed : {'X', 'P', 'S'}) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        HardwareSerial::latest->failCommand = failed;
+        HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+            if (command == 'P') serial.bytes.push_back('P');
+        };
+        TEST_ASSERT_FALSE(tuner.bypass());
+        JsonDocument doc;
+        commandStatus(doc, tuner);
+        TEST_ASSERT_EQUAL_STRING(failed == 'X' ? "meter_stop_failed" :
+                                 failed == 'P' ? "write_failed" : "meter_restart_failed",
+                                 doc["last_command"]["error"].as<const char*>());
+        TEST_ASSERT_EQUAL(failed == 'S', !doc["last_command"]["ack"].isNull());
+        if (failed == 'X') TEST_ASSERT_TRUE(doc["last_command"]["exchange"].isNull());
+        TEST_ASSERT_EQUAL(failed == 'S', doc["last_command"]["written"].as<bool>());
+    }
+}
+
 void test_full_and_memory_tune_wait_for_complete_long_cycle() {
     for (uint8_t cmd : {'T', 'F'}) for (uint32_t duration : {2000u, 15000u, 20000u}) {
         TunerProtocol tuner;
@@ -645,6 +744,10 @@ int main() {
     RUN_TEST(test_invalid_trailers_are_counted_separately_from_driver_errors);
     RUN_TEST(test_command_specific_acknowledgements);
     RUN_TEST(test_mode_commands_do_not_inherit_a_fault_from_the_drained_meter_batch);
+    RUN_TEST(test_command_trace_keeps_the_actual_reply_after_metering_overwrites_the_live_rx_tail);
+    RUN_TEST(test_command_trace_distinguishes_no_reply_unexpected_reply_and_blocking_sync);
+    RUN_TEST(test_command_trace_is_bounded_and_keeps_uart_faults_without_accepting_the_ack);
+    RUN_TEST(test_command_trace_distinguishes_write_failure_and_meter_restart_failure);
     RUN_TEST(test_full_and_memory_tune_wait_for_complete_long_cycle);
     RUN_TEST(test_post_ack_guard_includes_wake_and_survives_clock_wrap);
     RUN_TEST(test_sync_requires_complete_signature_and_rejects_wrong_case);

@@ -18,6 +18,11 @@ struct TunerDiagnostics {
     bool hasCommand = false, commandSuccess = false;
     uint8_t command = 0, response = 0;
     uint32_t commandDurationMs = 0;
+    uint8_t exchange = 0;
+    bool exchangeWritten = false, exchangeUartError = false, meterRestarted = false;
+    uint8_t commandRx[32]{};
+    uint8_t commandRxCount = 0;
+    uint32_t commandRxBytes = 0;
 };
 
 inline void writeTunerDiagnostics(JsonObject out, const TunerDiagnostics& d, uint32_t now) {
@@ -45,6 +50,33 @@ inline void writeTunerDiagnostics(JsonObject out, const TunerDiagnostics& d, uin
         }
         command["success"] = d.commandSuccess;
         command["duration_ms"] = d.commandDurationMs;
+        command["exchange"] = nullptr;
+        if (d.exchange) {
+            char exchange[] = {char(d.exchange), '\0'};
+            command["exchange"] = exchange;
+        }
+        command["written"] = d.exchangeWritten;
+        command["uart_error"] = d.exchangeUartError;
+        command["meter_restarted"] = d.meterRestarted;
+        command["rx_bytes"] = d.commandRxBytes;
+        char rx[sizeof(d.commandRx) * 2 + 1];
+        static const char hex[] = "0123456789abcdef";
+        for (unsigned i = 0; i < d.commandRxCount; ++i) {
+            rx[2*i] = hex[d.commandRx[i] >> 4];
+            rx[2*i+1] = hex[d.commandRx[i] & 15];
+        }
+        rx[2*d.commandRxCount] = '\0';
+        command["rx_hex"] = rx;
+        const char* error = nullptr;
+        if (!d.commandSuccess) {
+            if (!d.exchange) error = "meter_stop_failed";
+            else if (!d.exchangeWritten) error = "write_failed";
+            else if (d.exchangeUartError) error = "uart_error";
+            else if (!d.response) error = "timeout";
+            else if (!d.meterRestarted) error = "meter_restart_failed";
+            else error = "tune_failed";
+        }
+        command["error"] = error;
     }
     out["frame_age_ms"] = nullptr;
     out["last_frame_hex"] = nullptr;
