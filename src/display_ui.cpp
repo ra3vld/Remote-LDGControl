@@ -132,6 +132,20 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     lv_obj_set_style_text_font(m_scaleLabel, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_align_to(m_scaleLabel, m_meter, LV_ALIGN_OUT_BOTTOM_RIGHT, -10, 5);
 
+    // Digital readings fit below the pivots, above the band/scale footer.
+    auto powerLabel = [&](int x, const char* text, uint32_t color) {
+        lv_obj_t* label = lv_label_create(m_scr);
+        lv_label_set_text(label, text);
+        lv_obj_set_pos(label, x, 264);
+        lv_obj_set_width(label, 138);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(label, lv_color_hex(color), LV_PART_MAIN);
+        return label;
+    };
+    m_fwdPowerLabel = powerLabel(8, "FWD --", 0x22c55e);
+    m_refPowerLabel = powerLabel(156, "REF --", 0xef4444);
+
     // ============================================================
     // RIGHT PANEL: Info + buttons (~150px wide)
     // ============================================================
@@ -278,11 +292,11 @@ void DisplayUI::updateState(const tuner_state_t& state) {
     tuner_meter_t meter = state.meter;
     if (!state.meterValid) {
         meter = tuner_meter_t{};
+        meter.forward_power_watts = meter.reflected_power_watts = NAN;
         meter.swr = NAN;
     }
-    if (!std::isfinite(meter.forward_power_watts)) meter.forward_power_watts = 0;
-    if (!std::isfinite(meter.reflected_power_watts)) meter.reflected_power_watts = 0;
-    updateMeter(&meter);
+    meter.band = ldg::lastKnownBand(state);
+    updateMeter(&meter, ldg::bandIsHeld(state));
     updateStatus(state.mode, state.antenna);
 }
 
@@ -308,10 +322,24 @@ void DisplayUI::updateCommandFeedback(const ldg::CommandFeedback::Snapshot& feed
         pending ? "waiting..." : success ? "OK" : "not confirmed");
 }
 
-void DisplayUI::updateMeter(const tuner_meter_t* meter) {
-    const float forward = float(meter->forward_power_watts);
-    const float reflected = float(meter->reflected_power_watts);
+void DisplayUI::updateMeter(const tuner_meter_t* meter, bool bandHeld) {
+    const bool forwardValid = std::isfinite(meter->forward_power_watts) && meter->forward_power_watts >= 0;
+    const bool reflectedValid = std::isfinite(meter->reflected_power_watts) && meter->reflected_power_watts >= 0;
+    const float forward = forwardValid ? float(meter->forward_power_watts) : 0;
+    const float reflected = reflectedValid ? float(meter->reflected_power_watts) : 0;
     const float swr = float(meter->swr);
+    auto updatePowerText = [](lv_obj_t* label, const char* prefix, float value, bool valid) {
+        char text[32];
+        if (valid) snprintf(text, sizeof(text), "%s %.1fW", prefix, double(value));
+        else snprintf(text, sizeof(text), "%s --", prefix);
+        if (strcmp(lv_label_get_text(label), text)) lv_label_set_text(label, text);
+    };
+    if (forward != m_fwdPower || forwardValid != m_fwdValid)
+        updatePowerText(m_fwdPowerLabel, "FWD", forward, forwardValid);
+    if (reflected != m_refPower || reflectedValid != m_refValid)
+        updatePowerText(m_refPowerLabel, "REF", reflected, reflectedValid);
+    m_fwdValid = forwardValid;
+    m_refValid = reflectedValid;
     if (forward != m_fwdPower || reflected != m_refPower) {
         m_geometry.resize(lv_obj_get_width(m_meter), lv_obj_get_height(m_meter));
         const auto oldForward = m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f));
@@ -334,9 +362,11 @@ void DisplayUI::updateMeter(const tuner_meter_t* meter) {
                           lv_coord_t(bounds.x1 + cx + 50), lv_coord_t(bounds.y1 + y + 14)};
         lv_obj_invalidate_area(m_meter, &text);
     }
-    if (meter->band != m_band) {
+    if (meter->band != m_band || bandHeld != m_bandHeld) {
         m_band = meter->band;
-        lv_label_set_text_fmt(m_bandLabel, "Band: %s", TunerProtocol::bandToString(m_band));
+        m_bandHeld = bandHeld;
+        lv_label_set_text_fmt(m_bandLabel, "Band: %s%s", TunerProtocol::bandToString(m_band),
+                              bandHeld ? " (last)" : "");
     }
 }
 

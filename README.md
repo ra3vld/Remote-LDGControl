@@ -326,7 +326,15 @@ packet updates power to zero; an undefined SWR or unknown band keeps the last
 valid reading of that measurement. Before the first observation, the value is
 still unknown. `/state` also includes `telemetry_fresh` and a per-measurement
 `held` object. The web UI, LCD and HTTP live telemetry retain their existing
-three-second freshness check.
+three-second freshness check for power and SWR. The LCD also shows digital
+forward/reflected power in watts; missing readings show `--`, while real zero
+power shows `0.0W` independently of the selected dial scale.
+
+The last detected band is kept separately in the source snapshot, so the LCD
+and browser also keep it between transmissions. They mark it `(last)` when
+the current frame has no known band or telemetry has expired; HTTP/WebSocket
+snapshots expose the same distinction as `band_held`. A new valid band replaces
+it immediately. This history is not shared between local and remote sources.
 
 The MQTT worker observes readings while offline and keeps them across MQTT
 reconnect/reconfiguration. Retained `/state` lets HA restore the last published

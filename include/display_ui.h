@@ -20,7 +20,7 @@ public:
 
     bool begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterScale);
     void loop();
-    void updateMeter(const tuner_meter_t* meter);
+    void updateMeter(const tuner_meter_t* meter, bool bandHeld = false);
     void updateStatus(tuner_mode_t mode, tuner_ant_t antenna);
     void updateNetworkInfo();
     void updateState(const tuner_state_t& state);
@@ -38,6 +38,8 @@ private:
     lv_obj_t* m_meter;          // Custom cross-needle meter container
     lv_obj_t* m_bandLabel;
     lv_obj_t* m_scaleLabel;
+    lv_obj_t* m_fwdPowerLabel = nullptr;
+    lv_obj_t* m_refPowerLabel = nullptr;
     lv_obj_t* m_modeLabel;
     lv_obj_t* m_ssidLabel;
     lv_obj_t* m_ipLabel;
@@ -64,6 +66,8 @@ private:
     tuner_ant_t m_activeAnt;
     tuner_mode_t m_activeMode = MODE_UNKNOWN;
     tuner_band_t m_band = BAND_UNKNOWN;
+    bool m_bandHeld = false;
+    bool m_fwdValid = false, m_refValid = false;
     ldg::MeterGeometry m_geometry;
     float m_swrTextValue = -1;
     char m_swrText[16] = {};

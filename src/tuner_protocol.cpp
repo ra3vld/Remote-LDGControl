@@ -264,7 +264,10 @@ bool TunerProtocol::stopMeter() {
 
 void TunerProtocol::publishSnapshot(bool received, bool meterReceived) {
     portENTER_CRITICAL(&m_snapshotMux);
-    if (meterReceived) m_lastMeterMs = millis();
+    if (meterReceived) {
+        m_lastMeterMs = millis();
+        if (ldg::knownBand(m_meterData.band)) m_snapshot.lastBand = m_meterData.band;
+    }
     m_snapshot.meter = m_meterData;
     m_snapshot.meterValid = m_hasMeterData;
     m_snapshot.mode = m_mode;

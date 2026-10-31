@@ -287,6 +287,50 @@ void test_long_remote_command_retains_source_but_expires_meter_values() {
     TEST_ASSERT_FALSE(active.remoteConnected(20000, true));
     TEST_ASSERT_FALSE(active.select(local, 20000, true).remote);
 }
+void test_remote_band_history_survives_idle_but_never_replaces_the_local_band() {
+    ActiveTunerState active;
+    auto local = measured();
+    local.lastBand = BAND_20M;
+    auto remote = measured(40);
+    remote.meter.band = BAND_30M;
+    active.updateRemote(remote);
+    tuner_state_t idle;
+    active.updateRemote(idle); // Compatible with older peers sending unknown on idle.
+    auto state = active.select(local);
+    TEST_ASSERT_EQUAL_INT(BAND_30M, state.lastBand);
+    JsonDocument doc;
+    writeState(doc, state, false);
+    TEST_ASSERT_EQUAL_STRING("30m", doc["band"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["band_held"].as<bool>());
+    TEST_ASSERT_TRUE(doc["fwd_power"].isNull());
+    auto parsed = readWebState(doc.as<JsonVariantConst>());
+    TEST_ASSERT_EQUAL_INT(BAND_30M, parsed.lastBand);
+    TEST_ASSERT_FALSE(parsed.meterValid);
+    doc["fwd_power"] = 0;
+    parsed = readWebState(doc.as<JsonVariantConst>());
+    TEST_ASSERT_TRUE(parsed.meterValid);
+    TEST_ASSERT_EQUAL_INT(BAND_UNKNOWN, parsed.meter.band);
+    TEST_ASSERT_TRUE(bandIsHeld(parsed));
+    active.disconnectRemote();
+    TEST_ASSERT_EQUAL_INT(BAND_20M, lastKnownBand(active.select(local)));
+    active.updateRemote(idle);
+    TEST_ASSERT_EQUAL_INT(BAND_UNKNOWN, lastKnownBand(active.select(local)));
+}
+void test_mqtt_can_use_a_band_observed_before_the_mqtt_worker_started() {
+    MqttReadings readings;
+    tuner_state_t state;
+    state.lastBand = BAND_30M;
+    readings.observe(state);
+    JsonDocument doc;
+    readings.write(doc, state);
+    std::string payload;
+    serializeJson(doc, payload);
+    TEST_ASSERT_FALSE(deserializeJson(doc, payload));
+    TEST_ASSERT_EQUAL_STRING("30m", doc["band"].as<const char*>());
+    TEST_ASSERT_TRUE(doc["band_held"].as<bool>());
+    TEST_ASSERT_TRUE(doc["held"]["band"].as<bool>());
+    TEST_ASSERT_TRUE(doc["fwd_power"].isNull());
+}
 
 struct Message {
     std::string topic, payload;
@@ -600,6 +644,8 @@ int main() {
     RUN_TEST(test_state_json_unknown_values_and_web_round_trip);
     RUN_TEST(test_active_source_keeps_remote_band_mode_and_antenna);
     RUN_TEST(test_long_remote_command_retains_source_but_expires_meter_values);
+    RUN_TEST(test_remote_band_history_survives_idle_but_never_replaces_the_local_band);
+    RUN_TEST(test_mqtt_can_use_a_band_observed_before_the_mqtt_worker_started);
     RUN_TEST(test_oversized_session_packet_reports_topic_and_retries);
     RUN_TEST(test_session_times_interval_from_completed_write);
     RUN_TEST(test_ha_keeps_last_readings_when_rf_stops_but_web_values_still_expire);

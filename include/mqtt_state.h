@@ -22,7 +22,8 @@ inline bool numericChanged(double previous, double current, double absolute,
 
 inline bool significantChange(const tuner_state_t& previous, const tuner_state_t& current) {
     if (previous.remote != current.remote || previous.mode != current.mode ||
-        previous.antenna != current.antenna || previous.meterValid != current.meterValid)
+        previous.antenna != current.antenna || previous.meterValid != current.meterValid ||
+        lastKnownBand(previous) != lastKnownBand(current) || bandIsHeld(previous) != bandIsHeld(current))
         return true;
     if (!current.meterValid) return false;
     return previous.meter.band != current.meter.band ||
@@ -67,7 +68,9 @@ private:
 class ActiveTunerState {
 public:
     void updateRemote(const tuner_state_t& state) {
+        const tuner_band_t previousBand = lastKnownBand(m_remote);
         m_remote = state;
+        m_remote.lastBand = knownBand(lastKnownBand(state)) ? lastKnownBand(state) : previousBand;
         m_remote.remote = true;
         m_connected = true;
     }

@@ -844,7 +844,7 @@
 
             if (data.band) {
                 meterState.band = data.band;
-                document.getElementById('bandValue').textContent = 'Band: ' + data.band;
+                document.getElementById('bandValue').textContent = 'Band: ' + data.band + (data.band_held ? ' (last)' : '');
             }
             if (data.mode !== undefined) {
                 activeMode = Number.isInteger(data.mode) && data.mode >= 0 && data.mode <= 3 ? data.mode : 0;

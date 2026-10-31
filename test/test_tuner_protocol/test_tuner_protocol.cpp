@@ -103,6 +103,36 @@ void test_absolute_selection_uses_numeric_ack_and_does_not_repeat_toggle() {
     TEST_ASSERT_EQUAL_UINT(3, toggles);
     TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_UNKNOWN));
 }
+void test_last_band_survives_rf_silence_and_unknown_band_packets() {
+    TunerProtocol tuner;
+    begin(tuner);
+    TEST_ASSERT_EQUAL_INT(BAND_UNKNOWN, tuner.getState().lastBand);
+    feed(tuner, frame());
+    TEST_ASSERT_EQUAL_INT(BAND_20M, tuner.getState().lastBand);
+    testMillis += 3001;
+    auto state = tuner.getState();
+    TEST_ASSERT_FALSE(state.meterValid);
+    JsonDocument status;
+    ldg::writeState(status, state, false);
+    TEST_ASSERT_EQUAL_STRING("20m", status["band"].as<const char*>());
+    TEST_ASSERT_TRUE(status["band_held"].as<bool>());
+    TEST_ASSERT_TRUE(status["fwd_power"].isNull());
+    feed(tuner, frame(0, 0, 0));
+    state = tuner.getState();
+    TEST_ASSERT_TRUE(state.meterValid);
+    TEST_ASSERT_EQUAL_INT(BAND_UNKNOWN, state.meter.band);
+    TEST_ASSERT_EQUAL_INT(BAND_20M, state.lastBand);
+    ldg::writeState(status, state, false);
+    TEST_ASSERT_EQUAL_STRING("20m", status["band"].as<const char*>());
+    TEST_ASSERT_TRUE(status["band_held"].as<bool>());
+    TEST_ASSERT_EQUAL_DOUBLE(0, status["fwd_power"].as<double>());
+    feed(tuner, frame(375, 0, 1610));
+    state = tuner.getState();
+    TEST_ASSERT_EQUAL_INT(BAND_30M, state.lastBand);
+    ldg::writeState(status, state, false);
+    TEST_ASSERT_EQUAL_STRING("30m", status["band"].as<const char*>());
+    TEST_ASSERT_FALSE(status["band_held"].as<bool>());
+}
 
 void test_idle_telemetry_does_not_forget_confirmed_controls_or_toggle_the_same_antenna() {
     for (uint32_t clock : {0u, 0xfffffc00u}) {
@@ -605,6 +635,7 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_tune_response_and_uart_failure_are_not_success);
     RUN_TEST(test_meter_timeout_and_recovery_survive_clock_wrap);
+    RUN_TEST(test_last_band_survives_rf_silence_and_unknown_band_packets);
     RUN_TEST(test_absolute_selection_uses_numeric_ack_and_does_not_repeat_toggle);
     RUN_TEST(test_idle_telemetry_does_not_forget_confirmed_controls_or_toggle_the_same_antenna);
     RUN_TEST(test_startup_wait_preserves_a_full_rate_uart_burst);

@@ -14,7 +14,11 @@ Use an isolated test broker / HA installation for the following checks.
    Stop RF and let telemetry expire: the last observed readings must remain in
    HA with `held: true`. Valid zero-power packets must show zero power while
    keeping the last valid SWR/band. Resume RF and verify fresh values replace
-   the held values. Web/HTTP live readings still expire after three seconds.
+   the held values. Web/HTTP power and SWR still expire after three seconds.
+   LCD and browser must keep the same last band with `(last)` and
+   `band_held: true`; the next valid band removes that marker. On the LCD,
+   digital FWD/REF watts must match the live readings for both 100/1000 W
+   scales, show `--` on expiry, and show `0.0W` on actual zero-power frames.
 4. With real meter frames arriving, vary power beyond the documented thresholds:
    regular state publications must be at least 1000 ms apart. Hold readings steady
    or vary below thresholds: the latest state must be sent after 30000 ms. Verify

@@ -23,7 +23,7 @@ public:
         m_forwardFresh = state.meterValid && validPower(meter.forward_power_watts);
         m_reflectedFresh = state.meterValid && validPower(meter.reflected_power_watts);
         m_swrFresh = state.meterValid && std::isfinite(meter.swr) && meter.swr >= 1.0;
-        m_bandFresh = state.meterValid && meter.band > BAND_UNKNOWN && meter.band < BAND_COUNT;
+        m_bandFresh = state.meterValid && knownBand(meter.band);
         if (m_forwardFresh) {
             m_meter.forward_power_watts = meter.forward_power_watts;
             m_meter.forward_power_raw = meter.forward_power_raw;
@@ -34,6 +34,7 @@ public:
         }
         if (m_swrFresh) m_meter.swr = meter.swr;
         if (m_bandFresh) m_meter.band = meter.band;
+        else if (knownBand(state.lastBand)) m_meter.band = state.lastBand;
     }
 
     void write(JsonDocument& doc, const tuner_state_t& state) const {
@@ -43,6 +44,7 @@ public:
         doc["ref_power"] = m_meter.reflected_power_watts;
         doc["swr"] = m_meter.swr;
         doc["band"] = bandName(m_meter.band);
+        doc["band_held"] = knownBand(m_meter.band) && !m_bandFresh;
         doc["fwd_raw"] = nullptr;
         doc["ref_raw"] = nullptr;
         if (validPower(m_meter.forward_power_watts)) doc["fwd_raw"] = m_meter.forward_power_raw;

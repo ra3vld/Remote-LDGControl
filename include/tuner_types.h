@@ -83,6 +83,19 @@ struct tuner_state_t {
     tuner_ant_t antenna = ANT_UNKNOWN;
     bool meterValid = false;
     bool remote = false;
+    // Last observed band belongs to this source and survives RF silence.
+    tuner_band_t lastBand = BAND_UNKNOWN;
 };
+
+namespace ldg {
+inline bool knownBand(tuner_band_t band) { return band > BAND_UNKNOWN && band < BAND_COUNT; }
+inline tuner_band_t lastKnownBand(const tuner_state_t& state) {
+    return state.meterValid && knownBand(state.meter.band) ? state.meter.band :
+           knownBand(state.lastBand) ? state.lastBand : BAND_UNKNOWN;
+}
+inline bool bandIsHeld(const tuner_state_t& state) {
+    return knownBand(lastKnownBand(state)) && !(state.meterValid && knownBand(state.meter.band));
+}
+}
 
 #endif // TUNER_TYPES_H

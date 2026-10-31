@@ -101,6 +101,14 @@ async function run() {
     const shared = board();
     const a = await page(shared);
     const b = await page(shared);
+    a.socket.message({ fwd_power: 40, ref_power: 1, band: '30m', band_held: false });
+    assert.equal(a.element('bandValue').textContent, 'Band: 30m');
+    a.socket.message({ fwd_power: null, ref_power: null, band: '30m', band_held: true });
+    assert.equal(a.element('bandValue').textContent, 'Band: 30m (last)');
+    a.socket.message({ fwd_power: 45, ref_power: 1, band: '40m', band_held: false });
+    assert.equal(a.element('bandValue').textContent, 'Band: 40m');
+    a.socket.message({ band: 'unknown', band_held: false, source: 'remote' });
+    assert.equal(a.element('bandValue').textContent, 'Band: unknown');
     await a.click();
     assert.equal(shared.watts, 100);
     assert.equal(a.watts(), 100);

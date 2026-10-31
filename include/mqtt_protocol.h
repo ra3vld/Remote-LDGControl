@@ -79,7 +79,8 @@ inline void writeState(JsonDocument& doc, const tuner_state_t& state, bool textE
         doc["fwd_raw"] = nullptr;
         doc["ref_raw"] = nullptr;
     }
-    doc["band"] = state.meterValid ? bandName(meter.band) : "unknown";
+    doc["band"] = bandName(lastKnownBand(state));
+    doc["band_held"] = bandIsHeld(state);
     if (textEnums) {
         doc["mode"] = modeName(state.mode);
         doc["antenna"] = antennaName(state.antenna);
@@ -100,7 +101,8 @@ inline tuner_state_t readWebState(JsonVariantConst doc) {
     state.meter.swr = doc["swr"].is<double>() ? doc["swr"].as<double>() : unknown;
     state.meter.forward_power_raw = doc["fwd_raw"] | 0;
     state.meter.reflected_power_raw = doc["ref_raw"] | 0;
-    state.meter.band = parseBand(doc["band"].as<const char*>());
+    state.lastBand = parseBand(doc["band"].as<const char*>());
+    state.meter.band = (doc["band_held"] | false) ? BAND_UNKNOWN : state.lastBand;
     const int mode = doc["mode"].is<int>() ? doc["mode"].as<int>() : MODE_UNKNOWN;
     const int antenna = doc["antenna"].is<int>() ? doc["antenna"].as<int>() : ANT_UNKNOWN;
     if (mode >= MODE_UNKNOWN && mode <= MODE_BYPASS) state.mode = static_cast<tuner_mode_t>(mode);
