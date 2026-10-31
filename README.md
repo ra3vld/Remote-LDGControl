@@ -301,7 +301,7 @@ Display ↔ remote communication uses HTTP status polling and command POSTs (HTT
 
 | Topic relative to the base | Direction | Payload / retention |
 |---|---|---|
-| `/state` | Published | JSON snapshot, not retained |
+| `/state` | Published | Last observed measurement JSON, retained |
 | `/status` | Published | `online` / `offline`, retained; Last Will is `offline` |
 | `/command` | Subscribed | Command JSON; publish with QoS 0 and retain disabled |
 | `/command/response` | Published | Command result JSON, not retained |
@@ -318,6 +318,23 @@ back to its local UART tuner after a 3-second remote timeout. Local meter readin
 also expire after 3 seconds without a valid UART frame. While a remote command
 is running, its source stays selected even if polling is paused for a long tune;
 stale meter values still expire. `source` is `local` or `remote`. Commands follow the same active source.
+
+Home Assistant keeps the last observed power, SWR and band between RF bursts.
+Each measurement has a `held` attribute: `true` means the displayed value is
+being kept because no current valid value is available. A valid zero-power
+packet updates power to zero; an undefined SWR or unknown band keeps the last
+valid reading of that measurement. Before the first observation, the value is
+still unknown. `/state` also includes `telemetry_fresh` and a per-measurement
+`held` object. The web UI, LCD and HTTP live telemetry retain their existing
+three-second freshness check.
+
+The MQTT worker observes readings while offline and keeps them across MQTT
+reconnect/reconfiguration. Retained `/state` lets HA restore the last published
+snapshot when subscribing again; availability still follows the separate
+`online`/`offline` topic. History is in RAM, is cleared on a controller reboot,
+and resets when the active source changes so local and remote readings cannot
+be mixed. Command requests and responses remain non-retained. Existing HA
+entities receive the updated discovery configuration without recreation.
 
 Local antenna and mode values retain the last acknowledged command when RF
 telemetry goes quiet, including during a long tuning cycle. A telemetry timeout
@@ -342,6 +359,10 @@ The protocol cannot read back changes made at the tuner's front panel.
   and can already refer to another packet or to the remote tuner.
 - `rx_tail_hex`: the last 32 processed bytes, including rejected data and replies.
   This fixed-size tail can start or end inside a packet.
+- `last_command`: the latest completed UART command, its matching `ack`
+  (`null` when not received, `sync` for a complete Z response), `success`, and
+  `duration_ms`. Success also requires restoring metering; a failed tune is
+  reported as unsuccessful even when its `F` acknowledgement arrived.
 
 Capture several status responses while the RF input and frequency are constant.
 Compare top-level `fwd_raw` / `ref_raw`, the wire bytes, frame counters and driver
@@ -354,6 +375,11 @@ The UART RX ring is 2048 bytes: a 250 ms command-settling wait can receive
 960 bytes at 38400 baud, exceeding the framework's default 256-byte ring.
 This prevents that particular overflow; the actual tuner rate and line quality
 still require device verification.
+
+Entering control mode drains the old metering batch after `X` and retires its
+pending UART fault. A fault from already discarded telemetry must not reject
+a clean AUTO/MANUAL/BYPASS acknowledgement. New faults during the command
+exchange still fail the command and require synchronization before recovery.
 
 Application and web UI are separate flash images. Upload the matching LittleFS
 image with `pio run -e esp32-3248s035c -t uploadfs` and reload the browser after

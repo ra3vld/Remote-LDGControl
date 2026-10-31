@@ -186,6 +186,10 @@ void test_identities_and_all_discovery_payloads() {
             if (i < 6) {
                 TEST_ASSERT_EQUAL_STRING((identity.base + "/state").c_str(), doc["state_topic"]);
                 TEST_ASSERT_TRUE(doc["value_template"].is<const char*>());
+                if (i < 4) {
+                    TEST_ASSERT_EQUAL_STRING((identity.base + "/state").c_str(), doc["json_attributes_topic"]);
+                    TEST_ASSERT_TRUE(doc["json_attributes_template"].is<const char*>());
+                }
                 if (i < 2) {
                     TEST_ASSERT_EQUAL_STRING("power", doc["device_class"]);
                     TEST_ASSERT_EQUAL_STRING("W", doc["unit_of_measurement"]);
@@ -331,6 +335,105 @@ static void deliver(MqttSession& session, const std::string& topic, const std::s
     session.message(topic.c_str(), reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
 }
 
+void test_ha_keeps_last_readings_when_rf_stops_but_web_values_still_expire() {
+    TestBroker broker;
+    const auto id = mqttIdentity("aa:bb:cc:01:02:03");
+    MqttSession session(broker, id, execute);
+    TEST_ASSERT_TRUE(session.connected(false, "ESP32", "http://192.0.2.1/"));
+    auto state = measured(40, 1, 1.4);
+    settle(session, 0, state);
+    state.meterValid = false;
+    session.loop(4000, state);
+    JsonDocument ha, web;
+    TEST_ASSERT_FALSE(deserializeJson(ha, broker.messages.back().payload));
+    TEST_ASSERT_EQUAL_DOUBLE(40, ha["fwd_power"].as<double>());
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 1.4, ha["swr"].as<double>());
+    TEST_ASSERT_EQUAL_STRING("20m", ha["band"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("auto", ha["mode"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("A", ha["antenna"].as<const char*>());
+    writeState(web, state, false);
+    TEST_ASSERT_TRUE(web["fwd_power"].isNull());
+    TEST_ASSERT_TRUE(web["swr"].isNull());
+    TEST_ASSERT_TRUE(ha["held"]["fwd_power"].as<bool>());
+    TEST_ASSERT_TRUE(ha["held"]["swr"].as<bool>());
+    TEST_ASSERT_FALSE(ha["telemetry_fresh"].as<bool>());
+    TEST_ASSERT_TRUE(broker.messages.back().retained);
+}
+
+void test_zero_power_keeps_the_last_valid_swr_and_band_until_new_rf_arrives() {
+    TestBroker broker;
+    const auto id = mqttIdentity("aa:bb:cc:01:02:03");
+    MqttSession session(broker, id, execute);
+    TEST_ASSERT_TRUE(session.connected(false, "ESP32", "http://192.0.2.1/"));
+    settle(session, 0, measured(40, 1, 1.4));
+    auto idle = measured(0, 0, NAN);
+    idle.meter.band = BAND_UNKNOWN;
+    session.loop(1000, idle);
+    JsonDocument doc;
+    deserializeJson(doc, broker.messages.back().payload);
+    TEST_ASSERT_EQUAL_DOUBLE(0, doc["fwd_power"].as<double>());
+    TEST_ASSERT_EQUAL_DOUBLE(0, doc["ref_power"].as<double>());
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 1.4, doc["swr"].as<double>());
+    TEST_ASSERT_EQUAL_STRING("20m", doc["band"].as<const char*>());
+    TEST_ASSERT_FALSE(doc["held"]["fwd_power"].as<bool>());
+    TEST_ASSERT_TRUE(doc["held"]["swr"].as<bool>());
+    TEST_ASSERT_TRUE(doc["held"]["band"].as<bool>());
+    auto next = measured(55, 2, 1.2);
+    next.meter.band = BAND_40M;
+    session.loop(2000, next);
+    deserializeJson(doc, broker.messages.back().payload);
+    TEST_ASSERT_EQUAL_DOUBLE(55, doc["fwd_power"].as<double>());
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 1.2, doc["swr"].as<double>());
+    TEST_ASSERT_EQUAL_STRING("40m", doc["band"].as<const char*>());
+    for (const char* key : {"fwd_power", "ref_power", "swr", "band"})
+        TEST_ASSERT_FALSE(doc["held"][key].as<bool>());
+    TEST_ASSERT_TRUE(mqttPacketFits(id.base + "/state", broker.messages.back().payload.size()));
+}
+
+void test_cold_start_and_source_changes_do_not_invent_or_mix_measurements() {
+    TestBroker broker;
+    const auto id = mqttIdentity("aa:bb:cc:01:02:03");
+    MqttSession session(broker, id, execute);
+    TEST_ASSERT_TRUE(session.connected(false, "ESP32", "http://192.0.2.1/"));
+    settle(session, 0, tuner_state_t{});
+    JsonDocument doc;
+    deserializeJson(doc, broker.messages.back().payload);
+    TEST_ASSERT_TRUE(doc["fwd_power"].isNull());
+    TEST_ASSERT_TRUE(doc["swr"].isNull());
+    TEST_ASSERT_FALSE(doc["held"]["swr"].as<bool>());
+    session.loop(1000, measured(40, 1, 1.4));
+    tuner_state_t remote;
+    remote.remote = true;
+    session.loop(2000, remote);
+    deserializeJson(doc, broker.messages.back().payload);
+    TEST_ASSERT_TRUE(doc["fwd_power"].isNull());
+    TEST_ASSERT_EQUAL_STRING("unknown", doc["band"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("remote", doc["source"].as<const char*>());
+    remote = measured(200, 2, 1.2); remote.remote = true;
+    session.loop(3000, remote);
+    remote.meterValid = false;
+    session.loop(4000, remote);
+    deserializeJson(doc, broker.messages.back().payload);
+    TEST_ASSERT_EQUAL_DOUBLE(200, doc["fwd_power"].as<double>());
+    session.loop(5000, tuner_state_t{});
+    deserializeJson(doc, broker.messages.back().payload);
+    TEST_ASSERT_TRUE(doc["fwd_power"].isNull());
+    TEST_ASSERT_EQUAL_STRING("local", doc["source"].as<const char*>());
+}
+
+void test_a_short_rf_burst_during_discovery_is_kept_for_the_first_state_publish() {
+    TestBroker broker;
+    const auto id = mqttIdentity("aa:bb:cc:01:02:03");
+    MqttSession session(broker, id, execute);
+    TEST_ASSERT_TRUE(session.connected(true, "ESP32", "http://192.0.2.1/"));
+    session.loop(0, measured(40, 1, 1.4));
+    settle(session, 4000, tuner_state_t{});
+    JsonDocument doc;
+    deserializeJson(doc, broker.retained[id.base + "/state"]);
+    TEST_ASSERT_EQUAL_DOUBLE(40, doc["fwd_power"].as<double>());
+    TEST_ASSERT_TRUE(doc["held"]["fwd_power"].as<bool>());
+}
+
 void test_oversized_session_packet_reports_topic_and_retries() {
     TestBroker broker;
     const auto id = mqttIdentity("aa:bb:cc:01:02:03");
@@ -378,9 +481,9 @@ void test_session_reconnect_ha_birth_and_discovery_cleanup() {
     TEST_ASSERT_EQUAL_STRING("online", broker.retained[id.base + "/status"].c_str());
     const auto state = measured(0, 0, 1);
     settle(session, 0, state);
-    TEST_ASSERT_EQUAL_UINT(13, broker.retained.size());
+    TEST_ASSERT_EQUAL_UINT(14, broker.retained.size());
     TEST_ASSERT_EQUAL_STRING((id.base + "/state").c_str(), broker.messages.back().topic.c_str());
-    TEST_ASSERT_FALSE(broker.messages.back().retained);
+    TEST_ASSERT_TRUE(broker.messages.back().retained);
     size_t count = broker.messages.size();
     deliver(session, HA_STATUS_TOPIC, "offline");
     session.loop(1, state);
@@ -392,7 +495,7 @@ void test_session_reconnect_ha_birth_and_discovery_cleanup() {
     broker.retained.clear();
     TEST_ASSERT_TRUE(session.connected(true, "ESP32 remote", "https://192.0.2.2/"));
     settle(session, 2, state);
-    TEST_ASSERT_EQUAL_UINT(13, broker.retained.size());
+    TEST_ASSERT_EQUAL_UINT(14, broker.retained.size());
     JsonDocument doc;
     deserializeJson(doc, broker.retained[discoveryTopic(id, 0)]);
     TEST_ASSERT_EQUAL_STRING("https://192.0.2.2/", doc["device"]["configuration_url"]);
@@ -400,7 +503,7 @@ void test_session_reconnect_ha_birth_and_discovery_cleanup() {
     TEST_ASSERT_EQUAL_STRING("offline", broker.retained[id.base + "/status"].c_str());
     TEST_ASSERT_TRUE(session.connected(false, "ESP32 remote", "https://192.0.2.2/"));
     settle(session, 3, state);
-    TEST_ASSERT_EQUAL_UINT(1, broker.retained.size());
+    TEST_ASSERT_EQUAL_UINT(2, broker.retained.size());
     count = broker.messages.size();
     deliver(session, HA_STATUS_TOPIC, "online");
     session.loop(4, state);
@@ -416,7 +519,7 @@ void test_session_two_devices_commands_and_error_responses() {
     TEST_ASSERT_TRUE(b.connected(true, "ESP32", "https://192.0.2.2/"));
     settle(a, 0, measured());
     settle(b, 0, measured());
-    TEST_ASSERT_EQUAL_UINT(26, broker.retained.size());
+    TEST_ASSERT_EQUAL_UINT(28, broker.retained.size());
     executedCommands = 0;
     commandResult = true;
     const uint8_t bytes[] = {'T', 'F', 'P', 'A', 'C', 'M'};
@@ -499,6 +602,10 @@ int main() {
     RUN_TEST(test_long_remote_command_retains_source_but_expires_meter_values);
     RUN_TEST(test_oversized_session_packet_reports_topic_and_retries);
     RUN_TEST(test_session_times_interval_from_completed_write);
+    RUN_TEST(test_ha_keeps_last_readings_when_rf_stops_but_web_values_still_expire);
+    RUN_TEST(test_zero_power_keeps_the_last_valid_swr_and_band_until_new_rf_arrives);
+    RUN_TEST(test_cold_start_and_source_changes_do_not_invent_or_mix_measurements);
+    RUN_TEST(test_a_short_rf_burst_during_discovery_is_kept_for_the_first_state_publish);
     RUN_TEST(test_session_reconnect_ha_birth_and_discovery_cleanup);
     RUN_TEST(test_session_two_devices_commands_and_error_responses);
     RUN_TEST(test_session_failed_publishes_retry_and_keep_newest_state);

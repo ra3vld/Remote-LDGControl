@@ -22,6 +22,36 @@ void setUp() {
 }
 void tearDown() {}
 static tuner_state_t state() { return {}; }
+static tuner_state_t observedState;
+static tuner_state_t observed() { return observedState; }
+
+void test_readings_observed_offline_survive_reconnect_and_session_reconfiguration() {
+    WiFiClient wifi;
+    MqttHandler mqtt;
+    observedState = tuner_state_t{};
+    observedState.meterValid = true;
+    observedState.meter.forward_power_watts = 40;
+    observedState.meter.reflected_power_watts = 1;
+    observedState.meter.swr = 1.4;
+    observedState.meter.band = BAND_20M;
+    WiFi.wifiStatus = 0;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi, nullptr, observed));
+    mqtt.loop(); // RF is present while there is no Wi-Fi/MQTT connection.
+    observedState.meterValid = false;
+    WiFi.wifiStatus = WL_CONNECTED;
+    for (unsigned i = 0; i < 16; ++i) mqtt.loop();
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, PubSubClient::instance->lastPublishedPayload));
+    TEST_ASSERT_EQUAL_DOUBLE(40, doc["fwd_power"].as<double>());
+    TEST_ASSERT_TRUE(doc["held"]["fwd_power"].as<bool>());
+    TEST_ASSERT_TRUE(PubSubClient::instance->lastRetained);
+    mqtt.requestReconfigure();
+    for (unsigned i = 0; i < 16; ++i) mqtt.loop();
+    TEST_ASSERT_FALSE(deserializeJson(doc, PubSubClient::instance->lastPublishedPayload));
+    TEST_ASSERT_EQUAL_DOUBLE(40, doc["fwd_power"].as<double>());
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 1.4, doc["swr"].as<double>());
+    TEST_ASSERT_EQUAL_STRING("20m", doc["band"].as<const char*>());
+}
 
 void test_disabled_and_initialization_error_are_distinct() {
     WiFiClient wifi;
@@ -205,6 +235,7 @@ void test_mqtt_initially_disabled_can_be_enabled_without_reboot() {
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_disabled_and_initialization_error_are_distinct);
+    RUN_TEST(test_readings_observed_offline_survive_reconnect_and_session_reconfiguration);
     RUN_TEST(test_broker_failures_retry_and_recovery_preserves_error);
     RUN_TEST(test_wifi_loss_and_keepalive_timeout);
     RUN_TEST(test_session_setup_and_publish_failures_keep_their_topic_and_do_not_spam);

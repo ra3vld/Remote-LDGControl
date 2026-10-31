@@ -274,6 +274,34 @@ void test_command_specific_acknowledgements() {
     TEST_ASSERT_TRUE(tuner.sync());
 }
 
+void test_mode_commands_do_not_inherit_a_fault_from_the_drained_meter_batch() {
+    for (uint8_t command : {'C', 'M', 'P'}) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        HardwareSerial::written = [](HardwareSerial& serial, uint8_t sent) {
+            if (sent == 'X') {
+                serial.receiveError(UART_FRAME_ERROR);
+                for (uint8_t b : frame(150, 3)) serial.bytes.push_back(b);
+            }
+            if (sent == 'C') serial.bytes.push_back('A');
+            if (sent == 'M') serial.bytes.push_back('M');
+            if (sent == 'P') serial.bytes.push_back('P');
+        };
+        TEST_ASSERT_TRUE(command == 'C' ? tuner.setAutoMode() :
+                         command == 'M' ? tuner.setManualMode() : tuner.bypass());
+        TEST_ASSERT_EQUAL_INT(command == 'C' ? MODE_AUTO :
+                              command == 'M' ? MODE_MANUAL : MODE_BYPASS, tuner.getMode());
+        JsonDocument status;
+        ldg::writeTunerDiagnostics(status.to<JsonObject>(), tuner.getDiagnostics(), millis());
+        const char sent[] = {char(command), '\0'};
+        const char ack[] = {char(command == 'C' ? 'A' : command), '\0'};
+        TEST_ASSERT_EQUAL_STRING(sent, status["last_command"]["command"].as<const char*>());
+        TEST_ASSERT_EQUAL_STRING(ack, status["last_command"]["ack"].as<const char*>());
+        TEST_ASSERT_TRUE(status["last_command"]["success"].as<bool>());
+    }
+}
+
 void test_full_and_memory_tune_wait_for_complete_long_cycle() {
     for (uint8_t cmd : {'T', 'F'}) for (uint32_t duration : {2000u, 15000u, 20000u}) {
         TunerProtocol tuner;
@@ -585,6 +613,7 @@ int main() {
     RUN_TEST(test_uart_diagnostics_are_bounded_copies_in_wire_order_for_any_read_size);
     RUN_TEST(test_invalid_trailers_are_counted_separately_from_driver_errors);
     RUN_TEST(test_command_specific_acknowledgements);
+    RUN_TEST(test_mode_commands_do_not_inherit_a_fault_from_the_drained_meter_batch);
     RUN_TEST(test_full_and_memory_tune_wait_for_complete_long_cycle);
     RUN_TEST(test_post_ack_guard_includes_wake_and_survives_clock_wrap);
     RUN_TEST(test_sync_requires_complete_signature_and_rejects_wrong_case);

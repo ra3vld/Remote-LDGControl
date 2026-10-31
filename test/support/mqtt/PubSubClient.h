@@ -16,6 +16,8 @@ struct PubSubClient {
     const char* server = nullptr;
     uint16_t serverPort = 0;
     std::string lastConnectedHost;
+    std::string lastPublishedTopic, lastPublishedPayload;
+    bool lastRetained = false;
     explicit PubSubClient(WiFiClient&) { instance = this; }
     void setServer(const char* host, uint16_t port) { server = host; serverPort = port; }
     void setKeepAlive(int) {}
@@ -39,6 +41,12 @@ struct PubSubClient {
     }
     void disconnect() { online = false; code = -1; }
     int state() const { return code; }
-    bool publish(const char*, const char*, bool) { return online && publishOk; }
+    bool publish(const char* topic, const char* payload, bool retain) {
+        if (!online || !publishOk) return false;
+        lastPublishedTopic = topic;
+        lastPublishedPayload = payload;
+        lastRetained = retain;
+        return true;
+    }
     bool subscribe(const char*, int) { return online && subscribeOk; }
 };

@@ -40,6 +40,7 @@ private:
     mqtt_command_handler_t m_commandHandler = nullptr;
     // PubSubClient retains the hostname pointer passed to setServer().
     std::string m_broker;
+    ldg::MqttReadings m_readings;
     ldg::MqttSession* m_session = nullptr;
     ldg::MqttIdentity m_identity;
     tuner_state_getter_t m_stateGetter = nullptr;

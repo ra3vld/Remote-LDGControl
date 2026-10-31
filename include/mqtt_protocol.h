@@ -163,6 +163,11 @@ inline void writeDiscovery(JsonDocument& doc, const MqttIdentity& id, size_t ind
     } else {
         doc["state_topic"] = id.base + "/state";
         doc["value_template"] = std::string("{{ value_json.") + entity.key + " }}";
+        if (index < 4) {
+            doc["json_attributes_topic"] = id.base + "/state";
+            doc["json_attributes_template"] = std::string("{{ {'held': value_json.get('held', {}).get('") +
+                entity.key + "', true), 'source': value_json.get('source', 'unknown')} | to_json }}";
+        }
         if (index < 2) {
             doc["device_class"] = "power";
             doc["unit_of_measurement"] = "W";

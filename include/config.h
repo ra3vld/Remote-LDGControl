@@ -43,7 +43,7 @@
 #define MQTT_USERNAME           "ldgcontroller"
 #define MQTT_PASSWORD           "change_me"
 #define MQTT_QOS                1
-#define MQTT_RETAIN_TELEMETRY   false
+#define MQTT_RETAIN_TELEMETRY   true
 #define LDG_MQTT_KEEPALIVE      60
 
 // MQTT topics and Home Assistant identities are generated per-device from MAC.

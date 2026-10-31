@@ -15,6 +15,9 @@ struct TunerDiagnostics {
     uint8_t lastFrame[8]{};
     uint8_t rxTail[32]{};
     uint8_t rxTailCount = 0;
+    bool hasCommand = false, commandSuccess = false;
+    uint8_t command = 0, response = 0;
+    uint32_t commandDurationMs = 0;
 };
 
 inline void writeTunerDiagnostics(JsonObject out, const TunerDiagnostics& d, uint32_t now) {
@@ -29,6 +32,20 @@ inline void writeTunerDiagnostics(JsonObject out, const TunerDiagnostics& d, uin
     errors["frame"] = d.frameErrors;
     errors["parity"] = d.parityErrors;
     errors["break"] = d.breaks;
+    out["last_command"] = nullptr;
+    if (d.hasCommand) {
+        JsonObject command = out["last_command"].to<JsonObject>();
+        char sent[] = {char(d.command), '\0'};
+        char reply[] = {char(d.response), '\0'};
+        command["command"] = sent;
+        command["ack"] = nullptr;
+        if (d.response) {
+            if (d.command == 'Z') command["ack"] = "sync";
+            else command["ack"] = reply;
+        }
+        command["success"] = d.commandSuccess;
+        command["duration_ms"] = d.commandDurationMs;
+    }
     out["frame_age_ms"] = nullptr;
     out["last_frame_hex"] = nullptr;
     out["forward_raw"] = nullptr;

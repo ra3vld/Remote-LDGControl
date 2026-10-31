@@ -93,7 +93,7 @@ bool MqttHandler::configure() {
         return false;
     }
     m_session = new (std::nothrow) ldg::MqttSession(*this, m_identity, m_commandHandler,
-                                    []() -> uint32_t { return millis(); });
+                                    []() -> uint32_t { return millis(); }, &m_readings);
     if (!m_session) {
         delete m_client;
         m_client = nullptr;
@@ -168,6 +168,9 @@ void MqttHandler::disconnect() {
 
 void MqttHandler::loop() {
     if (m_reconfigureRequested.exchange(false) && m_wifiClient) configure();
+    // Observe RF even while the broker is offline. The history also survives
+    // client/session reconstruction requested by the reconnect button.
+    if (m_stateGetter) m_readings.observe(m_stateGetter());
     if (!m_client) return;
     if (WiFi.status() != WL_CONNECTED) {
         if (isConnected()) {

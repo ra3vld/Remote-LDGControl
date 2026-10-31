@@ -10,7 +10,11 @@ Use an isolated test broker / HA installation for the following checks.
    its discovery configs with `mosquitto_sub -h BROKER -t 'homeassistant/+/ldg_MAC/+/config' -v`.
    Replace BROKER and MAC; add the broker's authentication flags if needed.
 3. Observe `ldg/tuner/MAC/#`. `/status` is retained `online`; `/state` is JSON
-   and not retained. Before receiving measurements, readings are null/unknown.
+   and retained. Before receiving measurements, readings are null/unknown.
+   Stop RF and let telemetry expire: the last observed readings must remain in
+   HA with `held: true`. Valid zero-power packets must show zero power while
+   keeping the last valid SWR/band. Resume RF and verify fresh values replace
+   the held values. Web/HTTP live readings still expire after three seconds.
 4. With real meter frames arriving, vary power beyond the documented thresholds:
    regular state publications must be at least 1000 ms apart. Hold readings steady
    or vary below thresholds: the latest state must be sent after 30000 ms. Verify
@@ -21,7 +25,8 @@ Use an isolated test broker / HA installation for the following checks.
    must refresh. Do not use retained command messages. Check actual antenna/mode
    and tune results on the tuner.
 6. Restart HA, then the broker. Expect the same device/entity IDs, all 12 discovery
-   configurations, fresh state, and command subscriptions after reconnect.
+   configurations, the retained last-reading state, and command subscriptions
+   after reconnect. The `held` attributes must distinguish preserved readings.
 7. Abruptly power off the controller. After the broker detects the lost connection
    (allow for the 60-second MQTT keepalive), `/status` must become retained `offline`
    and HA entities unavailable. Restart and expect availability/state recovery.
@@ -31,7 +36,8 @@ Use an isolated test broker / HA installation for the following checks.
 9. On a display controller, connect a remote with a distinct band, mode, and
    antenna. MQTT and web/SSE must report those remote values and `source: remote`;
    HA commands must reach the remote tuner. Disconnect it and verify local values
-   and routing return. Also check the 60-second timeout for a silent remote stream.
+   and routing return. Check the three-second timeout for a silent remote stream;
+   old remote readings must not be presented as local measurements.
 10. Disable discovery with the broker still configured and reachable. After the
     restart, this board's 12 retained config records must be gone, while normal
     state and command topics work. Re-enable and expect the same IDs to return.

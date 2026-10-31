@@ -1,7 +1,8 @@
 #ifndef MQTT_SESSION_H
 #define MQTT_SESSION_H
 
-#include "mqtt_protocol.h"
+#include "mqtt_readings.h"
+#include "config.h"
 
 namespace ldg {
 
@@ -17,8 +18,12 @@ public:
 class MqttSession {
 public:
     MqttSession(MqttTransport& transport, const MqttIdentity& identity,
-                bool (*commandHandler)(uint8_t), uint32_t (*clock)() = nullptr)
-        : m_transport(transport), m_identity(identity), m_commandHandler(commandHandler), m_clock(clock) {}
+                bool (*commandHandler)(uint8_t), uint32_t (*clock)() = nullptr,
+                MqttReadings* readings = nullptr)
+        : m_transport(transport), m_identity(identity), m_commandHandler(commandHandler), m_clock(clock),
+          m_readings(readings ? readings : &m_ownedReadings) {}
+    MqttSession(const MqttSession&) = delete;
+    MqttSession& operator=(const MqttSession&) = delete;
 
     bool connected(bool discoveryEnabled, const char* model, const char* configurationUrl) {
         m_discoveryEnabled = discoveryEnabled;
@@ -34,6 +39,7 @@ public:
     void requestImmediate() { m_schedule.requestImmediate(); }
 
     void loop(uint32_t now, const tuner_state_t& state) {
+        m_readings->observe(state);
         if (m_discoveryIndex < MQTT_ENTITY_COUNT) {
             JsonDocument doc;
             if (m_discoveryEnabled)
@@ -48,10 +54,10 @@ public:
         }
         if (m_schedule.due(now, state)) {
             JsonDocument doc;
-            writeState(doc, state);
+            m_readings->write(doc, state);
             std::string payload;
             serializeJson(doc, payload);
-            if (send(m_identity.base + "/state", payload, false))
+            if (send(m_identity.base + "/state", payload, MQTT_RETAIN_TELEMETRY))
                 m_schedule.published(m_clock ? m_clock() : now, state);
         }
     }
@@ -96,6 +102,8 @@ private:
     MqttIdentity m_identity;
     bool (*m_commandHandler)(uint8_t);
     uint32_t (*m_clock)();
+    MqttReadings m_ownedReadings;
+    MqttReadings* m_readings;
     MqttStateSchedule m_schedule;
     bool m_discoveryEnabled = true;
     size_t m_discoveryIndex = MQTT_ENTITY_COUNT;

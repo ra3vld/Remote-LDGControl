@@ -135,6 +135,9 @@ bool TunerProtocol::switchToControlMode() {
     if (!sendCommand(TUNER_CMD_METER_STOP)) return false;
     // Discard the final meter frame that was already in flight before X.
     while (m_serial->available()) m_serial->read();
+    // A reported fault in that discarded batch must not reject the next clean
+    // command acknowledgement. New faults during the exchange are still fatal.
+    m_rxErrorPending.exchange(false);
     m_meterActive = false;
     return true;
 }
@@ -174,6 +177,7 @@ char TunerProtocol::exchangeCommand(uint8_t cmd) {
 char TunerProtocol::controlResponse(uint8_t cmd) {
     TunerLock lock(m_mutex);
     if (!lock) return TUNER_RESP_ERROR;
+    const uint32_t started = millis();
     char response = TUNER_RESP_ERROR;
     if (switchToControlMode()) {
         bool ready = true;
@@ -195,7 +199,17 @@ char TunerProtocol::controlResponse(uint8_t cmd) {
         m_mode = MODE_UNKNOWN; // A tuning cycle may change relay state; no bypass status is returned.
     publishSnapshot(response != TUNER_RESP_ERROR);
     // A command is unsuccessful if metering could not be restored either.
-    if (!switchToMeterMode()) { m_needsSync = true; return TUNER_RESP_ERROR; }
+    const bool meterRestored = switchToMeterMode();
+    const bool failedTune = (cmd == TUNER_CMD_MEM_TUNE || cmd == TUNER_CMD_FULL_TUNE) &&
+                            response == TUNER_RESP_FAIL;
+    portENTER_CRITICAL(&m_snapshotMux);
+    m_diagnostics.hasCommand = true;
+    m_diagnostics.command = cmd;
+    m_diagnostics.response = response != TUNER_RESP_ERROR ? uint8_t(response) : 0;
+    m_diagnostics.commandSuccess = meterRestored && response != TUNER_RESP_ERROR && !failedTune;
+    m_diagnostics.commandDurationMs = millis() - started;
+    portEXIT_CRITICAL(&m_snapshotMux);
+    if (!meterRestored) { m_needsSync = true; return TUNER_RESP_ERROR; }
     return response;
 }
 
