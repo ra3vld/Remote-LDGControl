@@ -281,6 +281,10 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     doc["uptime_ms"] = millis();
     doc["reset_reason"] = int(esp_reset_reason());
     doc["firmware_build"] = __DATE__ " " __TIME__;
+    if (self->getTuner()) {
+        ldg::writeTunerDiagnostics(doc["uart"].to<JsonObject>(),
+            self->getTuner()->getDiagnostics(), millis());
+    }
     const ldg::MqttStatus mqttStatus = self->getMqttStatusGetter()
         ? self->getMqttStatusGetter()() : ldg::MqttStatus{};
     JsonObject mqtt = doc["mqtt"].to<JsonObject>();

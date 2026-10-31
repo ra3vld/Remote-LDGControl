@@ -68,6 +68,23 @@ bool TunerProtocol::begin(uint8_t rxPin, uint8_t txPin, uint32_t baud) {
     m_mutex = xSemaphoreCreateRecursiveMutex();
     m_serial = new (std::nothrow) HardwareSerial(TUNER_UART_NUM);
     if (!m_mutex || !m_serial) return false;
+    // S/X deliberately wait 250 ms. At 38400 8N1 up to 960 bytes can arrive
+    // then, exceeding HardwareSerial's default 256-byte receive ring.
+    if (m_serial->setRxBufferSize(2048) < 2048) return false;
+    m_serial->onReceiveError([this](hardwareSerial_error_t error) {
+        if (error == UART_NO_ERROR) return;
+        portENTER_CRITICAL(&m_snapshotMux);
+        switch (error) {
+            case UART_BUFFER_FULL_ERROR: ++m_diagnostics.bufferFull; break;
+            case UART_FIFO_OVF_ERROR: ++m_diagnostics.fifoOverflow; break;
+            case UART_FRAME_ERROR: ++m_diagnostics.frameErrors; break;
+            case UART_PARITY_ERROR: ++m_diagnostics.parityErrors; break;
+            case UART_BREAK_ERROR: ++m_diagnostics.breaks; break;
+            default: break;
+        }
+        portEXIT_CRITICAL(&m_snapshotMux);
+        m_rxErrorPending.store(true);
+    });
     m_serial->begin(baud, SERIAL_8N1, rxPin, txPin);
     m_connected = true;
 
@@ -196,7 +213,7 @@ bool TunerProtocol::selectAntenna(tuner_ant_t antenna) {
     if (getState().antenna == antenna) {
         // A known port needs no relay toggle, but a failed meter restart must
         // still be recovered before reporting a successful operation.
-        return !m_needsSync || sync();
+        return (!m_needsSync && isConnected()) || sync();
     }
     if (!toggleAntenna()) return false;
     return m_antenna == antenna || (toggleAntenna() && m_antenna == antenna);
@@ -246,11 +263,26 @@ tuner_state_t TunerProtocol::getState() const {
     portENTER_CRITICAL(&m_snapshotMux);
     tuner_state_t state = m_snapshot;
     const uint32_t meterAge = millis() - m_lastMeterMs;
-    const bool connected = m_seenResponse && millis() - m_lastResponseMs <= TELEMETRY_TIMEOUT_MS;
     portEXIT_CRITICAL(&m_snapshotMux);
     state.meterValid = state.meterValid && meterAge <= TELEMETRY_TIMEOUT_MS;
-    if (!connected) { state.mode = MODE_UNKNOWN; state.antenna = ANT_UNKNOWN; }
+    // Meter silence is not evidence that a relay or AUTO/MANUAL setting changed.
+    // Keep the last acknowledged controls; connectivity has its own accessor.
     return state;
+}
+
+ldg::TunerDiagnostics TunerProtocol::getDiagnostics() const {
+    portENTER_CRITICAL(&m_snapshotMux);
+    ldg::TunerDiagnostics result = m_diagnostics;
+    const uint8_t next = m_rxTailNext;
+    portEXIT_CRITICAL(&m_snapshotMux);
+    // Return the ring in wire order, including when it wrapped mid-frame.
+    if (result.rxTailCount == sizeof(result.rxTail)) {
+        uint8_t ring[sizeof(result.rxTail)];
+        memcpy(ring, result.rxTail, sizeof(ring));
+        for (unsigned i = 0; i < sizeof(result.rxTail); ++i)
+            result.rxTail[i] = ring[(next + i) % sizeof(ring)];
+    }
+    return result;
 }
 
 tuner_mode_t TunerProtocol::getMode() const { return getState().mode; }
@@ -319,6 +351,9 @@ void TunerProtocol::processMeterByte(uint8_t b) {
         }
     } else {
         // Protocol error
+        portENTER_CRITICAL(&m_snapshotMux);
+        ++m_diagnostics.framingErrors;
+        portEXIT_CRITICAL(&m_snapshotMux);
         m_meterIdx = 0;
         m_eomCount = 0;
         m_state = State::ERROR;
@@ -353,6 +388,14 @@ void TunerProtocol::publishMeterData() {
 
     m_meterData.band = decodeBand(band_raw);
 
+    portENTER_CRITICAL(&m_snapshotMux);
+    ++m_diagnostics.frames;
+    m_diagnostics.hasFrame = true;
+    m_diagnostics.lastFrameMs = millis();
+    m_diagnostics.psuVoltage = voltage;
+    memcpy(m_diagnostics.lastFrame, m_meterBuf, TUNER_METER_DATA_LEN);
+    m_diagnostics.lastFrame[6] = m_diagnostics.lastFrame[7] = 0x3b;
+    portEXIT_CRITICAL(&m_snapshotMux);
     m_hasMeterData = true;
     publishSnapshot(true, true);
     if (m_meterCallback) {
@@ -388,8 +431,26 @@ void TunerProtocol::process() {
     TunerLock lock(m_mutex, 0);
     if (m_mutex && !lock) return;
 
-    while (m_serial->available()) {
-        uint8_t b = m_serial->read();
+    uint8_t tail[32];
+    unsigned count = 0;
+    bool discard = false;
+    for (;;) {
+        const int available = m_serial->available();
+        if (m_rxErrorPending.exchange(false)) {
+            // The event does not identify the damaged byte in the RX ring.
+            // Drain this batch, then find a new frame boundary. Never turn an
+            // acknowledgement from a damaged batch into command success.
+            discard = true;
+            m_meterIdx = m_eomCount = 0;
+            if (m_state != State::RESPONSE) m_state = State::ERROR;
+            else if (m_waitingForResponse) m_pendingResponse = TUNER_RESP_ERROR;
+        }
+        if (available <= 0) break;
+        const int value = m_serial->read();
+        if (value < 0) break;
+        const uint8_t b = uint8_t(value);
+        tail[count++ % sizeof(tail)] = b;
+        if (discard) continue;
 
         switch (m_state) {
             case State::RESPONSE:
@@ -405,11 +466,26 @@ void TunerProtocol::process() {
                     m_eomCount++;
                     if (m_eomCount >= 2) {
                         m_state = State::METER;
+                        portENTER_CRITICAL(&m_snapshotMux);
+                        ++m_diagnostics.resyncs;
+                        portEXIT_CRITICAL(&m_snapshotMux);
                         m_eomCount = 0;
                         m_meterIdx = 0;
                     }
                 } else { m_eomCount = 0; }
                 break;
         }
+    }
+    if (count) {
+        const unsigned kept = count < sizeof(tail) ? count : sizeof(tail);
+        portENTER_CRITICAL(&m_snapshotMux);
+        m_diagnostics.rxBytes += count;
+        for (unsigned i = count - kept; i < count; ++i) {
+            m_diagnostics.rxTail[m_rxTailNext] = tail[i % sizeof(tail)];
+            m_rxTailNext = (m_rxTailNext + 1) % sizeof(m_diagnostics.rxTail);
+            if (m_diagnostics.rxTailCount < sizeof(m_diagnostics.rxTail))
+                ++m_diagnostics.rxTailCount;
+        }
+        portEXIT_CRITICAL(&m_snapshotMux);
     }
 }

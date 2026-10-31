@@ -5,8 +5,10 @@
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <atomic>
 
 #include "tuner_types.h"
+#include "tuner_diagnostics.h"
 
 // Callback type for meter updates
 typedef void (*meter_callback_t)(const tuner_meter_t* meter);
@@ -37,6 +39,7 @@ public:
 
     // Get current meter readings (updated by background task)
     tuner_state_t getState() const;
+    ldg::TunerDiagnostics getDiagnostics() const;
 
     // Get tuner mode (derived from responses)
     tuner_mode_t getMode() const;
@@ -115,6 +118,9 @@ private:
     uint32_t m_lastMeterMs = 0;
     uint32_t m_lastResponseMs = 0;
     bool m_seenResponse = false;
+    ldg::TunerDiagnostics m_diagnostics;
+    uint8_t m_rxTailNext = 0;
+    std::atomic<bool> m_rxErrorPending{false};
     static constexpr uint32_t TELEMETRY_TIMEOUT_MS = 3000;
 };
 

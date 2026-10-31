@@ -319,6 +319,50 @@ also expire after 3 seconds without a valid UART frame. While a remote command
 is running, its source stays selected even if polling is paused for a long tune;
 stale meter values still expire. `source` is `local` or `remote`. Commands follow the same active source.
 
+Local antenna and mode values retain the last acknowledged command when RF
+telemetry goes quiet, including during a long tuning cycle. A telemetry timeout
+does not mean the antenna relay changed. `connected` and meter validity still
+expire independently. Selecting the same known antenna never toggles its relay;
+after a connection timeout it first checks communication with `Z`. A failed or
+missing antenna/mode acknowledgement still makes that control state unknown.
+The protocol cannot read back changes made at the tuner's front panel.
+
+### Diagnosing unstable meter readings
+
+`GET /api/status` includes a bounded `uart` diagnostic snapshot for this board's
+**local UART**, even when the active meter `source` is `remote`:
+
+- `rx_bytes`, `frames`, `framing_errors`, `resyncs`: processed bytes, complete
+  meter packets, invalid packet trailers, and recovered packet boundaries.
+- `errors`: driver events for RX buffer full, FIFO overflow, UART frame/parity
+  errors and break conditions. Counters are cumulative since boot.
+- `last_frame_hex`: the last accepted 6-byte payload plus `3b3b`, in wire order;
+  `forward_raw`, `reflected_raw`, `band_raw`, `psu_voltage`, and `frame_age_ms`
+  describe that same packet. The top-level active snapshot is read separately
+  and can already refer to another packet or to the remote tuner.
+- `rx_tail_hex`: the last 32 processed bytes, including rejected data and replies.
+  This fixed-size tail can start or end inside a packet.
+
+Capture several status responses while the RF input and frequency are constant.
+Compare top-level `fwd_raw` / `ref_raw`, the wire bytes, frame counters and driver
+errors before attributing jumps to the display. LDG meter packets have no
+checksum: a complete packet alone does not prove its payload is uncorrupted.
+The firmware discards a receive batch associated with a driver error, then
+resynchronizes; it does not clamp readings to the selected display scale.
+
+The UART RX ring is 2048 bytes: a 250 ms command-settling wait can receive
+960 bytes at 38400 baud, exceeding the framework's default 256-byte ring.
+This prevents that particular overflow; the actual tuner rate and line quality
+still require device verification.
+
+Application and web UI are separate flash images. Upload the matching LittleFS
+image with `pio run -e esp32-3248s035c -t uploadfs` and reload the browser after
+updating firmware. The current web buttons say `Enable bypass` and `Set Auto`
+or `Set Manual`. Older `Bypass` / `Auto Mode` labels indicate an older loaded
+page or filesystem. Bypass enables passthrough; no bypass-off command is
+documented. The AUTO/MANUAL button changes the tuning policy and is not a
+verified bypass-off operation.
+
 ### Adaptive state updates
 
 State is sent at most once per second during significant changes, and every

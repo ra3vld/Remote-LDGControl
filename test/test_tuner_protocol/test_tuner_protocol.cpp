@@ -104,6 +104,158 @@ void test_absolute_selection_uses_numeric_ack_and_does_not_repeat_toggle() {
     TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_UNKNOWN));
 }
 
+void test_idle_telemetry_does_not_forget_confirmed_controls_or_toggle_the_same_antenna() {
+    for (uint32_t clock : {0u, 0xfffffc00u}) {
+        testMillis = clock;
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        unsigned toggles = 0;
+        bool allowSync = false;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+            if (command == 'A') { ++toggles; serial.bytes.push_back('2'); }
+            if (command == 'C') serial.bytes.push_back('A');
+            if (allowSync) respondSync(serial, command);
+        };
+        TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+        TEST_ASSERT_TRUE(tuner.setAutoMode());
+        feed(tuner, frame(150, 3));
+        testMillis += 3001;
+        TEST_ASSERT_FALSE(tuner.isConnected());
+        TEST_ASSERT_FALSE(tuner.getState().meterValid);
+        TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getState().antenna);
+        TEST_ASSERT_EQUAL_INT(MODE_AUTO, tuner.getState().mode);
+        TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_B)); // No reply: no false success, no relay toggle.
+        TEST_ASSERT_EQUAL_UINT(1, toggles);
+        TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getState().antenna);
+        allowSync = true;
+        TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+        TEST_ASSERT_EQUAL_UINT(1, toggles);
+        feed(tuner, frame(150, 3));
+        TEST_ASSERT_TRUE(tuner.isConnected());
+        TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getState().antenna);
+    }
+}
+
+void test_startup_wait_preserves_a_full_rate_uart_burst() {
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        if (command != 'S') return;
+        std::vector<uint8_t> burst;
+        for (unsigned i = 0; i < 120; ++i) {
+            const auto bytes = frame(150, 3);
+            burst.insert(burst.end(), bytes.begin(), bytes.end());
+        }
+        // 960 bytes fit in the 250 ms S-settling interval at 38400 8N1.
+        for (unsigned i = 0; i < burst.size(); ++i)
+            serial.schedule((i + 1) * 1000 / 3840, {burst[i]});
+    };
+    TunerProtocol tuner;
+    begin(tuner);
+    tuner.process();
+    TEST_ASSERT_EQUAL_UINT(120, received.size());
+    TEST_ASSERT_EQUAL_UINT(0, tuner.getDiagnostics().bufferFull);
+    TEST_ASSERT_EQUAL_UINT(960, tuner.getDiagnostics().rxBytes);
+}
+
+void test_uart_fault_discards_the_damaged_batch_before_resynchronizing() {
+    for (auto error : {UART_BREAK_ERROR, UART_BUFFER_FULL_ERROR, UART_FIFO_OVF_ERROR,
+                       UART_FRAME_ERROR, UART_PARITY_ERROR}) {
+        TunerProtocol tuner;
+        begin(tuner);
+        received.clear();
+        HardwareSerial::latest->receiveError(error);
+        feed(tuner, frame(2211, 769)); // A buffered, apparently framed sample is untrusted.
+        TEST_ASSERT_TRUE(received.empty());
+        TEST_ASSERT_FALSE(tuner.isConnected());
+        feed(tuner, frame(150, 3)); // Only establishes a fresh boundary.
+        TEST_ASSERT_TRUE(received.empty());
+        feed(tuner, frame(150, 3));
+        TEST_ASSERT_EQUAL_UINT(1, received.size());
+        TEST_ASSERT_EQUAL_UINT(150, received.back().forward_power_raw);
+        const auto diagnostics = tuner.getDiagnostics();
+        TEST_ASSERT_EQUAL_UINT(1, diagnostics.bufferFull + diagnostics.fifoOverflow +
+            diagnostics.frameErrors + diagnostics.parityErrors + diagnostics.breaks);
+        TEST_ASSERT_EQUAL_UINT(1, diagnostics.resyncs);
+    }
+}
+
+void test_uart_fault_during_an_ack_requires_recovery_instead_of_reporting_success() {
+    TunerProtocol tuner;
+    begin(tuner);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        if (command == 'C') {
+            serial.receiveError(UART_FRAME_ERROR);
+            serial.bytes.push_back('A');
+        }
+    };
+    TEST_ASSERT_FALSE(tuner.setAutoMode());
+    TEST_ASSERT_EQUAL_INT(MODE_UNKNOWN, tuner.getMode());
+    TEST_ASSERT_FALSE(tuner.isConnected());
+    TEST_ASSERT_EQUAL_UINT(1, tuner.getDiagnostics().frameErrors);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t command) {
+        respondSync(serial, command);
+        if (command == 'C') serial.bytes.push_back('A');
+    };
+    TEST_ASSERT_TRUE(tuner.setAutoMode());
+    TEST_ASSERT_EQUAL_INT(MODE_AUTO, tuner.getMode());
+}
+
+void test_uart_diagnostics_are_bounded_copies_in_wire_order_for_any_read_size() {
+    for (unsigned chunk : {1u, 2u, 3u, 7u, 43u}) {
+        testMillis = 0xfffffc00u;
+        TunerProtocol tuner;
+        begin(tuner);
+        JsonDocument initial;
+        ldg::writeTunerDiagnostics(initial.to<JsonObject>(), tuner.getDiagnostics(), millis());
+        TEST_ASSERT_TRUE(initial["last_frame_hex"].isNull());
+        TEST_ASSERT_TRUE(initial["frame_age_ms"].isNull());
+        TEST_ASSERT_EQUAL_STRING("", initial["rx_tail_hex"].as<const char*>());
+        std::vector<uint8_t> stream;
+        for (unsigned i = 0; i < 5; ++i) {
+            const auto bytes = frame(150, 3);
+            stream.insert(stream.end(), bytes.begin(), bytes.end());
+        }
+        stream.insert(stream.end(), {0x12, 0x34, 0x56}); // Ring wraps inside a frame.
+        for (unsigned i = 0; i < stream.size(); i += chunk)
+            feed(tuner, {stream.begin() + i, stream.begin() + std::min(i + chunk, unsigned(stream.size()))});
+        const unsigned takes = testMutexTakes;
+        const auto diagnostics = tuner.getDiagnostics();
+        TEST_ASSERT_EQUAL_UINT(takes, testMutexTakes); // Status cannot wait on a UART command.
+        TEST_ASSERT_EQUAL_UINT(43, diagnostics.rxBytes);
+        TEST_ASSERT_EQUAL_UINT(5, diagnostics.frames);
+        TEST_ASSERT_EQUAL_UINT(32, diagnostics.rxTailCount);
+        TEST_ASSERT_EQUAL_MEMORY(stream.data() + stream.size() - 32, diagnostics.rxTail, 32);
+        testMillis += 3001;
+        JsonDocument doc;
+        ldg::writeTunerDiagnostics(doc.to<JsonObject>(), diagnostics, millis());
+        TEST_ASSERT_EQUAL_STRING("0096000304883b3b", doc["last_frame_hex"].as<const char*>());
+        TEST_ASSERT_EQUAL_UINT(3001, doc["frame_age_ms"].as<uint32_t>());
+        TEST_ASSERT_EQUAL_UINT(150, doc["forward_raw"].as<uint16_t>());
+        TEST_ASSERT_EQUAL_UINT(3, doc["reflected_raw"].as<uint16_t>());
+        TEST_ASSERT_EQUAL_UINT(1160, doc["band_raw"].as<uint16_t>());
+        TEST_ASSERT_EQUAL_DOUBLE(13.8, doc["psu_voltage"].as<double>());
+        TEST_ASSERT_EQUAL_STRING("local", doc["source"].as<const char*>());
+        TEST_ASSERT_EQUAL_UINT(64, strlen(doc["rx_tail_hex"].as<const char*>()));
+        TEST_ASSERT_LESS_THAN_UINT(800, measureJson(doc));
+        feed(tuner, {0xab, 0xcd, 0xef});
+        TEST_ASSERT_EQUAL_MEMORY(stream.data() + stream.size() - 32, diagnostics.rxTail, 32);
+    }
+}
+
+void test_invalid_trailers_are_counted_separately_from_driver_errors() {
+    TunerProtocol tuner;
+    begin(tuner);
+    auto damaged = frame(150, 3);
+    damaged[6] = 0x55;
+    feed(tuner, damaged);
+    feed(tuner, frame(150, 3));
+    feed(tuner, frame(150, 3));
+    TEST_ASSERT_EQUAL_UINT(1, tuner.getDiagnostics().framingErrors);
+    TEST_ASSERT_EQUAL_UINT(1, tuner.getDiagnostics().resyncs);
+    TEST_ASSERT_EQUAL_UINT(1, tuner.getDiagnostics().frames);
+    TEST_ASSERT_EQUAL_UINT(0, tuner.getDiagnostics().frameErrors);
+}
+
 void test_command_specific_acknowledgements() {
     TunerProtocol tuner;
     begin(tuner);
@@ -426,6 +578,12 @@ int main() {
     RUN_TEST(test_tune_response_and_uart_failure_are_not_success);
     RUN_TEST(test_meter_timeout_and_recovery_survive_clock_wrap);
     RUN_TEST(test_absolute_selection_uses_numeric_ack_and_does_not_repeat_toggle);
+    RUN_TEST(test_idle_telemetry_does_not_forget_confirmed_controls_or_toggle_the_same_antenna);
+    RUN_TEST(test_startup_wait_preserves_a_full_rate_uart_burst);
+    RUN_TEST(test_uart_fault_discards_the_damaged_batch_before_resynchronizing);
+    RUN_TEST(test_uart_fault_during_an_ack_requires_recovery_instead_of_reporting_success);
+    RUN_TEST(test_uart_diagnostics_are_bounded_copies_in_wire_order_for_any_read_size);
+    RUN_TEST(test_invalid_trailers_are_counted_separately_from_driver_errors);
     RUN_TEST(test_command_specific_acknowledgements);
     RUN_TEST(test_full_and_memory_tune_wait_for_complete_long_cycle);
     RUN_TEST(test_post_ack_guard_includes_wake_and_survives_clock_wrap);

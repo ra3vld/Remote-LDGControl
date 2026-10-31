@@ -5,6 +5,11 @@
 #include <algorithm>
 #include <vector>
 
+enum hardwareSerial_error_t {
+    UART_NO_ERROR, UART_BREAK_ERROR, UART_BUFFER_FULL_ERROR,
+    UART_FIFO_OVF_ERROR, UART_FRAME_ERROR, UART_PARITY_ERROR
+};
+
 class HardwareSerial {
 public:
     static HardwareSerial* latest;
@@ -14,8 +19,18 @@ public:
     std::deque<uint8_t> bytes;
     struct Arrival { uint32_t at; uint8_t value; };
     std::deque<Arrival> arrivals;
+    size_t rxCapacity = 256;
+    bool started = false;
+    std::function<void(hardwareSerial_error_t)> receiveError;
     explicit HardwareSerial(int) { latest = this; }
-    void begin(uint32_t, int, uint8_t, uint8_t) {}
+    size_t setRxBufferSize(size_t size) {
+        if (started) return 0;
+        return rxCapacity = size;
+    }
+    void onReceiveError(std::function<void(hardwareSerial_error_t)> callback) {
+        receiveError = callback;
+    }
+    void begin(uint32_t, int, uint8_t, uint8_t) { started = true; }
     size_t write(uint8_t value) {
         if (failWrites || value == failCommand) return 0;
         if (written) written(*this, value);
@@ -31,10 +46,13 @@ public:
         }
     }
     int available() {
+        bool overflow = false;
         while (!arrivals.empty() && int32_t(millis() - arrivals.front().at) >= 0) {
-            bytes.push_back(arrivals.front().value);
+            if (bytes.size() < rxCapacity) bytes.push_back(arrivals.front().value);
+            else overflow = true;
             arrivals.pop_front();
         }
+        if (overflow && receiveError) receiveError(UART_BUFFER_FULL_ERROR);
         return bytes.size();
     }
     int read() { const auto value = bytes.front(); bytes.pop_front(); return value; }
