@@ -451,6 +451,66 @@ void test_full_and_memory_tune_wait_for_complete_long_cycle() {
     }
 }
 
+void test_mode_commands_wait_for_delayed_ack_before_restarting_metering() {
+    for (uint8_t cmd : {'P', 'C', 'M'}) for (uint32_t latency : {600u, 1500u, 2199u}) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        uint32_t sentAt = 0, restartedAt = 0;
+        unsigned writes = 0;
+        const uint8_t ack = cmd == 'C' ? 'A' : cmd;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+            if (command == cmd) {
+                ++writes;
+                sentAt = millis();
+                serial.schedule(latency, {ack});
+            }
+            if (command == 'S') restartedAt = millis();
+        };
+        TEST_ASSERT_TRUE(cmd == 'P' ? tuner.bypass() : cmd == 'C' ? tuner.setAutoMode() : tuner.setManualMode());
+        TEST_ASSERT_EQUAL_UINT(1, writes);
+        TEST_ASSERT_TRUE(uint32_t(restartedAt - sentAt) >= latency + 200);
+        TEST_ASSERT_EQUAL_INT(cmd == 'P' ? MODE_BYPASS : cmd == 'C' ? MODE_AUTO : MODE_MANUAL, tuner.getMode());
+        JsonDocument doc;
+        commandStatus(doc, tuner);
+        TEST_ASSERT_EQUAL_UINT(2200, doc["last_command"]["timeout_ms"].as<unsigned>());
+        TEST_ASSERT_EQUAL_UINT(latency, doc["last_command"]["wait_ms"].as<unsigned>());
+    }
+}
+
+void test_mode_timeout_remains_bounded_and_rejects_late_ack_across_clock_wrap() {
+    for (uint32_t clock : {0u, 0xfffffc00u}) for (uint8_t cmd : {'P', 'C'}) {
+        testMillis = clock;
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner;
+        begin(tuner);
+        unsigned writes = 0;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t command) {
+            if (command == cmd) {
+                ++writes;
+                serial.schedule(2201, {uint8_t(cmd == 'C' ? 'A' : 'P')});
+            }
+        };
+        const uint32_t started = millis();
+        TEST_ASSERT_FALSE(cmd == 'P' ? tuner.bypass() : tuner.setAutoMode());
+        TEST_ASSERT_EQUAL_UINT(1, writes);
+        TEST_ASSERT_LESS_THAN_UINT(3000, uint32_t(millis() - started));
+        TEST_ASSERT_EQUAL_INT(MODE_UNKNOWN, tuner.getMode());
+        JsonDocument doc;
+        commandStatus(doc, tuner);
+        TEST_ASSERT_EQUAL_STRING("timeout", doc["last_command"]["error"].as<const char*>());
+        TEST_ASSERT_EQUAL_UINT(2200, doc["last_command"]["timeout_ms"].as<unsigned>());
+        TEST_ASSERT_EQUAL_UINT(2200, doc["last_command"]["wait_ms"].as<unsigned>());
+        TEST_ASSERT_EQUAL_UINT(0, doc["last_command"]["rx_bytes"].as<unsigned>());
+        TEST_ASSERT_TRUE(doc["last_command"]["ack"].isNull());
+        TEST_ASSERT_FALSE(cmd == 'P' ? tuner.bypass() : tuner.setAutoMode());
+        TEST_ASSERT_EQUAL_UINT(1, writes); // Recovery Z must succeed before any retry.
+        commandStatus(doc, tuner);
+        TEST_ASSERT_EQUAL_STRING("Z", doc["last_command"]["exchange"].as<const char*>());
+        TEST_ASSERT_EQUAL_UINT(1000, doc["last_command"]["timeout_ms"].as<unsigned>());
+    }
+}
+
 void test_post_ack_guard_includes_wake_and_survives_clock_wrap() {
     for (uint32_t clock : {0u, 0xfffffc00u}) {
         testMillis = clock;
@@ -749,6 +809,8 @@ int main() {
     RUN_TEST(test_command_trace_is_bounded_and_keeps_uart_faults_without_accepting_the_ack);
     RUN_TEST(test_command_trace_distinguishes_write_failure_and_meter_restart_failure);
     RUN_TEST(test_full_and_memory_tune_wait_for_complete_long_cycle);
+    RUN_TEST(test_mode_commands_wait_for_delayed_ack_before_restarting_metering);
+    RUN_TEST(test_mode_timeout_remains_bounded_and_rejects_late_ack_across_clock_wrap);
     RUN_TEST(test_post_ack_guard_includes_wake_and_survives_clock_wrap);
     RUN_TEST(test_sync_requires_complete_signature_and_rejects_wrong_case);
     RUN_TEST(test_sync_streamed_and_fragmented_replies_finish_before_meter_restart);

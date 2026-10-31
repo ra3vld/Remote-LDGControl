@@ -151,6 +151,7 @@ bool TunerProtocol::switchToMeterMode() {
 
 char TunerProtocol::waitForResponse(uint8_t cmd, uint32_t timeoutMs) {
     const uint32_t start = millis();
+    m_responseTimeoutMs = timeoutMs;
     m_waitingForResponse = true;
     m_pendingResponse = 0;
     m_expectedCommand = cmd;
@@ -162,6 +163,7 @@ char TunerProtocol::waitForResponse(uint8_t cmd, uint32_t timeoutMs) {
         delay(1);
     }
     m_waitingForResponse = false;
+    m_responseWaitMs = millis() - start;
     m_expectedCommand = 0;
     return m_pendingResponse ? m_pendingResponse : TUNER_RESP_ERROR;
 }
@@ -171,6 +173,7 @@ void TunerProtocol::resetCommandTrace(uint8_t exchange) {
     m_exchangeWritten = m_exchangeUartError = false;
     m_commandRxNext = m_commandRxCount = 0;
     m_commandRxBytes = 0;
+    m_responseTimeoutMs = m_responseWaitMs = 0;
 }
 
 char TunerProtocol::exchangeCommand(uint8_t cmd) {
@@ -179,7 +182,9 @@ char TunerProtocol::exchangeCommand(uint8_t cmd) {
     m_exchangeWritten = true;
     const uint32_t timeout = (cmd == TUNER_CMD_MEM_TUNE || cmd == TUNER_CMD_FULL_TUNE)
         ? TUNER_TUNE_TIMEOUT_MS
-        : cmd == TUNER_CMD_SYNC ? TUNER_SYNC_TIMEOUT_MS : TUNER_RESPONSE_TIMEOUT_MS;
+        : cmd == TUNER_CMD_SYNC ? TUNER_SYNC_TIMEOUT_MS
+        : (cmd == TUNER_CMD_BYPASS || cmd == TUNER_CMD_AUTO_MODE || cmd == TUNER_CMD_MANUAL_MODE)
+            ? TUNER_MODE_TIMEOUT_MS : TUNER_RESPONSE_TIMEOUT_MS;
     return waitForResponse(cmd, timeout);
 }
 
@@ -224,6 +229,8 @@ char TunerProtocol::controlResponse(uint8_t cmd) {
     m_diagnostics.meterRestarted = meterRestored;
     m_diagnostics.commandRxBytes = m_commandRxBytes;
     m_diagnostics.commandRxCount = m_commandRxCount;
+    m_diagnostics.responseTimeoutMs = m_responseTimeoutMs;
+    m_diagnostics.responseWaitMs = m_responseWaitMs;
     const unsigned first = m_commandRxCount < sizeof(m_commandRx) ? 0 : m_commandRxNext;
     for (unsigned i = 0; i < m_commandRxCount; ++i)
         m_diagnostics.commandRx[i] = m_commandRx[(first + i) % sizeof(m_commandRx)];

@@ -34,6 +34,10 @@ Use an isolated test broker / HA installation for the following checks.
    each attempt, including `exchange`, `error`, `rx_hex` and `rx_bytes`.
    Confirm the trace survives subsequent meter frames. A failed `Z` means the
    requested command was not sent; a write or an unexpected reply is not an ACK.
+   AUTO/MANUAL/BYPASS must report `timeout_ms: 2200`; a successful response has
+   its measured `wait_ms`, while no response still reports failure after that
+   bounded wait. Keep the actual device result separate from the host tests
+   with simulated delayed replies.
 6. Restart HA, then the broker. Expect the same device/entity IDs, all 12 discovery
    configurations, the retained last-reading state, and command subscriptions
    after reconnect. The `held` attributes must distinguish preserved readings.

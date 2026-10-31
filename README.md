@@ -384,6 +384,8 @@ The protocol cannot read back changes made at the tuner's front panel.
   do not overwrite this trace. Capture this object after separate AUTO/BYPASS
   attempts when diagnosing unconfirmed commands; do not infer success from
   writing a command or accept an undocumented acknowledgement.
+  `timeout_ms` gives the response deadline and `wait_ms` the actual response
+  wait, excluding stop/start metering and inter-command guards.
 
 Capture several status responses while the RF input and frequency are constant.
 Compare top-level `fwd_raw` / `ref_raw`, the wire bytes, frame counters and driver
@@ -476,7 +478,11 @@ For checks with Home Assistant and an MQTT broker, see
    20 seconds because a full cycle can take 15 seconds and memory tuning can fall back to it.
 4. Wait 250 ms **after receiving the acknowledgement**, then wake and restore telemetry with `S`.
 
-Other control replies have a 500 ms deadline; `Z` has a 1-second deadline and
+AUTO/MANUAL/BYPASS replies have a 2200 ms deadline, matching the response window
+in [NeoLDG](https://github.com/RiskAndReward1337/NeoLDG/blob/main/src/LdgTunerController.cpp).
+The former 500 ms limit could restart metering before a delayed mode ACK arrived;
+this does not prove that every reported missing ACK is a delayed response.
+Antenna replies retain their 500 ms deadline; `Z` has a 1-second deadline and
 must match the complete synchronization string below. Unknown bytes do not
 acknowledge a command or establish a connection. A failed tune (`F`) is a valid
 reply but reports an unsuccessful operation. After a missing response, a full

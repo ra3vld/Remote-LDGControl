@@ -115,6 +115,7 @@ private:
     uint8_t m_commandRx[32]{};
     uint8_t m_commandRxNext = 0, m_commandRxCount = 0;
     uint32_t m_commandRxBytes = 0;
+    uint32_t m_responseTimeoutMs = 0, m_responseWaitMs = 0;
 
     // Commands and process() belong to the UART worker. The recursive mutex
     // also protects the command/response sequence against accidental callers.

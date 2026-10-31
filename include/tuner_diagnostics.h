@@ -23,6 +23,7 @@ struct TunerDiagnostics {
     uint8_t commandRx[32]{};
     uint8_t commandRxCount = 0;
     uint32_t commandRxBytes = 0;
+    uint32_t responseTimeoutMs = 0, responseWaitMs = 0;
 };
 
 inline void writeTunerDiagnostics(JsonObject out, const TunerDiagnostics& d, uint32_t now) {
@@ -59,6 +60,8 @@ inline void writeTunerDiagnostics(JsonObject out, const TunerDiagnostics& d, uin
         command["uart_error"] = d.exchangeUartError;
         command["meter_restarted"] = d.meterRestarted;
         command["rx_bytes"] = d.commandRxBytes;
+        command["timeout_ms"] = d.responseTimeoutMs;
+        command["wait_ms"] = d.responseWaitMs;
         char rx[sizeof(d.commandRx) * 2 + 1];
         static const char hex[] = "0123456789abcdef";
         for (unsigned i = 0; i < d.commandRxCount; ++i) {

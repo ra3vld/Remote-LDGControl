@@ -64,6 +64,9 @@
 #define TUNER_CMD_DELAY_MS      250
 #define TUNER_WAKE_DELAY_MS     1
 #define TUNER_RESPONSE_TIMEOUT_MS 500
+// Mode changes can acknowledge later than antenna selection. NeoLDG uses a
+// 2200 ms control-response window; keep metering stopped while awaiting ACK.
+#define TUNER_MODE_TIMEOUT_MS    2200
 // Full tuning takes up to 15 s; memory tuning can fall back to a full cycle.
 #define TUNER_TUNE_TIMEOUT_MS   20000
 #define TUNER_SYNC_TIMEOUT_MS   1000
