@@ -33,6 +33,14 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     assert.equal(commands.length, 1);
     await vm.runInContext('selectAntenna(2)', ui.context);
     assert.equal(commands.at(-1), '/api/command/antenna_2');
+    ui.socket.message({ ...server.snapshot(), mode: 1, fwd_power: 100, ref_power: 1, swr: 1.2 });
+    assert.equal(ui.element('btnMode').textContent, 'Set Manual');
+    await vm.runInContext('toggleTuningMode()', ui.context);
+    assert.equal(commands.at(-1), '/api/command/manual');
+    ui.socket.message({ ...server.snapshot(), mode: 2, fwd_power: 100, ref_power: 1, swr: 1.2 });
+    assert.equal(ui.element('btnMode').textContent, 'Set Auto');
+    await vm.runInContext('toggleTuningMode()', ui.context);
+    assert.equal(commands.at(-1), '/api/command/auto');
 
     server.holdCommand = deferred();
     const tune = vm.runInContext("sendCommand('full_tune')", ui.context);
@@ -40,9 +48,11 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     await ui.advance(22000);
     assert.equal(server.lastCommandSignal.aborted, false, 'Remote full tune must outlive the UART cycle');
     assert.equal(vm.runInContext('commandPending', ui.context), true);
+    assert.match(ui.element('toast').textContent, /Waiting for tuner/);
+    assert.match(ui.element('toast').className, /pending/);
     server.holdCommand.resolve();
     await tune;
-    assert.match(ui.element('toast').textContent, /sent/);
+    assert.match(ui.element('toast').textContent, /completed/);
     await ui.advance(10000);
     assert.equal(server.lastCommandSignal.aborted, false, 'Completed requests must clear their abort timer');
 

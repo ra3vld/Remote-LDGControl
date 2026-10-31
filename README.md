@@ -140,7 +140,9 @@ pio device monitor                   # Serial console
 ```
 
 The build pins PlatformIO Espressif32 6.12.0 (Arduino ESP32 2.0.17).
-Run `pio test -e native` for the GT911 protocol tests.
+Run `pio test -e native -e native-display` for logic and LVGL rendering tests.
+The display tests render the actual interface to an in-memory LCD, compare
+incremental/full redraws pixel by pixel, and check both 100/1000 W scales.
 See the [Sunton board guide](docs/boards/esp32-3248s035c.md) for pins, power,
 and flash offsets.
 
@@ -195,7 +197,10 @@ Go to **Settings** (or `GET /api/config`) to configure:
 Settings are validated and saved as one versioned NVS blob before replacing
 the running configuration. Existing per-key settings are read on upgrade and
 migrate on the next successful save. A failed save reports an error without
-restarting. Successful settings changes trigger a restart.
+restarting. MQTT, tuner labels, PSU voltage, web credentials and remote-host
+settings apply without restarting the display. Changes to the Wi-Fi/static-IP
+configuration still require a restart. DHCP values shown in the static-IP form
+do not trigger a restart while DHCP remains selected.
 
 ### Reset to Defaults
 
@@ -212,16 +217,18 @@ All endpoints require HTTP Basic Auth.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/` | Web UI |
-| GET | `/api/status` | JSON status (power, SWR, band, mode) |
+| GET | `/api/status` | JSON status, MQTT diagnostics, `uptime_ms`, `reset_reason`, and `firmware_build` |
+| POST | `/api/mqtt/reconnect` | Ask the MQTT worker to reconnect without restarting the device |
 | POST | `/api/meter-scale` | Set the shared scale with `{"meter_scale":100}` or `{"meter_scale":1000}`, or switch it with `{"toggle":true}` |
 | GET | `/api/config` | Current configuration |
-| POST | `/api/config` | Update configuration (restarts device) |
+| POST | `/api/config` | Save/apply configuration; `restart` is true only when network settings require it |
 | POST | `/api/command/toggle` | Toggle antenna A/B |
 | POST | `/api/command/antenna_1`, `/api/command/antenna_2` | Select the requested antenna; repeated requests are idempotent |
 | POST | `/api/command/memory_tune` | Memory tune |
 | POST | `/api/command/full_tune` | Full tune |
 | POST | `/api/command/bypass` | Bypass (passthrough) |
 | POST | `/api/command/auto` | Set auto mode |
+| POST | `/api/command/manual` | Set manual mode |
 
 The scale endpoint returns `meter_scale` and `meter_scale_revision`. Both fields
 are also included in `/api/status` and live WebSocket meter updates, including
@@ -230,6 +237,14 @@ feature, upload both the application and LittleFS (`uploadfs`) and reload the
 browser page. Run `pio test -e native`, `node tests/test_meter_scale_web.cjs` and
 `node tests/test_control_web.cjs`
 for the shared-state and page synchronization regression checks.
+`node tests/test_settings_web.cjs` checks runtime saves, MQTT reconnect,
+single status polling and uptime diagnostics.
+
+ANT 1/ANT 2 select the named port; they are not two copies of the hardware
+toggle. Repeated confirmed selections do not switch relays. The mode button
+offers Set Manual while AUTO is confirmed and Set Auto otherwise. The LCD
+shows waiting/OK/not confirmed for commands; waiting persists until completion.
+The bypass button enables bypass (`P`); no bypass-off command is documented.
 
 ### WebSocket telemetry
 
@@ -254,8 +269,11 @@ logged once until recovery. Publish/subscribe success means the request was sent
 it does not confirm broker ACL acceptance or Home Assistant discovery.
 Otherwise set the broker address, port (default `1883`), and optional credentials.
 Leaving the password field blank when saving settings preserves the stored password.
-Settings are saved in NVS and applied after the device restarts. The transport is
-plain MQTT; MQTT TLS is not implemented.
+Settings are saved in NVS and applied by the MQTT worker without restarting
+the device. **Refresh status** reads diagnostics; **Reconnect MQTT** requests
+a new broker connection without rewriting settings or resetting the LCD.
+The hostname passed to PubSubClient belongs to the handler for the full
+connection lifetime. The transport is plain MQTT; MQTT TLS is not implemented.
 
 Enable the MQTT integration in Home Assistant against the same broker, with its
 default discovery prefix `homeassistant`. **Home Assistant auto discovery** is

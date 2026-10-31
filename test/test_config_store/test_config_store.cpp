@@ -2,6 +2,7 @@
 #include <vector>
 #include "config_store.h"
 #include "remote_protocol.h"
+#include "command_feedback.h"
 
 void setUp() {}
 void tearDown() {}
@@ -92,11 +93,55 @@ void test_remote_deadlines_allow_tuning_recovery_and_antenna_selection() {
     TEST_ASSERT_EQUAL_UINT(3000, ldg::remoteRequestTimeout(0));
 }
 
+void test_runtime_settings_and_dhcp_defaults_do_not_require_a_network_restart() {
+    const auto original = config();
+    auto candidate = original;
+    strcpy(candidate.mqttBroker, "other-broker");
+    candidate.meterPsuVoltage = 12.5;
+    strcpy(candidate.ant1Name, "DIPOLE");
+    strcpy(candidate.staticIP, "192.0.2.10"); // Browser fills DHCP info in static fields.
+    TEST_ASSERT_FALSE(ldg::networkSettingsChanged(original, candidate));
+    TEST_ASSERT_TRUE(ldg::mqttSettingsChanged(original, candidate));
+    candidate.useStaticIP = true;
+    TEST_ASSERT_TRUE(ldg::networkSettingsChanged(original, candidate));
+    candidate = original;
+    strcpy(candidate.wifiSSID, "different-wifi");
+    TEST_ASSERT_TRUE(ldg::networkSettingsChanged(original, candidate));
+    TEST_ASSERT_FALSE(ldg::mqttSettingsChanged(original, candidate));
+    auto fixed = original;
+    fixed.useStaticIP = true;
+    strcpy(fixed.staticIP, "192.0.2.1");
+    candidate = fixed;
+    strcpy(candidate.staticIP, "192.0.2.2");
+    TEST_ASSERT_TRUE(ldg::networkSettingsChanged(fixed, candidate));
+}
+
+void test_command_feedback_waits_for_real_completion_and_ignores_older_requests() {
+    ldg::CommandFeedback feedback;
+    TEST_ASSERT_TRUE(feedback.snapshot().phase == ldg::CommandFeedback::Phase::Idle);
+    const uint32_t first = feedback.start('T');
+    TEST_ASSERT_TRUE(feedback.snapshot().phase == ldg::CommandFeedback::Phase::Pending);
+    const uint32_t second = feedback.start('F');
+    feedback.finish(first, true);
+    TEST_ASSERT_EQUAL_UINT(second, feedback.snapshot().token);
+    TEST_ASSERT_TRUE(feedback.snapshot().phase == ldg::CommandFeedback::Phase::Pending);
+    feedback.finish(second, false);
+    TEST_ASSERT_EQUAL_UINT8('F', feedback.snapshot().command);
+    TEST_ASSERT_TRUE(feedback.snapshot().phase == ldg::CommandFeedback::Phase::Failed);
+    const uint32_t third = feedback.start('C');
+    feedback.finish(third, true);
+    TEST_ASSERT_TRUE(feedback.snapshot().phase == ldg::CommandFeedback::Phase::Success);
+    feedback.finish(third, false);
+    TEST_ASSERT_TRUE(feedback.snapshot().phase == ldg::CommandFeedback::Phase::Success);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_failed_config_write_preserves_previous_snapshot);
     RUN_TEST(test_invalid_config_never_replaces_saved_credentials);
     RUN_TEST(test_remote_results_and_source_contract);
     RUN_TEST(test_remote_deadlines_allow_tuning_recovery_and_antenna_selection);
+    RUN_TEST(test_runtime_settings_and_dhcp_defaults_do_not_require_a_network_restart);
+    RUN_TEST(test_command_feedback_waits_for_real_completion_and_ignores_older_requests);
     return UNITY_END();
 }

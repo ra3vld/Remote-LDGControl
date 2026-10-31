@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <Wire.h>
 #include <math.h>
+#include <algorithm>
 
 DisplayUI* DisplayUI::s_instance = nullptr;
 
@@ -49,7 +50,7 @@ DisplayUI::DisplayUI()
       m_ant1NameLabel(nullptr), m_ant2NameLabel(nullptr),
       m_btnBypass(nullptr), m_btnAuto(nullptr),
       m_maxPower(1000.0f),
-      m_fwdPower(0), m_refPower(0), m_swr(1.0f),
+      m_fwdPower(0), m_refPower(0), m_swr(NAN),
       m_activeAnt(ANT_UNKNOWN) {
     s_instance = this;
 }
@@ -100,17 +101,19 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     m_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(m_scr, lv_color_hex(0x0a0a1a), LV_PART_MAIN);
     lv_obj_set_style_border_width(m_scr, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(m_scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_scr_load(m_scr);
 
     // ============================================================
-    // LEFT PANEL: Cross-needle meter (~300x300)
+    // Leave a complete footer row below the dial inside the 320 px display.
     // ============================================================
     m_meter = lv_obj_create(m_scr);
-    lv_obj_set_size(m_meter, 300, 300);
-    lv_obj_align(m_meter, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_size(m_meter, 300, 280);
+    lv_obj_set_pos(m_meter, 0, 0);
     lv_obj_set_style_bg_color(m_meter, lv_color_hex(0x111122), LV_PART_MAIN);
     lv_obj_set_style_border_width(m_meter, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(m_meter, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(m_meter, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(m_meter, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(m_meter, drawMeterEvent, LV_EVENT_DRAW_POST, NULL);
     lv_obj_add_event_cb(m_meter, meterTapEvent, LV_EVENT_CLICKED, NULL);
@@ -216,10 +219,17 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     makeAntBtn(&m_btnAnt1, &m_ant1NameLabel, "ANT 1", cfg.ant1Name, btnX);
     makeAntBtn(&m_btnAnt2, &m_ant2NameLabel, "ANT 2", cfg.ant2Name, btnX + antW + btnGap);
 
-    makeBtn(&m_btnBypass, "BYPASS",    btnX, antY + antH + btnGap, btnW, btnH,
+    makeBtn(&m_btnBypass, "BYPASS ON", btnX, antY + antH + btnGap, btnW, btnH,
             lv_color_hex(0xcc8800), lv_color_hex(0xffaa00));
-    makeBtn(&m_btnAuto,   "AUTO MODE", btnX, antY + antH + btnGap + btnH + btnGap, btnW, btnH,
+    makeBtn(&m_btnAuto,   "SET AUTO", btnX, antY + antH + btnGap + btnH + btnGap, btnW, btnH,
             lv_color_hex(0x2255aa), lv_color_hex(0x3366cc));
+    m_modeButtonLabel = lv_obj_get_child(m_btnAuto, 0);
+    m_commandLabel = lv_label_create(m_scr);
+    lv_obj_set_pos(m_commandLabel, btnX, 303);
+    lv_obj_set_width(m_commandLabel, 150);
+    lv_obj_set_style_text_font(m_commandLabel, &lv_font_montserrat_10, LV_PART_MAIN);
+    lv_label_set_long_mode(m_commandLabel, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(m_commandLabel, "");
 
     lv_obj_add_event_cb(m_btnMemTune,  btnMemTuneEvent,  LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(m_btnFullTune, btnFullTuneEvent, LV_EVENT_CLICKED, NULL);
@@ -239,6 +249,18 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
 void DisplayUI::loop() {
     // Web requests only change the atomic model; all LVGL calls stay here.
     updateMeterScale();
+    if (m_feedbackFinished && millis() - m_feedbackAt >= 4000) {
+        lv_label_set_text(m_commandLabel, "");
+        m_feedbackFinished = false;
+    }
+    if (millis() - m_lastNamesUpdate >= 1000) {
+        const DeviceConfig cfg = configManager.get();
+        if (strcmp(lv_label_get_text(m_ant1NameLabel), cfg.ant1Name))
+            lv_label_set_text(m_ant1NameLabel, cfg.ant1Name);
+        if (strcmp(lv_label_get_text(m_ant2NameLabel), cfg.ant2Name))
+            lv_label_set_text(m_ant2NameLabel, cfg.ant2Name);
+        m_lastNamesUpdate = millis();
+    }
     lv_timer_handler();
     delay(5);
 }
@@ -273,19 +295,70 @@ void DisplayUI::setCommandPending(bool pending) {
     }
 }
 
+void DisplayUI::updateCommandFeedback(const ldg::CommandFeedback::Snapshot& feedback) {
+    if (feedback.token == m_feedbackToken) return;
+    m_feedbackToken = feedback.token;
+    m_feedbackAt = millis();
+    const bool pending = feedback.phase == ldg::CommandFeedback::Phase::Pending;
+    const bool success = feedback.phase == ldg::CommandFeedback::Phase::Success;
+    m_feedbackFinished = !pending;
+    lv_obj_set_style_text_color(m_commandLabel,
+        lv_color_hex(pending ? 0xaaaaaa : success ? 0x22c55e : 0xef4444), LV_PART_MAIN);
+    lv_label_set_text_fmt(m_commandLabel, "%s: %s", ldg::commandLabel(feedback.command),
+        pending ? "waiting..." : success ? "OK" : "not confirmed");
+}
+
 void DisplayUI::updateMeter(const tuner_meter_t* meter) {
     const float forward = float(meter->forward_power_watts);
     const float reflected = float(meter->reflected_power_watts);
     const float swr = float(meter->swr);
-    if (forward != m_fwdPower || reflected != m_refPower || (swr != m_swr && !(std::isnan(swr) && std::isnan(m_swr)))) {
+    if (forward != m_fwdPower || reflected != m_refPower) {
+        m_geometry.resize(lv_obj_get_width(m_meter), lv_obj_get_height(m_meter));
+        const auto oldForward = m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f));
+        const auto oldReflected = m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f));
         m_fwdPower = forward;
         m_refPower = reflected;
+        invalidateNeedle(m_geometry.forwardPivot, oldForward,
+            m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f)));
+        invalidateNeedle(m_geometry.reflectedPivot, oldReflected,
+            m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f)));
+    }
+    if (swr != m_swr && !(std::isnan(swr) && std::isnan(m_swr))) {
         m_swr = swr;
-        lv_obj_invalidate(m_meter);
+        lv_area_t bounds;
+        lv_obj_get_coords(m_meter, &bounds);
+        const int cx = lv_obj_get_width(m_meter) / 2;
+        const int cy = lv_obj_get_height(m_meter) - 20;
+        const int y = cy - (cy - 20) / 2;
+        lv_area_t text = {lv_coord_t(bounds.x1 + cx - 50), lv_coord_t(bounds.y1 + y - 14),
+                          lv_coord_t(bounds.x1 + cx + 50), lv_coord_t(bounds.y1 + y + 14)};
+        lv_obj_invalidate_area(m_meter, &text);
     }
     if (meter->band != m_band) {
         m_band = meter->band;
         lv_label_set_text_fmt(m_bandLabel, "Band: %s", TunerProtocol::bandToString(m_band));
+    }
+}
+
+void DisplayUI::invalidateNeedle(ldg::MeterGeometry::Point pivot,
+                                 ldg::MeterGeometry::Point before,
+                                 ldg::MeterGeometry::Point after) {
+    if (before.x == after.x && before.y == after.y) return;
+    lv_area_t bounds;
+    lv_obj_get_coords(m_meter, &bounds);
+    // Four rectangles per line cover the old/new needle without transferring
+    // its whole bounding box. Keep below LVGL's invalid-area capacity; too
+    // many tiny rectangles would make it fall back to a full-screen refresh.
+    for (const auto tip : {before, after}) for (int part = 0; part < 4; ++part) {
+        const int x1 = pivot.x + (tip.x - pivot.x) * part / 4;
+        const int y1 = pivot.y + (tip.y - pivot.y) * part / 4;
+        const int x2 = pivot.x + (tip.x - pivot.x) * (part + 1) / 4;
+        const int y2 = pivot.y + (tip.y - pivot.y) * (part + 1) / 4;
+        lv_area_t area = {lv_coord_t(bounds.x1 + std::min(x1, x2) - 4),
+                          lv_coord_t(bounds.y1 + std::min(y1, y2) - 4),
+                          lv_coord_t(bounds.x1 + std::max(x1, x2) + 4),
+                          lv_coord_t(bounds.y1 + std::max(y1, y2) + 4)};
+        lv_obj_invalidate_area(m_meter, &area);
     }
 }
 
@@ -305,6 +378,7 @@ void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna) {
             case MODE_BYPASS:  lv_label_set_text(m_modeLabel, "Mode: BYPASS"); break;
             default:           lv_label_set_text(m_modeLabel, "Mode: --"); break;
         }
+        lv_label_set_text(m_modeButtonLabel, mode == MODE_AUTO ? "SET MANUAL" : "SET AUTO");
     }
     if (antenna != m_activeAnt) {
         m_activeAnt = antenna;
@@ -385,12 +459,17 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     lv_draw_ctx_t* draw_ctx = lv_event_get_draw_ctx(e);
     lv_obj_t* obj = lv_event_get_target(e);
     m_geometry.resize(lv_obj_get_width(obj), lv_obj_get_height(obj));
-    const int cx = m_geometry.centerX, cy = m_geometry.centerY;
+    lv_area_t bounds;
+    lv_obj_get_coords(obj, &bounds);
+    const int ox = bounds.x1, oy = bounds.y1;
+    const int cx = m_geometry.centerX + ox, cy = m_geometry.centerY + oy;
     const int arm = m_geometry.radius;
-    const int fwdPx = m_geometry.forwardPivot.x, fwdPy = m_geometry.forwardPivot.y;
-    const int refPx = m_geometry.reflectedPivot.x, refPy = m_geometry.reflectedPivot.y;
-    const auto fwdTip = m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f));
-    const auto refTip = m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f));
+    const int fwdPx = m_geometry.forwardPivot.x + ox, fwdPy = m_geometry.forwardPivot.y + oy;
+    const int refPx = m_geometry.reflectedPivot.x + ox, refPy = m_geometry.reflectedPivot.y + oy;
+    const auto localFwd = m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f));
+    const auto localRef = m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f));
+    const lv_point_t fwdTip = {lv_coord_t(localFwd.x + ox), lv_coord_t(localFwd.y + oy)};
+    const lv_point_t refTip = {lv_coord_t(localRef.x + ox), lv_coord_t(localRef.y + oy)};
 
     // ----- Scale arcs (one per pivot, each spanning the full 90° sweep) -----
     // Forward arc: upper-left quarter around fwd pivot (LVGL 180° → 270°, clockwise = left→up)
@@ -414,8 +493,8 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
         for (int i = 0; i <= 8; ++i) {
             const auto& tick = m_geometry.ticks[side][i];
             const bool major = i % 2 == 0;
-            lv_point_t p1 = {tick.line.from.x, tick.line.from.y};
-            lv_point_t p2 = {tick.line.to.x, tick.line.to.y};
+            lv_point_t p1 = {lv_coord_t(tick.line.from.x + ox), lv_coord_t(tick.line.from.y + oy)};
+            lv_point_t p2 = {lv_coord_t(tick.line.to.x + ox), lv_coord_t(tick.line.to.y + oy)};
             lv_draw_line_dsc_t tick_dsc;
             lv_draw_line_dsc_init(&tick_dsc);
             tick_dsc.color = major ? lv_color_hex(color) : lv_color_hex(0x666666);
@@ -427,7 +506,7 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
                 ld.color = lv_color_hex(color);
                 ld.font  = &lv_font_montserrat_14;
                 ld.align = LV_TEXT_ALIGN_CENTER;
-                const int lx = tick.label.x, ly = tick.label.y;
+                const int lx = tick.label.x + ox, ly = tick.label.y + oy;
                 lv_area_t la = {(lv_coord_t)(lx-16),(lv_coord_t)(ly-8),
                                 (lv_coord_t)(lx+16),(lv_coord_t)(ly+8)};
                 lv_draw_label(draw_ctx, &ld, &la, labels[i / 2], NULL);
@@ -446,8 +525,8 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
         const auto& curve = m_geometry.curves[si];
         for (int i = 0; i < curve.count; ++i) {
             const auto& line = curve.lines[i];
-            lv_point_t p1 = {line.from.x, line.from.y};
-            lv_point_t p2 = {line.to.x, line.to.y};
+            lv_point_t p1 = {lv_coord_t(line.from.x + ox), lv_coord_t(line.from.y + oy)};
+            lv_point_t p2 = {lv_coord_t(line.to.x + ox), lv_coord_t(line.to.y + oy)};
             lv_draw_line(draw_ctx, &curve_dsc, &p1, &p2);
         }
     }
@@ -487,12 +566,12 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     }
     lv_draw_label_dsc_t swr_dsc;
     lv_draw_label_dsc_init(&swr_dsc);
-    swr_dsc.color = (m_swr > 2.0f) ? lv_color_hex(0xff4444) :
+    swr_dsc.color = !std::isfinite(m_swr) ? lv_color_hex(0x888888) : (m_swr > 2.0f) ? lv_color_hex(0xff4444) :
                     (m_swr > 1.5f) ? lv_color_hex(0xffaa00) : lv_color_hex(0x00ff00);
     swr_dsc.font  = &lv_font_montserrat_24;
     swr_dsc.align = LV_TEXT_ALIGN_CENTER;
-    lv_area_t swr_a = {(lv_coord_t)(cx-30),(lv_coord_t)(cy-arm/2-12),
-                       (lv_coord_t)(cx+30),(lv_coord_t)(cy-arm/2+12)};
+    lv_area_t swr_a = {(lv_coord_t)(cx-50),(lv_coord_t)(cy-arm/2-12),
+                       (lv_coord_t)(cx+50),(lv_coord_t)(cy-arm/2+12)};
     lv_draw_label(draw_ctx, &swr_dsc, &swr_a, m_swrText, NULL);
 }
 
@@ -517,12 +596,12 @@ void DisplayUI::btnFullTuneEvent(lv_event_t* e) {
 }
 
 void DisplayUI::btnAnt1Event(lv_event_t* e) {
-    if (s_instance && s_instance->m_commandHandler && s_instance->m_activeAnt != ANT_A)
+    if (s_instance && s_instance->m_commandHandler)
         s_instance->m_commandHandler(TUNER_CMD_SELECT_ANT_A);
 }
 
 void DisplayUI::btnAnt2Event(lv_event_t* e) {
-    if (s_instance && s_instance->m_commandHandler && s_instance->m_activeAnt != ANT_B)
+    if (s_instance && s_instance->m_commandHandler)
         s_instance->m_commandHandler(TUNER_CMD_SELECT_ANT_B);
 }
 
@@ -531,7 +610,9 @@ void DisplayUI::btnBypassEvent(lv_event_t* e) {
 }
 
 void DisplayUI::btnAutoEvent(lv_event_t* e) {
-    if (s_instance && s_instance->m_commandHandler) s_instance->m_commandHandler(TUNER_CMD_AUTO_MODE);
+    if (s_instance && s_instance->m_commandHandler)
+        s_instance->m_commandHandler(s_instance->m_activeMode == MODE_AUTO
+            ? TUNER_CMD_MANUAL_MODE : TUNER_CMD_AUTO_MODE);
 }
 
 void DisplayUI::meterTapEvent(lv_event_t* e) {

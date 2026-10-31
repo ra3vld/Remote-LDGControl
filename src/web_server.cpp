@@ -8,6 +8,7 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <esp_system.h>
 #include <HTTPServer.hpp>
 #if TLS_ENABLED
 #include <HTTPSServer.hpp>
@@ -277,6 +278,9 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (self->getMeterScale())
         ldg::writeMeterScale(doc, self->getMeterScale()->snapshot());
     doc["connected"] = state.remote || (self->getTuner() && self->getTuner()->isConnected());
+    doc["uptime_ms"] = millis();
+    doc["reset_reason"] = int(esp_reset_reason());
+    doc["firmware_build"] = __DATE__ " " __TIME__;
     const ldg::MqttStatus mqttStatus = self->getMqttStatusGetter()
         ? self->getMqttStatusGetter()() : ldg::MqttStatus{};
     JsonObject mqtt = doc["mqtt"].to<JsonObject>();
@@ -305,6 +309,14 @@ static void h_meter_scale(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     String out;
     serializeJson(response, out);
     sendJson(res, 200, out);
+}
+
+static void h_mqtt_reconnect(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    if (!s_instance || !s_instance->requestMqttReconfigure()) {
+        sendJson(res, 503, "{\"error\":\"MQTT worker unavailable\"}"); return;
+    }
+    sendJson(res, 200, "{\"result\":\"ok\"}");
 }
 
 static void h_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
@@ -359,7 +371,8 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
         return;
     }
 
-    DeviceConfig cfg = configManager.get();
+    const DeviceConfig before = configManager.get();
+    DeviceConfig cfg = before;
     if (doc["mqttBroker"].is<const char*>())
         strlcpy(cfg.mqttBroker, doc["mqttBroker"], sizeof(cfg.mqttBroker));
     if (!doc["mqttPort"].isUnbound()) {
@@ -396,9 +409,12 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
 
     if (!ldg::validDeviceConfig(cfg)) { sendJson(res, 400, "{\"error\":\"invalid configuration\"}"); return; }
     if (configManager.update(cfg)) {
-        sendJson(res, 200, "{\"result\":\"ok\",\"restart\":true}");
-        delay(500);
-        ESP.restart();
+        const bool restart = ldg::networkSettingsChanged(before, cfg);
+        if (ldg::mqttSettingsChanged(before, cfg) && s_instance)
+            s_instance->requestMqttReconfigure();
+        sendJson(res, 200, restart ? "{\"result\":\"ok\",\"restart\":true}"
+                                  : "{\"result\":\"ok\",\"restart\":false}");
+        if (restart) { delay(500); ESP.restart(); }
     } else {
         sendJson(res, 500, "{\"error\":\"save failed\"}");
     }
@@ -528,6 +544,7 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     m_server->registerNode(new hsv::ResourceNode("/",                   "GET",  &h_root));
     m_server->registerNode(new hsv::ResourceNode("/api/status",         "GET",  &h_status));
     m_server->registerNode(new hsv::ResourceNode("/api/meter-scale",    "POST", &h_meter_scale));
+    m_server->registerNode(new hsv::ResourceNode("/api/mqtt/reconnect", "POST", &h_mqtt_reconnect));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "GET",  &h_config_get));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "POST", &h_config_post));
     m_server->registerNode(new hsv::ResourceNode("/api/telemetry",      "POST", &h_telemetry));

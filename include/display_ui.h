@@ -11,6 +11,7 @@
 #include "config.h"
 #include "meter_scale.h"
 #include "meter_geometry.h"
+#include "command_feedback.h"
 
 class DisplayUI {
 public:
@@ -24,6 +25,7 @@ public:
     void updateNetworkInfo();
     void updateState(const tuner_state_t& state);
     void setCommandPending(bool pending);
+    void updateCommandFeedback(const ldg::CommandFeedback::Snapshot& feedback);
 
 private:
     TFT_eSPI* m_tft;
@@ -49,6 +51,10 @@ private:
     lv_obj_t* m_ant2NameLabel;
     lv_obj_t* m_btnBypass;
     lv_obj_t* m_btnAuto;
+    lv_obj_t* m_modeButtonLabel = nullptr;
+    lv_obj_t* m_commandLabel = nullptr;
+    uint32_t m_feedbackToken = 0, m_feedbackAt = 0;
+    bool m_feedbackFinished = false;
 
     // Meter state
     float m_maxPower;
@@ -61,6 +67,7 @@ private:
     ldg::MeterGeometry m_geometry;
     float m_swrTextValue = -1;
     char m_swrText[16] = {};
+    uint32_t m_lastNamesUpdate = 0;
 
     // Touch
     void setupTouch();
@@ -77,6 +84,8 @@ private:
 
     void updateAntButtons();
     void updateMeterScale();
+    void invalidateNeedle(ldg::MeterGeometry::Point pivot, ldg::MeterGeometry::Point before,
+                          ldg::MeterGeometry::Point after);
 
     // Custom meter drawing
     static void drawMeterEvent(lv_event_t* e);

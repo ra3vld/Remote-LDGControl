@@ -5,6 +5,20 @@
 #include <cstring>
 
 namespace ldg {
+inline bool networkSettingsChanged(const DeviceConfig& before, const DeviceConfig& after) {
+    return strcmp(before.wifiSSID, after.wifiSSID) || strcmp(before.wifiPassword, after.wifiPassword) ||
+        before.useStaticIP != after.useStaticIP ||
+        (after.useStaticIP && (strcmp(before.staticIP, after.staticIP) ||
+            strcmp(before.staticNetmask, after.staticNetmask) || strcmp(before.staticGateway, after.staticGateway) ||
+            strcmp(before.staticDNS, after.staticDNS)));
+}
+
+inline bool mqttSettingsChanged(const DeviceConfig& before, const DeviceConfig& after) {
+    return strcmp(before.mqttBroker, after.mqttBroker) || before.mqttPort != after.mqttPort ||
+        strcmp(before.mqttUsername, after.mqttUsername) || strcmp(before.mqttPassword, after.mqttPassword) ||
+        before.mqttDiscoveryEnabled != after.mqttDiscoveryEnabled;
+}
+
 template<size_t N> bool terminated(const char (&text)[N]) { return memchr(text, 0, N) != nullptr; }
 
 inline bool validIPv4(const char* text) {

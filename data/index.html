@@ -275,6 +275,7 @@
         .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
         .toast.success { border-color: var(--accent-green); }
         .toast.error { border-color: var(--accent-red); }
+        .toast.pending { border-color: var(--accent-blue); }
 
         .ant-btn { flex: 1; display: flex; flex-direction: column;
                    align-items: center; padding: 0.5rem 0.25rem; }
@@ -342,8 +343,8 @@
                             <span class="ant-label" id="ant2Label">ANT 2</span>
                         </button>
                     </div>
-                    <button class="btn btn-orange" onclick="sendCommand('bypass')">Bypass</button>
-                    <button class="btn btn-blue" onclick="sendCommand('auto')">Auto Mode</button>
+                    <button class="btn btn-orange" onclick="sendCommand('bypass')" title="Enable passthrough. The tuner protocol does not define a bypass-off command.">Enable bypass</button>
+                    <button class="btn btn-blue" id="btnMode" onclick="toggleTuningMode()">Set Auto</button>
                 </div>
             </div>
         </div>
@@ -403,6 +404,11 @@
                     <strong id="mqttStatusMessage">Checking live status...</strong>
                     <p id="mqttStatusDetail"></p>
                     <p id="mqttStatusError" hidden></p>
+                    <p id="deviceRuntime"></p>
+                </div>
+                <div class="form-row">
+                    <button class="btn btn-blue" type="button" onclick="refreshMqttStatus()">Refresh status</button>
+                    <button class="btn btn-blue" type="button" id="btnMqttReconnect" onclick="reconnectMqtt()">Reconnect MQTT</button>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -467,7 +473,7 @@
                     <input type="text" id="ant2Name" maxlength="8" placeholder="ANT 2">
                 </div>
             </div>
-            <button class="btn-save" onclick="saveSettings()">Save & Restart</button>
+            <button class="btn-save" onclick="saveSettings()">Save settings</button>
             <button class="btn-reset" onclick="resetSettings()">Reset to Defaults</button>
         </div>
     </main>
@@ -489,11 +495,13 @@
             document.getElementById('staticIPFields').style.display = on ? '' : 'none';
         }
 
-        function showToast(message, type = 'success') {
+        let toastTimer = null;
+        function showToast(message, type = 'success', pending = false) {
             const toast = document.getElementById('toast');
             toast.textContent = message;
             toast.className = 'toast ' + type + ' show';
-            setTimeout(() => toast.classList.remove('show'), 3000);
+            clearTimeout(toastTimer);
+            if (!pending) toastTimer = setTimeout(() => toast.classList.remove('show'), 3000);
         }
 
         // ============================================================
@@ -807,10 +815,16 @@
         document.getElementById('scaleValue').addEventListener('click', toggleMeterScale);
 
         let activeAntenna = 0; // 0=unknown, 1=ANT1, 2=ANT2
+        let activeMode = 0;
+
+        function toggleTuningMode() {
+            return sendCommand(activeMode === 1 ? 'manual' : 'auto');
+        }
 
         function selectAntenna(ant) {
             if (ant !== 1 && ant !== 2) return;
-            if (ant === activeAntenna || commandPending) return;
+            if (commandPending) return;
+            if (ant === activeAntenna) { showToast('ANT ' + ant + ' already selected'); return; }
             return sendCommand('antenna_' + ant);
         }
 
@@ -833,6 +847,8 @@
                 document.getElementById('bandValue').textContent = 'Band: ' + data.band;
             }
             if (data.mode !== undefined) {
+                activeMode = Number.isInteger(data.mode) && data.mode >= 0 && data.mode <= 3 ? data.mode : 0;
+                document.getElementById('btnMode').textContent = activeMode === 1 ? 'Set Manual' : 'Set Auto';
                 const modes = { 0: '--', 1: 'AUTO', 2: 'MANUAL', 3: 'BYPASS' };
                 document.getElementById('modeValue').textContent = modes[data.mode] || '--';
             }
@@ -907,6 +923,7 @@
         async function sendCommand(cmd) {
             if (commandPending) return false;
             commandPending = true;
+            showToast('Waiting for tuner...', 'pending', true);
             document.querySelectorAll('.button-stack button').forEach(button => button.disabled = true);
             const controller = new AbortController();
             // Allow the full tuner cycle and the display-to-remote HTTP hop.
@@ -918,9 +935,12 @@
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
                 if (data.result === 'success') {
-                    showToast(cmd.replace('_', ' ') + ' sent');
+                    const names = { full_tune: 'Full tune completed', memory_tune: 'Memory tune completed',
+                        auto: 'Auto mode selected', manual: 'Manual mode selected', bypass: 'Bypass enabled',
+                        antenna_1: 'ANT 1 selected', antenna_2: 'ANT 2 selected' };
+                    showToast(names[cmd] || 'Command completed');
                 } else {
-                    showToast('Command failed', 'error');
+                    showToast('Tuner did not confirm the command', 'error');
                 }
             } catch (err) {
                 showToast('Command result unavailable: ' + err.message, 'error');
@@ -968,7 +988,11 @@
 
         // Separate from meter traffic: status also refreshes when the tuner is idle.
         // Schedule after completion, with a deadline, so slow requests cannot pile up.
+        let mqttStatusPending = false, mqttStatusTimer = null;
         async function refreshMqttStatus() {
+            if (mqttStatusPending) return;
+            mqttStatusPending = true;
+            clearTimeout(mqttStatusTimer);
             if (!document.hidden) {
                 const epoch = meterScaleEpoch;
                 const controller = new AbortController();
@@ -980,6 +1004,9 @@
                     if (applyMeterScale(data, epoch)) drawMeter();
                     if (!data.mqtt) throw new Error('MQTT diagnostics missing; update firmware');
                     updateMqttStatus(data.mqtt);
+                    document.getElementById('deviceRuntime').textContent = Number.isFinite(data.uptime_ms)
+                        ? 'Device uptime: ' + Math.floor(data.uptime_ms / 1000) + ' s'
+                          + (data.firmware_build ? ' · Build: ' + data.firmware_build : '') : '';
                 } catch (err) {
                     document.getElementById('mqttStatusText').textContent = 'MQTT: status unavailable';
                     document.getElementById('mqttStatusDot').className = 'status-dot disabled';
@@ -991,7 +1018,25 @@
                     clearTimeout(timeout);
                 }
             }
-            setTimeout(refreshMqttStatus, 3000);
+            mqttStatusPending = false;
+            mqttStatusTimer = setTimeout(refreshMqttStatus, 3000);
+        }
+
+        let mqttReconnectPending = false;
+        async function reconnectMqtt() {
+            if (mqttReconnectPending) return;
+            mqttReconnectPending = true;
+            const button = document.getElementById('btnMqttReconnect');
+            button.disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const response = await fetch('/api/mqtt/reconnect', { method: 'POST', signal: controller.signal });
+                if (!response.ok || (await response.json()).result !== 'ok') throw new Error('request rejected');
+                showToast('MQTT reconnect requested');
+                await refreshMqttStatus();
+            } catch (error) { showToast('Cannot reconnect MQTT: ' + error.message, 'error'); }
+            finally { clearTimeout(timeout); button.disabled = false; mqttReconnectPending = false; }
         }
 
         document.getElementById('mqttIndicator').addEventListener('click', () => {
@@ -1067,7 +1112,7 @@
                 });
                 const data = await resp.json();
                 if (data.result === 'ok') {
-                    showToast('Settings saved. Restarting...');
+                    showToast(data.restart ? 'Settings saved. Restarting...' : 'Settings saved');
                 } else {
                     showToast('Save failed', 'error');
                 }

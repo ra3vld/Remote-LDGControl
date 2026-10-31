@@ -47,8 +47,22 @@ MqttHandler::~MqttHandler() {
 
 bool MqttHandler::begin(WiFiClient& wifiClient, mqtt_command_handler_t cmdHandler,
                         tuner_state_getter_t stateGetter) {
+    if (m_wifiClient) return false;
+    m_wifiClient = &wifiClient;
+    m_commandHandler = cmdHandler;
+    m_stateGetter = stateGetter;
+    return configure();
+}
+
+bool MqttHandler::configure() {
+    if (m_client) disconnect();
+    delete m_session; m_session = nullptr;
+    delete m_client; m_client = nullptr;
+    portENTER_CRITICAL(&m_statusMux);
+    m_status = ldg::MqttStatus{};
+    m_status.lastAttemptMs = millis() - ldg::MQTT_RECONNECT_MS;
+    portEXIT_CRITICAL(&m_statusMux);
     const DeviceConfig& cfg = configManager.get();
-    if (m_client) return false;
     if (!cfg.mqttBroker[0]) {
         Serial.printf("[MQTT] %s\n", ldg::mqttConnectionMessage(ldg::MqttConnection::Disabled));
         return false;
@@ -60,14 +74,15 @@ bool MqttHandler::begin(WiFiClient& wifiClient, mqtt_command_handler_t cmdHandle
         return false;
     }
 
-    wifiClient.setTimeout(1); // Arduino ESP32 uses seconds, including TCP connect timeout.
-    m_client = new (std::nothrow) PubSubClient(wifiClient);
+    m_wifiClient->setTimeout(1); // Arduino ESP32 uses seconds, including TCP connect timeout.
+    m_client = new (std::nothrow) PubSubClient(*m_wifiClient);
     if (!m_client) {
         setConnectionState(ldg::MqttConnection::Error);
         reportError(ldg::MqttError::Memory);
         return false;
     }
-    m_client->setServer(cfg.mqttBroker, cfg.mqttPort);
+    m_broker = cfg.mqttBroker;
+    m_client->setServer(m_broker.c_str(), cfg.mqttPort);
     m_client->setKeepAlive(LDG_MQTT_KEEPALIVE);
     m_client->setSocketTimeout(2);
     if (!m_client->setBufferSize(ldg::MQTT_PACKET_SIZE)) {
@@ -77,8 +92,7 @@ bool MqttHandler::begin(WiFiClient& wifiClient, mqtt_command_handler_t cmdHandle
         reportError(ldg::MqttError::Memory);
         return false;
     }
-    m_stateGetter = stateGetter;
-    m_session = new (std::nothrow) ldg::MqttSession(*this, m_identity, cmdHandler,
+    m_session = new (std::nothrow) ldg::MqttSession(*this, m_identity, m_commandHandler,
                                     []() -> uint32_t { return millis(); });
     if (!m_session) {
         delete m_client;
@@ -153,6 +167,7 @@ void MqttHandler::disconnect() {
 }
 
 void MqttHandler::loop() {
+    if (m_reconfigureRequested.exchange(false) && m_wifiClient) configure();
     if (!m_client) return;
     if (WiFi.status() != WL_CONNECTED) {
         if (isConnected()) {

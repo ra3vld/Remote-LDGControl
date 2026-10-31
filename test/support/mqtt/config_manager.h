@@ -13,7 +13,7 @@ struct DeviceConfig {
 };
 struct FakeConfigManager {
     DeviceConfig config;
-    const DeviceConfig& get() const { return config; }
+    DeviceConfig get() const { return config; }
 };
 extern FakeConfigManager configManager;
 #endif

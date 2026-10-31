@@ -148,6 +148,60 @@ void test_status_retry_and_error_age_survive_millis_wrap() {
     TEST_ASSERT_TRUE(doc["lastError"]["topic"].isNull());
 }
 
+void test_broker_hostname_outlives_the_temporary_configuration_snapshot() {
+    WiFiClient wifi;
+    MqttHandler mqtt;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi, nullptr, state));
+    // A later snapshot or setting update must not overwrite the client's host.
+    strcpy(configManager.config.mqttBroker, "replacement-broker");
+    volatile char reusedStack[2048];
+    for (unsigned i = 0; i < sizeof(reusedStack); ++i) reusedStack[i] = 'x';
+    mqtt.loop();
+    TEST_ASSERT_EQUAL_STRING("test-broker", PubSubClient::instance->lastConnectedHost.c_str());
+    PubSubClient::instance->online = false;
+    mqtt.loop();
+    testMillis += 5000;
+    mqtt.loop();
+    TEST_ASSERT_EQUAL_STRING("test-broker", PubSubClient::instance->lastConnectedHost.c_str());
+}
+
+void test_mqtt_settings_reconfigure_on_the_network_worker_without_reinitializing_the_device() {
+    WiFiClient wifi;
+    MqttHandler mqtt;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi, nullptr, state));
+    mqtt.loop();
+    TEST_ASSERT_TRUE(mqtt.isConnected());
+    strcpy(configManager.config.mqttBroker, "replacement-broker");
+    configManager.config.mqttPort = 1884;
+    mqtt.requestReconfigure();
+    TEST_ASSERT_EQUAL_STRING("test-broker", PubSubClient::instance->server); // Request itself performs no I/O.
+    const uint32_t before = millis();
+    mqtt.loop();
+    TEST_ASSERT_TRUE(mqtt.isConnected());
+    TEST_ASSERT_EQUAL_STRING("replacement-broker", PubSubClient::instance->lastConnectedHost.c_str());
+    TEST_ASSERT_EQUAL_UINT(1884, PubSubClient::instance->serverPort);
+    TEST_ASSERT_EQUAL_UINT(before, millis());
+    configManager.config.mqttBroker[0] = 0;
+    mqtt.requestReconfigure(); mqtt.loop();
+    TEST_ASSERT_TRUE(mqtt.getStatus().state == ldg::MqttConnection::Disabled);
+    TEST_ASSERT_FALSE(mqtt.isConnected());
+    strcpy(configManager.config.mqttBroker, "enabled-again");
+    mqtt.requestReconfigure(); mqtt.loop();
+    TEST_ASSERT_TRUE(mqtt.isConnected());
+    TEST_ASSERT_EQUAL_STRING("enabled-again", PubSubClient::instance->lastConnectedHost.c_str());
+}
+
+void test_mqtt_initially_disabled_can_be_enabled_without_reboot() {
+    WiFiClient wifi;
+    MqttHandler mqtt;
+    configManager.config.mqttBroker[0] = 0;
+    TEST_ASSERT_FALSE(mqtt.begin(wifi, nullptr, state));
+    strcpy(configManager.config.mqttBroker, "new-broker");
+    mqtt.requestReconfigure(); mqtt.loop();
+    TEST_ASSERT_TRUE(mqtt.isConnected());
+    TEST_ASSERT_EQUAL_STRING("new-broker", PubSubClient::instance->lastConnectedHost.c_str());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_disabled_and_initialization_error_are_distinct);
@@ -155,5 +209,8 @@ int main() {
     RUN_TEST(test_wifi_loss_and_keepalive_timeout);
     RUN_TEST(test_session_setup_and_publish_failures_keep_their_topic_and_do_not_spam);
     RUN_TEST(test_status_retry_and_error_age_survive_millis_wrap);
+    RUN_TEST(test_broker_hostname_outlives_the_temporary_configuration_snapshot);
+    RUN_TEST(test_mqtt_settings_reconfigure_on_the_network_worker_without_reinitializing_the_device);
+    RUN_TEST(test_mqtt_initially_disabled_can_be_enabled_without_reboot);
     return UNITY_END();
 }

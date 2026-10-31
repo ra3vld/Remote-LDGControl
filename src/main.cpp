@@ -17,6 +17,7 @@
 #include "tuner_protocol.h"
 #include "mqtt_handler.h"
 #include "web_server.h"
+#include "command_feedback.h"
 
 #ifdef WITH_DISPLAY
 #include "display_ui.h"
@@ -49,7 +50,9 @@ struct CommandRequest {
     bool remote;
     SemaphoreHandle_t completed;
     bool* result;
+    uint32_t feedbackToken;
 };
+static ldg::CommandFeedback s_commandFeedback;
 static QueueHandle_t s_commands = nullptr;
 #ifdef WITH_DISPLAY
 static QueueHandle_t s_remoteCommands = nullptr;
@@ -245,20 +248,22 @@ static bool executeCommandNow(uint8_t cmd, bool remote) {
 
 // Synchronous callers wait on their own completion, never on the UI task.
 static bool submitCommand(uint8_t command, bool wait) {
+    const uint32_t feedbackToken = s_commandFeedback.start(command);
     const bool remote = activeRemoteConnected();
     QueueHandle_t destination = s_commands;
 #ifdef WITH_DISPLAY
     if (remote) destination = s_remoteCommands;
 #endif
-    if (!destination) return false;
+    if (!destination) { s_commandFeedback.finish(feedbackToken, false); return false; }
     SemaphoreHandle_t completed = wait ? xSemaphoreCreateBinary() : nullptr;
-    if (wait && !completed) return false;
+    if (wait && !completed) { s_commandFeedback.finish(feedbackToken, false); return false; }
     bool result = false;
-    CommandRequest request{command, remote, completed, wait ? &result : nullptr};
+    CommandRequest request{command, remote, completed, wait ? &result : nullptr, feedbackToken};
     s_pendingCommands.fetch_add(1);
     if (xQueueSend(destination, &request, 0) != pdTRUE) {
         s_pendingCommands.fetch_sub(1);
         if (completed) vSemaphoreDelete(completed);
+        s_commandFeedback.finish(feedbackToken, false);
         return false;
     }
     if (!wait) return true;
@@ -274,6 +279,7 @@ static bool enqueueDisplayCommand(uint8_t command) { return submitCommand(comman
 
 static void completeCommand(const CommandRequest& request) {
     const bool result = executeCommandNow(request.command, request.remote);
+    s_commandFeedback.finish(request.feedbackToken, result);
     if (request.result) *request.result = result;
     s_pendingCommands.fetch_sub(1);
     if (request.completed) xSemaphoreGive(request.completed);
@@ -372,6 +378,7 @@ void setup() {
 #ifdef WITH_DISPLAY
         display.updateState(getActiveState());
         display.setCommandPending(s_pendingCommands.load() != 0);
+        display.updateCommandFeedback(s_commandFeedback.snapshot());
         display.loop();
 #endif
     });
@@ -399,6 +406,7 @@ void setup() {
 #endif
                          []() { return mqtt.getStatus(); }, &meterScale);
     s_webReady.store(webStarted);
+    webServer.setMqttReconfigureHandler([]() { mqtt.requestReconfigure(); });
     if (!webStarted) {
         Serial.printf("ERROR: web server failed to start - port %u may still be bound\n", WEB_PORT);
     }
@@ -451,6 +459,7 @@ void loop() {
     const tuner_state_t state = getActiveState();
     display.updateState(state);
     display.setCommandPending(s_pendingCommands.load() != 0);
+    display.updateCommandFeedback(s_commandFeedback.snapshot());
     display.loop();
 #endif
 

@@ -9,6 +9,7 @@ struct FakeWiFi {
     String mac = "AA:BB:CC:01:02:03";
     int status() const { return wifiStatus; }
     String macAddress() const { return mac; }
+    String SSID() const { return "Test WiFi"; }
     FakeIP localIP() const { return {}; }
 };
 extern FakeWiFi WiFi;

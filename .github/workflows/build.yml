@@ -29,10 +29,11 @@ jobs:
         run: |
           node tests/test_meter_scale_web.cjs
           node tests/test_control_web.cjs
+          node tests/test_settings_web.cjs
 
       - name: Build all environments
         run: |
-          pio test -e native
+          pio test -e native -e native-display
           pio run -e esp32-display -e esp32-remote -e esp32-3248s035c
           pio run -e esp32-display -e esp32-remote -e esp32-3248s035c -t buildfs
 

@@ -40,6 +40,11 @@ public:
     remote_telemetry_handler_t getRemoteTelemetryHandler() { return m_remoteTelemetryHandler; }
     mqtt_status_getter_t getMqttStatusGetter() { return m_mqttStatusGetter; }
     ldg::MeterScale* getMeterScale() { return m_meterScale; }
+    void setMqttReconfigureHandler(void (*handler)()) { m_mqttReconfigureHandler = handler; }
+    bool requestMqttReconfigure() {
+        if (!m_mqttReconfigureHandler) return false;
+        m_mqttReconfigureHandler(); return true;
+    }
 
 private:
     httpsserver::HTTPServer* m_server;
@@ -52,6 +57,7 @@ private:
     remote_telemetry_handler_t m_remoteTelemetryHandler;
     mqtt_status_getter_t m_mqttStatusGetter;
     ldg::MeterScale* m_meterScale;
+    void (*m_mqttReconfigureHandler)() = nullptr;
     uint32_t m_lastMeterScaleRevision = 0;
     uint32_t m_lastMeterUpdate;
     uint32_t m_lastWsMeterSeq = 0;  // last meterSeq broadcast to WS subscribers
