@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include "config.h"
 #include "device_config.h"
+#include "antenna_settings.h"
 
 
 class ConfigManager {
@@ -14,6 +15,8 @@ public:
     bool begin();
     DeviceConfig get() const;
     bool update(const DeviceConfig& config);
+    ldg::AntennaSettings antennaSettings() const;
+    bool updateAntennaSettings(const ldg::AntennaSettings& settings);
     bool setupWiFi();
     bool reset();
     void serviceIdle();
@@ -34,6 +37,7 @@ public:
 private:
     Preferences m_prefs;
     DeviceConfig m_config;
+    ldg::AntennaSettings m_antennaSettings;
     mutable portMUX_TYPE m_configMux = portMUX_INITIALIZER_UNLOCKED;
     void (*m_portalIdleCb)() = nullptr;
 

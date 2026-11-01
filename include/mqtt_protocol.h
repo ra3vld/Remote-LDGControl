@@ -81,6 +81,8 @@ inline void writeState(JsonDocument& doc, const tuner_state_t& state, bool textE
     }
     doc["band"] = bandName(lastKnownBand(state));
     doc["band_held"] = bandIsHeld(state);
+    doc["antenna_init"] = antennaInitName(state.antennaInit);
+    doc["antenna_auto"] = antennaAutoName(state.antennaAuto);
     if (textEnums) {
         doc["mode"] = modeName(state.mode);
         doc["antenna"] = antennaName(state.antenna);
@@ -107,6 +109,12 @@ inline tuner_state_t readWebState(JsonVariantConst doc) {
     const int antenna = doc["antenna"].is<int>() ? doc["antenna"].as<int>() : ANT_UNKNOWN;
     if (mode >= MODE_UNKNOWN && mode <= MODE_BYPASS) state.mode = static_cast<tuner_mode_t>(mode);
     if (antenna >= ANT_UNKNOWN && antenna <= ANT_B) state.antenna = static_cast<tuner_ant_t>(antenna);
+    const char* init = doc["antenna_init"] | "unknown";
+    for (unsigned i = 0; i <= unsigned(AntennaInit::Error); ++i)
+        if (!strcmp(init, antennaInitName(static_cast<AntennaInit>(i)))) state.antennaInit = static_cast<AntennaInit>(i);
+    const char* automatic = doc["antenna_auto"] | "disabled";
+    for (unsigned i = 0; i <= unsigned(AntennaAuto::Error); ++i)
+        if (!strcmp(automatic, antennaAutoName(static_cast<AntennaAuto>(i)))) state.antennaAuto = static_cast<AntennaAuto>(i);
     return state;
 }
 

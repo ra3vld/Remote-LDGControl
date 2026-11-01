@@ -23,6 +23,7 @@ inline bool numericChanged(double previous, double current, double absolute,
 inline bool significantChange(const tuner_state_t& previous, const tuner_state_t& current) {
     if (previous.remote != current.remote || previous.mode != current.mode ||
         previous.antenna != current.antenna || previous.meterValid != current.meterValid ||
+        previous.antennaInit != current.antennaInit || previous.antennaAuto != current.antennaAuto ||
         lastKnownBand(previous) != lastKnownBand(current) || bandIsHeld(previous) != bandIsHeld(current))
         return true;
     if (!current.meterValid) return false;

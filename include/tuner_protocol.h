@@ -9,6 +9,7 @@
 
 #include "tuner_types.h"
 #include "tuner_diagnostics.h"
+#include "antenna_automation.h"
 
 // Callback type for meter updates
 typedef void (*meter_callback_t)(const tuner_meter_t* meter);
@@ -47,6 +48,13 @@ public:
 
     // Background processing (call from loop)
     void process();
+    // Called only by the UART worker, after processing actual meter frames.
+    void configureAntennas(const ldg::AntennaSettings& settings);
+    void serviceAntennas(bool manualPending = false);
+    // Queue notification is atomic; completion is UART-worker owned.
+    void noteManualCommand() { m_manualRevision.fetch_add(1); }
+    void manualCommandStarted();
+    void manualCommandComplete(uint8_t command, bool success);
 
     // Set callback for meter updates
     void setMeterCallback(meter_callback_t callback);
@@ -127,6 +135,8 @@ private:
     uint32_t m_lastResponseMs = 0;
     bool m_seenResponse = false;
     ldg::TunerDiagnostics m_diagnostics;
+    ldg::AntennaAutomation m_antennas;
+    std::atomic<uint32_t> m_manualRevision{0};
     uint8_t m_rxTailNext = 0;
     std::atomic<bool> m_rxErrorPending{false};
     static constexpr uint32_t TELEMETRY_TIMEOUT_MS = 3000;

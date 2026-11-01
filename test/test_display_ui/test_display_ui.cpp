@@ -231,8 +231,29 @@ void test_changed_antenna_names_refresh_without_recreating_the_screen() {
         }
     }
 }
+void test_antenna_initialization_status_is_visible_and_changes_without_recreating_screen() {
+    tuner_state_t state;
+    auto* screen = lv_scr_act();
+    for (auto item : {std::make_pair(ldg::AntennaInit::Waiting, "ANT: waiting for live power"),
+                      std::make_pair(ldg::AntennaInit::WaitingRfOff, "ANT: waiting for RF off"),
+                      std::make_pair(ldg::AntennaInit::Checking, "ANT: checking"),
+                      std::make_pair(ldg::AntennaInit::Restoring, "ANT: restoring original"),
+                      std::make_pair(ldg::AntennaInit::Ready, "ANT: Ready"),
+                      std::make_pair(ldg::AntennaInit::Error, "ANT: check failed - select manually")}) {
+        state.antennaInit = item.first;
+        ui->updateState(state); render();
+        auto* status = label(screen, item.second);
+        TEST_ASSERT_NOT_NULL(status);
+        lv_area_t area; lv_obj_get_coords(status, &area);
+        TEST_ASSERT_LESS_THAN_INT(320, area.y2);
+        TEST_ASSERT_LESS_THAN_INT(300, area.x2);
+        TEST_ASSERT_TRUE(screen == lv_scr_act());
+    }
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_antenna_initialization_status_is_visible_and_changes_without_recreating_screen);
     RUN_TEST(test_scale_label_is_visible_and_matches_the_dial);
     RUN_TEST(test_digital_power_is_visible_for_both_scales_and_distinguishes_zero_from_missing);
     RUN_TEST(test_lcd_keeps_last_band_without_treating_expired_power_as_live);

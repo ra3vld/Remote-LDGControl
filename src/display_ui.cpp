@@ -146,6 +146,12 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     // Match the browser and needle pivots: reflected left, forward right.
     m_refPowerLabel = powerLabel(8, "REF --", 0xef4444);
     m_fwdPowerLabel = powerLabel(156, "FWD --", 0x22c55e);
+    m_antennaInitLabel = lv_label_create(m_scr);
+    lv_obj_set_pos(m_antennaInitLabel, 8, 305);
+    lv_obj_set_width(m_antennaInitLabel, 290);
+    lv_obj_set_style_text_font(m_antennaInitLabel, &lv_font_montserrat_10, LV_PART_MAIN);
+    lv_label_set_long_mode(m_antennaInitLabel, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(m_antennaInitLabel, "");
 
     // ============================================================
     // RIGHT PANEL: Info + buttons (~150px wide)
@@ -290,6 +296,22 @@ void DisplayUI::updateMeterScale() {
 }
 
 void DisplayUI::updateState(const tuner_state_t& state) {
+    if (m_antennaInit != state.antennaInit) {
+        m_antennaInit = state.antennaInit;
+        const char* text = "";
+        switch (state.antennaInit) {
+            case ldg::AntennaInit::Waiting: text = "ANT: waiting for live power"; break;
+            case ldg::AntennaInit::WaitingRfOff: text = "ANT: waiting for RF off"; break;
+            case ldg::AntennaInit::Checking: text = "ANT: checking"; break;
+            case ldg::AntennaInit::Restoring: text = "ANT: restoring original"; break;
+            case ldg::AntennaInit::Ready: text = "ANT: Ready"; break;
+            case ldg::AntennaInit::Error: text = "ANT: check failed - select manually"; break;
+            default: break;
+        }
+        lv_label_set_text(m_antennaInitLabel, text);
+        lv_obj_set_style_text_color(m_antennaInitLabel,
+            lv_color_hex(state.antennaInit == ldg::AntennaInit::Error ? 0xff5555 : 0x888888), LV_PART_MAIN);
+    }
     tuner_meter_t meter = state.meter;
     if (!state.meterValid) {
         meter = tuner_meter_t{};

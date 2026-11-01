@@ -27,6 +27,7 @@ function board() {
             this.broadcast();
         },
         async fetch(url, options = {}) {
+            if (url === '/api/antenna-config') return { ok: true, json: async () => ({ enabled: false, bands: Array(11).fill(0) }) };
             if (url === '/api/ws-token') return { ok: true, json: async () => ({ token: 'test' }) };
             if (url === '/api/config') return { ok: true, json: async () => ({}) };
             if (url === '/api/status') {

@@ -259,6 +259,7 @@ static bool submitCommand(uint8_t command, bool wait) {
     if (wait && !completed) { s_commandFeedback.finish(feedbackToken, false); return false; }
     bool result = false;
     CommandRequest request{command, remote, completed, wait ? &result : nullptr, feedbackToken};
+    if (!remote) tuner.noteManualCommand();
     s_pendingCommands.fetch_add(1);
     if (xQueueSend(destination, &request, 0) != pdTRUE) {
         s_pendingCommands.fetch_sub(1);
@@ -278,7 +279,9 @@ static bool enqueueDisplayCommand(uint8_t command) { return submitCommand(comman
 #endif
 
 static void completeCommand(const CommandRequest& request) {
+    if (!request.remote) tuner.manualCommandStarted();
     const bool result = executeCommandNow(request.command, request.remote);
+    if (!request.remote) tuner.manualCommandComplete(request.command, result);
     s_commandFeedback.finish(request.feedbackToken, result);
     if (request.result) *request.result = result;
     s_pendingCommands.fetch_sub(1);
@@ -287,10 +290,13 @@ static void completeCommand(const CommandRequest& request) {
 
 static void tunerTask(void*) {
     for (;;) {
+        tuner.configureAntennas(configManager.antennaSettings());
         tuner.process();
         CommandRequest request;
         if (xQueueReceive(s_commands, &request, 0) == pdTRUE) {
             completeCommand(request);
+        } else {
+            tuner.serviceAntennas(uxQueueMessagesWaiting(s_commands) != 0);
         }
         vTaskDelay(pdMS_TO_TICKS(1));
     }

@@ -264,6 +264,24 @@ ConfigManager::ConfigManager() {
     memset(&m_config, 0, sizeof(DeviceConfig));
 }
 
+ldg::AntennaSettings ConfigManager::antennaSettings() const {
+    portENTER_CRITICAL(&m_configMux);
+    const auto settings = m_antennaSettings;
+    portEXIT_CRITICAL(&m_configMux);
+    return settings;
+}
+
+bool ConfigManager::updateAntennaSettings(const ldg::AntennaSettings& settings) {
+    if (!ldg::validAntennaSettings(settings) || !m_prefs.begin("ldg-config", false)) return false;
+    const bool saved = ldg::writeAntennaSettings(m_prefs, settings);
+    m_prefs.end();
+    if (!saved) return false;
+    portENTER_CRITICAL(&m_configMux);
+    m_antennaSettings = settings;
+    portEXIT_CRITICAL(&m_configMux);
+    return true;
+}
+
 bool ConfigManager::begin() {
     if (load()) return true;
     loadDefaults();
@@ -533,6 +551,8 @@ bool ConfigManager::save(const DeviceConfig& config) {
 
 bool ConfigManager::load() {
     if (!m_prefs.begin("ldg-config", true)) return false;
+    // Absent/invalid band settings use defaults without affecting configV1.
+    ldg::readAntennaSettings(m_prefs, m_antennaSettings);
     if (m_prefs.isKey("configV1")) {
         const bool loaded = ldg::readConfig(m_prefs, m_config);
         m_prefs.end();

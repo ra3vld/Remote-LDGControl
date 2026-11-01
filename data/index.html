@@ -211,7 +211,7 @@
             margin-bottom: 0.2rem;
         }
 
-        .form-group input {
+        .form-group input, .form-group select {
             width: 100%;
             padding: 0.4rem 0.5rem;
             background: var(--bg-input);
@@ -329,6 +329,8 @@
             <div class="control-panel">
                 <div class="status-bar">
                     <div class="status-row"><span>Mode</span><span id="modeValue">--</span></div>
+                    <div class="status-row"><span>Антенна</span><span id="antennaInitStatus">--</span></div>
+                    <div class="status-row"><span>Автовыбор</span><span id="antennaAutoStatus">--</span></div>
                 </div>
                 <div class="button-stack">
                     <button class="btn btn-red" onclick="sendCommand('memory_tune')">Mem Tune</button>
@@ -472,6 +474,14 @@
                     <label>Antenna 2 Name</label>
                     <input type="text" id="ant2Name" maxlength="8" placeholder="ANT 2">
                 </div>
+            </div>
+            <div class="settings-section">
+                <h3>Антенна по диапазону</h3>
+                <label><input type="checkbox" id="antennaAutoEnabled"> Автоматический выбор при смене диапазона</label>
+                <p style="font-size:0.75rem;color:var(--text-secondary)">Только при мощности ниже 100 Вт. Переход при 100 Вт и выше пропускается. Ручной выбор действует до следующей смены диапазона и не изменяет таблицу.</p>
+                <div id="antennaBandTable"></div>
+                <button type="button" class="btn-save" id="btnSaveAntennas" onclick="saveAntennaSettings()" disabled>Сохранить таблицу антенн</button>
+                <p id="antennaSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка таблицы…</p>
             </div>
             <button class="btn-save" onclick="saveSettings()">Save settings</button>
             <button class="btn-reset" onclick="resetSettings()">Reset to Defaults</button>
@@ -838,6 +848,7 @@
 
         function updateMeter(data) {
             applyMeterScale(data);
+            updateAntennaStatus(data);
             meterState.fwdPower = Number.isFinite(data.fwd_power) && data.fwd_power >= 0 ? data.fwd_power : null;
             meterState.refPower = Number.isFinite(data.ref_power) && data.ref_power >= 0 ? data.ref_power : null;
             meterState.swr = Number.isFinite(data.swr) && data.swr >= 1 ? data.swr : null;
@@ -1044,6 +1055,66 @@
             document.getElementById('mqttStatusMessage').scrollIntoView({ block: 'center', behavior: 'smooth' });
         });
 
+        const antennaBands = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m'];
+        document.getElementById('antennaBandTable').innerHTML = antennaBands.map(band =>
+            '<div class="form-group"><label for="antennaBand' + band + '">' + band + '</label>' +
+            '<select id="antennaBand' + band + '"><option value="0">Не переключать</option>' +
+            '<option value="1">ANT1</option><option value="2">ANT2</option></select></div>').join('');
+        let antennaSettingsLoaded = false;
+        let antennaSavePending = false;
+
+        function updateAntennaStatus(data) {
+            const init = { unknown: '--', waiting_meter: 'Ожидание данных', waiting_rf_off: 'Ожидание окончания передачи',
+                checking: 'Проверка', restoring: 'Возврат исходной антенны', ready: 'Готово', error: 'Ошибка проверки' };
+            const auto = { disabled: 'Выключен', idle: 'Ожидание смены диапазона', pending: 'Выбор антенны',
+                selected: 'Антенна выбрана', already_selected: 'Уже выбрана', skipped_power: 'Пропущен: мощность ≥100 Вт',
+                invalid_power: 'Нет свежей мощности', unassigned: 'Не задан для диапазона', uninitialized: 'Антенна не определена',
+                manual_override: 'Ручной выбор', error: 'Тюнер не подтвердил выбор' };
+            if (data.antenna_init !== undefined)
+                document.getElementById('antennaInitStatus').textContent = init[data.antenna_init] || '--';
+            if (data.antenna_auto !== undefined)
+                document.getElementById('antennaAutoStatus').textContent = auto[data.antenna_auto] || '--';
+        }
+
+        async function loadAntennaSettings() {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const resp = await fetch('/api/antenna-config', { signal: controller.signal });
+                if (!resp.ok) throw new Error('load');
+                const data = await resp.json();
+                if (typeof data.enabled !== 'boolean' || !Array.isArray(data.bands) || data.bands.length !== antennaBands.length ||
+                    !data.bands.every(value => Number.isInteger(value) && value >= 0 && value <= 2)) throw new Error('table');
+                document.getElementById('antennaAutoEnabled').checked = data.enabled;
+                antennaBands.forEach((band, i) => { document.getElementById('antennaBand' + band).value = String(data.bands[i]); });
+                antennaSettingsLoaded = true;
+                document.getElementById('btnSaveAntennas').disabled = false;
+                document.getElementById('antennaSettingsStatus').textContent = 'Изменения действуют со следующей смены диапазона.';
+            } catch (err) {
+                document.getElementById('antennaSettingsStatus').textContent = 'Не удалось загрузить таблицу. Обновите страницу.';
+            } finally { clearTimeout(timeout); }
+        }
+
+        async function saveAntennaSettings() {
+            if (!antennaSettingsLoaded || antennaSavePending) return;
+            const config = { enabled: document.getElementById('antennaAutoEnabled').checked,
+                bands: antennaBands.map(band => Number(document.getElementById('antennaBand' + band).value)) };
+            if (!config.bands.every(value => Number.isInteger(value) && value >= 0 && value <= 2)) return;
+            antennaSavePending = true;
+            const button = document.getElementById('btnSaveAntennas');
+            button.disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const resp = await fetch('/api/antenna-config', { method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config), signal: controller.signal });
+                const data = await resp.json();
+                if (!resp.ok || data.result !== 'ok') throw new Error('save');
+                showToast('Таблица антенн сохранена');
+            } catch (err) { showToast('Не удалось сохранить таблицу антенн', 'error'); }
+            finally { clearTimeout(timeout); button.disabled = false; antennaSavePending = false; }
+        }
+
         async function loadSettings() {
             try {
                 const resp = await fetch('/api/config');
@@ -1138,6 +1209,7 @@
         drawMeter();
         connectWS();
         loadSettings();
+        loadAntennaSettings();
         refreshMqttStatus();
     </script>
 </body>

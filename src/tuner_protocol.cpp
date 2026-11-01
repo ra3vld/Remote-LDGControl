@@ -57,6 +57,7 @@ TunerProtocol::TunerProtocol()
 {
     memset(&m_meterData, 0, sizeof(tuner_meter_t));
     memset(m_meterBuf, 0, sizeof(m_meterBuf));
+    m_snapshot.antennaInit = m_antennas.init();
 }
 
 TunerProtocol::~TunerProtocol() {
@@ -244,6 +245,46 @@ bool TunerProtocol::toggleAntenna() {
     return response == TUNER_RESP_ANT_A || response == TUNER_RESP_ANT_B;
 }
 
+void TunerProtocol::configureAntennas(const ldg::AntennaSettings& settings) {
+    if (m_antennas.configure(settings)) publishSnapshot();
+}
+
+void TunerProtocol::manualCommandStarted() {
+    m_antennas.manualStarted();
+    publishSnapshot();
+}
+
+void TunerProtocol::manualCommandComplete(uint8_t command, bool success) {
+    if (command == TUNER_CMD_SELECT_ANT_A || command == TUNER_CMD_SELECT_ANT_B ||
+        command == TUNER_CMD_TOGGLE_ANT)
+        m_antennas.manualAntennaComplete(success && getAntenna() != ANT_UNKNOWN);
+    publishSnapshot();
+}
+
+void TunerProtocol::serviceAntennas(bool manualPending) {
+    const auto previousInit = m_antennas.init();
+    const auto previousAuto = m_antennas.automatic();
+    const auto request = m_antennas.poll(millis(), m_manualRevision.load(), manualPending, getAntenna());
+    if (previousInit != m_antennas.init() || previousAuto != m_antennas.automatic()) publishSnapshot();
+    if (request.action == ldg::AntennaAutomation::Action::Probe) {
+        // One started operation: finish restoring before a queued manual
+        // command runs. Missing ACKs never trigger a blind retry.
+        bool success = toggleAntenna();
+        if (success) {
+            const tuner_ant_t original = getAntenna() == ANT_A ? ANT_B : ANT_A;
+            m_antennas.restoring();
+            publishSnapshot();
+            success = toggleAntenna() && getAntenna() == original;
+        }
+        m_antennas.probeComplete(success);
+        publishSnapshot();
+    } else if (request.action == ldg::AntennaAutomation::Action::Select) {
+        const bool success = selectAntenna(request.antenna);
+        m_antennas.selectionComplete(success);
+        publishSnapshot();
+    }
+}
+
 bool TunerProtocol::selectAntenna(tuner_ant_t antenna) {
     if (antenna != ANT_A && antenna != ANT_B) return false;
     TunerLock lock(m_mutex);
@@ -298,6 +339,8 @@ void TunerProtocol::publishSnapshot(bool received, bool meterReceived) {
     m_snapshot.meterValid = m_hasMeterData;
     m_snapshot.mode = m_mode;
     m_snapshot.antenna = m_antenna;
+    m_snapshot.antennaInit = m_antennas.init();
+    m_snapshot.antennaAuto = m_antennas.automatic();
     if (received) { m_seenResponse = true; m_lastResponseMs = millis(); }
     portEXIT_CRITICAL(&m_snapshotMux);
 }
@@ -397,6 +440,7 @@ void TunerProtocol::processMeterByte(uint8_t b) {
         portENTER_CRITICAL(&m_snapshotMux);
         ++m_diagnostics.framingErrors;
         portEXIT_CRITICAL(&m_snapshotMux);
+        m_antennas.invalidateFrame();
         m_meterIdx = 0;
         m_eomCount = 0;
         m_state = State::ERROR;
@@ -440,6 +484,7 @@ void TunerProtocol::publishMeterData() {
     m_diagnostics.lastFrame[6] = m_diagnostics.lastFrame[7] = 0x3b;
     portEXIT_CRITICAL(&m_snapshotMux);
     m_hasMeterData = true;
+    m_antennas.observe(m_meterData, millis(), m_manualRevision.load());
     publishSnapshot(true, true);
     if (m_meterCallback) {
         m_meterCallback(&m_meterData);
@@ -484,6 +529,7 @@ void TunerProtocol::process() {
             // Drain this batch, then find a new frame boundary. Never turn an
             // acknowledgement from a damaged batch into command success.
             discard = true;
+            m_antennas.invalidateFrame();
             if (m_waitingForResponse) m_exchangeUartError = true;
             m_meterIdx = m_eomCount = 0;
             if (m_state != State::RESPONSE) m_state = State::ERROR;

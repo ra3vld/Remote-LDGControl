@@ -224,6 +224,7 @@ All endpoints require HTTP Basic Auth.
 | POST | `/api/config` | Save/apply configuration; `restart` is true only when network settings require it |
 | POST | `/api/command/toggle` | Toggle antenna A/B |
 | POST | `/api/command/antenna_1`, `/api/command/antenna_2` | Select the requested antenna; repeated requests are idempotent |
+| GET, POST | `/api/antenna-config` | Read/replace the persistent band-to-antenna table (authenticated) |
 | POST | `/api/command/memory_tune` | Memory tune |
 | POST | `/api/command/full_tune` | Full tune |
 | POST | `/api/command/bypass` | Bypass (passthrough) |
@@ -488,6 +489,51 @@ acknowledge a command or establish a connection. A failed tune (`F`) is a valid
 reply but reports an unsuccessful operation. After a missing response, a full
 `Z` exchange must succeed before another control command is sent, so a late
 reply cannot be mistaken for the next operation's result. Commands are not retried.
+
+### Startup antenna check and band selection
+
+The tuner and controller are assumed to power up together. On each controller
+boot, the UART worker waits for a valid meter frame, no older than 500 ms, with
+zero forward raw power and zero calculated forward watts. Missing/expired data
+does not mean zero power. It then performs two acknowledged antenna toggles and
+verifies that the second reply restores the original port. The normal ACK guard
+applies between commands. This check runs even when band selection is disabled;
+RF silence later in the session does not repeat it. The web UI shows `Готово`
+and the LCD shows `ANT: Ready` only after successful verification.
+
+If either acknowledgement is missing, no blind retry is made. The initialization
+stays in error until a confirmed manual antenna selection; automatic band
+selection is inhibited until initialization or that manual selection succeeds.
+Operators must wait for initialization before transmitting: this firmware does
+not control the transceiver's PTT.
+
+Settings → **Антенна по диапазону** enables automatic band selection and assigns
+ANT1, ANT2 or **Не переключать** to each band. Use its separate save button.
+The default is disabled, with all bands unassigned. Settings are stored in the
+separate `antBandsV1` NVS blob; existing `configV1` credentials/settings retain
+their binary format. Saving a table does not restart or select an antenna.
+
+The authenticated endpoint accepts/replies with
+`{"enabled":true,"bands":[0,0,0,1,0,2,0,0,0,0,0]}`. Values are 0 (leave alone),
+1 (ANT1), or 2 (ANT2), ordered 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m,
+10m, 6m. POST requires the complete valid table and returns `result: "ok"` only
+after persistence succeeds. Configure the device physically connected to the
+tuner; a display proxy does not forward its local table to another controller.
+
+Three consecutive valid RF frames confirm a band. An invalid frame, unknown
+band, RF silence, or a gap over 500 ms breaks confirmation. The first confirmed
+band is a baseline and preserves the initial port. Each subsequent change gets
+one selection opportunity, and is consumed even when skipped: any sample at
+100 W or above during confirmation, invalid power, an unassigned band, or a
+failed command prevents a delayed/repeated selection on that band. Power is
+checked again immediately before starting the selection. Only actual local
+UART frames drive decisions; retained MQTT data and held band labels do not.
+
+Manual screen/web/HA commands cancel unstarted automatic selection; a started
+operation finishes before queued manual commands run. A manual port choice is
+never restored from the table while remaining on the same band, and never
+rewrites the table. `/api/status`, WebSocket and MQTT snapshots expose
+`antenna_init` and `antenna_auto`, including power skips and command errors.
 
 ### Commands
 

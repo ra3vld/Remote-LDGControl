@@ -43,6 +43,8 @@ private:
     lv_obj_t* m_modeLabel;
     lv_obj_t* m_ssidLabel;
     lv_obj_t* m_ipLabel;
+    lv_obj_t* m_antennaInitLabel = nullptr;
+    ldg::AntennaInit m_antennaInit = ldg::AntennaInit::Unknown;
 
     // Buttons
     lv_obj_t* m_btnMemTune;

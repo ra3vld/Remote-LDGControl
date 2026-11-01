@@ -790,8 +790,102 @@ void test_swr_valid_measurements_and_invalid_rf_stay_unknown_in_json() {
     }
 }
 
+void test_antenna_startup_probe_restores_both_ports_and_respects_ack_guard() {
+    for (uint8_t initial : {1, 2}) {
+        TunerProtocol tuner; begin(tuner);
+        uint8_t selected = initial;
+        unsigned toggles = 0;
+        std::vector<uint32_t> at;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+            if (cmd == 'A') {
+                selected = selected == 1 ? 2 : 1; ++toggles; at.push_back(millis());
+                serial.bytes.push_back(selected == 1 ? '1' : '2');
+            }
+        };
+        tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(0, toggles); // Missing telemetry is not zero RF.
+        feed(tuner, frame(150, 0, 2328)); tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(0, toggles); // Even 40 W must not start the probe.
+        feed(tuner, frame(0, 0, 2328)); testMillis += 501; tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(0, toggles);
+        feed(tuner, frame(0, 0, 2328)); tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(2, toggles);
+        TEST_ASSERT_EQUAL_UINT(initial, selected);
+        TEST_ASSERT_TRUE(tuner.getState().antennaInit == ldg::AntennaInit::Ready);
+        TEST_ASSERT_TRUE(at[1] - at[0] >= 200);
+        for (int i = 0; i < 5; ++i) { feed(tuner, frame(0, 0, 2328)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(2, toggles);
+    }
+}
+void test_startup_missing_either_ack_never_blindly_retries_and_manual_selection_recovers() {
+    for (unsigned missing : {1u, 2u}) {
+        TunerProtocol tuner; begin(tuner);
+        unsigned toggles = 0;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+            respondSync(serial, cmd);
+            if (cmd == 'A' && ++toggles != missing) serial.bytes.push_back(toggles % 2 ? '2' : '1');
+        };
+        feed(tuner, frame(0, 0, 2328)); tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(missing, toggles);
+        TEST_ASSERT_TRUE(tuner.getState().antennaInit == ldg::AntennaInit::Error);
+        for (int i = 0; i < 5; ++i) { feed(tuner, frame(0, 0, 2328)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(missing, toggles);
+        tuner.noteManualCommand(); tuner.manualCommandStarted();
+        const bool success = tuner.selectAntenna(ANT_B);
+        tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_B, success);
+        TEST_ASSERT_TRUE(success);
+        TEST_ASSERT_TRUE(tuner.getState().antennaInit == ldg::AntennaInit::Ready);
+    }
+}
+void test_real_wire_band_selection_is_one_shot_and_never_restores_a_manual_choice() {
+    TunerProtocol tuner; begin(tuner);
+    ldg::AntennaSettings settings;
+    settings.enabled = true; settings.bands[BAND_40M] = ANT_A; settings.bands[BAND_20M] = ANT_B;
+    tuner.configureAntennas(settings);
+    unsigned toggles = 0; uint8_t selected = 1;
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+        respondSync(serial, cmd);
+        if (cmd == 'A') {
+            ++toggles; selected = selected == 1 ? 2 : 1;
+            serial.bytes.push_back(selected == 1 ? '1' : '2');
+        }
+    };
+    feed(tuner, frame(0, 0, 2328)); tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(2, toggles);
+    for (int i = 0; i < 3; ++i) feed(tuner, frame(150, 0, 2328));
+    tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(2, toggles);
+    for (int i = 0; i < 3; ++i) feed(tuner, frame(150, 0, 1160));
+    tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(3, toggles); TEST_ASSERT_EQUAL_UINT(2, selected);
+    tuner.noteManualCommand(); tuner.manualCommandStarted();
+    tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_A, tuner.selectAntenna(ANT_A));
+    TEST_ASSERT_EQUAL_UINT(4, toggles);
+    testMillis += 10000;
+    feed(tuner, frame(0, 0, 0));
+    for (int i = 0; i < 3; ++i) feed(tuner, frame(150, 0, 1160));
+    tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(4, toggles); TEST_ASSERT_EQUAL_UINT(1, selected);
+    // High power consumes the next change, even after power falls again.
+    for (int i = 0; i < 3; ++i) feed(tuner, frame(375, 0, 2328));
+    tuner.serviceAntennas();
+    TEST_ASSERT_TRUE(tuner.getState().antennaAuto == ldg::AntennaAuto::HighPower);
+    for (int i = 0; i < 3; ++i) feed(tuner, frame(150, 0, 2328));
+    tuner.serviceAntennas(); TEST_ASSERT_EQUAL_UINT(4, toggles);
+    for (int i = 0; i < 3; ++i) feed(tuner, frame(150, 0, 1160));
+    tuner.serviceAntennas(); TEST_ASSERT_EQUAL_UINT(5, toggles);
+    JsonDocument status; ldg::writeState(status, tuner.getState(), false);
+    TEST_ASSERT_EQUAL_STRING("ready", status["antenna_init"].as<const char*>());
+    const auto restored = ldg::readWebState(status.as<JsonVariantConst>());
+    TEST_ASSERT_TRUE(restored.antennaInit == ldg::AntennaInit::Ready);
+    TEST_ASSERT_TRUE(restored.antennaAuto == ldg::AntennaAuto::Selected);
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_antenna_startup_probe_restores_both_ports_and_respects_ack_guard);
+    RUN_TEST(test_startup_missing_either_ack_never_blindly_retries_and_manual_selection_recovers);
+    RUN_TEST(test_real_wire_band_selection_is_one_shot_and_never_restores_a_manual_choice);
     RUN_TEST(test_tune_response_and_uart_failure_are_not_success);
     RUN_TEST(test_meter_timeout_and_recovery_survive_clock_wrap);
     RUN_TEST(test_last_band_survives_rf_silence_and_unknown_band_packets);

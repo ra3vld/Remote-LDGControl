@@ -359,6 +359,30 @@ static void h_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     sendJson(res, 200, out);
 }
 
+static void h_antenna_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    JsonDocument doc;
+    ldg::writeAntennaSettingsJson(doc, configManager.antennaSettings());
+    String out;
+    serializeJson(doc, out);
+    sendJson(res, 200, out);
+}
+
+static void h_antenna_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    JsonDocument doc;
+    ldg::AntennaSettings candidate;
+    if (deserializeJson(doc, readRequestBody(req)) ||
+        !ldg::parseAntennaSettings(doc.as<JsonVariantConst>(), candidate)) {
+        sendJson(res, 400, "{\"error\":\"enabled must be boolean; bands must contain 11 values: 0, 1 or 2\"}");
+        return;
+    }
+    if (!configManager.updateAntennaSettings(candidate)) {
+        sendJson(res, 500, "{\"error\":\"save failed\"}"); return;
+    }
+    sendJson(res, 200, "{\"result\":\"ok\",\"restart\":false}");
+}
+
 static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (!authenticate(req, res)) return;
 
@@ -551,6 +575,8 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     m_server->registerNode(new hsv::ResourceNode("/api/mqtt/reconnect", "POST", &h_mqtt_reconnect));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "GET",  &h_config_get));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "POST", &h_config_post));
+    m_server->registerNode(new hsv::ResourceNode("/api/antenna-config", "GET", &h_antenna_config_get));
+    m_server->registerNode(new hsv::ResourceNode("/api/antenna-config", "POST", &h_antenna_config_post));
     m_server->registerNode(new hsv::ResourceNode("/api/telemetry",      "POST", &h_telemetry));
     m_server->registerNode(new hsv::ResourceNode("/api/command/antenna_1", "POST", &h_cmd_antenna_1));
     m_server->registerNode(new hsv::ResourceNode("/api/command/antenna_2", "POST", &h_cmd_antenna_2));

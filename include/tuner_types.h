@@ -65,6 +65,40 @@ typedef enum {
     ANT_B
 } tuner_ant_t;
 
+namespace ldg {
+enum class AntennaInit : uint8_t { Unknown, Waiting, WaitingRfOff, Checking, Restoring, Ready, Error };
+enum class AntennaAuto : uint8_t {
+    Disabled, Idle, Pending, Selected, AlreadySelected, HighPower,
+    InvalidPower, Unassigned, Uninitialized, Manual, Error
+};
+inline const char* antennaInitName(AntennaInit state) {
+    switch (state) {
+        case AntennaInit::Waiting: return "waiting_meter";
+        case AntennaInit::WaitingRfOff: return "waiting_rf_off";
+        case AntennaInit::Checking: return "checking";
+        case AntennaInit::Restoring: return "restoring";
+        case AntennaInit::Ready: return "ready";
+        case AntennaInit::Error: return "error";
+        default: return "unknown";
+    }
+}
+inline const char* antennaAutoName(AntennaAuto state) {
+    switch (state) {
+        case AntennaAuto::Idle: return "idle";
+        case AntennaAuto::Pending: return "pending";
+        case AntennaAuto::Selected: return "selected";
+        case AntennaAuto::AlreadySelected: return "already_selected";
+        case AntennaAuto::HighPower: return "skipped_power";
+        case AntennaAuto::InvalidPower: return "invalid_power";
+        case AntennaAuto::Unassigned: return "unassigned";
+        case AntennaAuto::Uninitialized: return "uninitialized";
+        case AntennaAuto::Manual: return "manual_override";
+        case AntennaAuto::Error: return "error";
+        default: return "disabled";
+    }
+}
+}
+
 // Meter data structure
 typedef struct {
     uint16_t forward_power_raw;
@@ -85,6 +119,8 @@ struct tuner_state_t {
     bool remote = false;
     // Last observed band belongs to this source and survives RF silence.
     tuner_band_t lastBand = BAND_UNKNOWN;
+    ldg::AntennaInit antennaInit = ldg::AntennaInit::Unknown;
+    ldg::AntennaAuto antennaAuto = ldg::AntennaAuto::Disabled;
 };
 
 namespace ldg {
