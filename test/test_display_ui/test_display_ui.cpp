@@ -251,8 +251,24 @@ void test_antenna_initialization_status_is_visible_and_changes_without_recreatin
     }
 }
 
+void test_last_confirmed_antenna_is_visible_as_unconfirmed_after_a_failed_command() {
+    tuner_state_t state;
+    state.antennaInit = ldg::AntennaInit::Ready;
+    state.antenna = state.lastAntenna = ANT_B;
+    ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "ANT: Ready"));
+    state.antenna = ANT_UNKNOWN;
+    ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "ANT: last 2 (unconfirmed)"));
+    state.antenna = ANT_A;
+    ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "ANT: Ready"));
+    TEST_ASSERT_NULL(label(lv_scr_act(), "ANT: last 2 (unconfirmed)"));
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_last_confirmed_antenna_is_visible_as_unconfirmed_after_a_failed_command);
     RUN_TEST(test_antenna_initialization_status_is_visible_and_changes_without_recreating_screen);
     RUN_TEST(test_scale_label_is_visible_and_matches_the_dial);
     RUN_TEST(test_digital_power_is_visible_for_both_scales_and_distinguishes_zero_from_missing);

@@ -6,9 +6,14 @@
 
 namespace ldg {
 inline uint16_t remoteRequestTimeout(uint8_t command) {
-    // Include UART mode switches, optional resynchronization and network margin.
-    return command == TUNER_CMD_MEM_TUNE || command == TUNER_CMD_FULL_TUNE
-        ? TUNER_TUNE_TIMEOUT_MS + 5000 : command ? 5000 : 3000;
+    // Include optional delayed Z, UART mode switches/guards, and network margin.
+    const uint16_t overhead = TUNER_SYNC_TIMEOUT_MS + 4 * TUNER_CMD_DELAY_MS + 2000;
+    if (!command) return 3000;
+    if (command == TUNER_CMD_MEM_TUNE || command == TUNER_CMD_FULL_TUNE)
+        return TUNER_TUNE_TIMEOUT_MS + overhead;
+    if (command == TUNER_CMD_SELECT_ANT_A || command == TUNER_CMD_SELECT_ANT_B)
+        return 2 * (TUNER_ANTENNA_TIMEOUT_MS + 4 * TUNER_CMD_DELAY_MS) + TUNER_SYNC_TIMEOUT_MS + 2000;
+    return TUNER_MODE_TIMEOUT_MS + overhead;
 }
 
 inline const char* commandEndpoint(uint8_t command) {

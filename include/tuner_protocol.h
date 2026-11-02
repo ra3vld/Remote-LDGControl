@@ -79,6 +79,7 @@ private:
     char controlResponse(uint8_t cmd);
     void publishSnapshot(bool received = false, bool meterReceived = false);
     char waitForResponse(uint8_t cmd, uint32_t timeoutMs);
+    void drainLateResponse();
     void processResponseByte(uint8_t b);
     void processMeterByte(uint8_t b);
     void publishMeterData();
@@ -110,6 +111,8 @@ private:
     // Response handling
     volatile char m_pendingResponse;
     bool m_waitingForResponse;
+    bool m_drainingLateResponse = false;
+    uint8_t m_timedOutCommand = 0, m_lateResponse = 0;
     uint8_t m_expectedCommand = 0;
     uint8_t m_syncMatched = 0;
     uint32_t m_lastAckMs = 0;

@@ -21,7 +21,7 @@ public:
     bool begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterScale);
     void loop();
     void updateMeter(const tuner_meter_t* meter, bool bandHeld = false);
-    void updateStatus(tuner_mode_t mode, tuner_ant_t antenna);
+    void updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t last = ANT_UNKNOWN);
     void updateNetworkInfo();
     void updateState(const tuner_state_t& state);
     void setCommandPending(bool pending);
@@ -66,6 +66,7 @@ private:
     float m_refPower;
     float m_swr;
     tuner_ant_t m_activeAnt;
+    tuner_ant_t m_lastAnt = ANT_UNKNOWN;
     tuner_mode_t m_activeMode = MODE_UNKNOWN;
     tuner_band_t m_band = BAND_UNKNOWN;
     bool m_bandHeld = false;

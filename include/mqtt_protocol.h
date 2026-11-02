@@ -83,13 +83,16 @@ inline void writeState(JsonDocument& doc, const tuner_state_t& state, bool textE
     doc["band_held"] = bandIsHeld(state);
     doc["antenna_init"] = antennaInitName(state.antennaInit);
     doc["antenna_auto"] = antennaAutoName(state.antennaAuto);
+    doc["antenna_confirmed"] = knownAntenna(state.antenna);
     if (textEnums) {
         doc["mode"] = modeName(state.mode);
         doc["antenna"] = antennaName(state.antenna);
+        doc["antenna_last"] = antennaName(lastKnownAntenna(state));
     } else {
         // Preserve the web/SSE numeric enum contract.
         doc["mode"] = state.mode;
         doc["antenna"] = state.antenna;
+        doc["antenna_last"] = lastKnownAntenna(state);
     }
     doc["source"] = state.remote ? "remote" : "local";
 }
@@ -109,6 +112,8 @@ inline tuner_state_t readWebState(JsonVariantConst doc) {
     const int antenna = doc["antenna"].is<int>() ? doc["antenna"].as<int>() : ANT_UNKNOWN;
     if (mode >= MODE_UNKNOWN && mode <= MODE_BYPASS) state.mode = static_cast<tuner_mode_t>(mode);
     if (antenna >= ANT_UNKNOWN && antenna <= ANT_B) state.antenna = static_cast<tuner_ant_t>(antenna);
+    const int previous = doc["antenna_last"] | int(state.antenna);
+    if (previous == ANT_A || previous == ANT_B) state.lastAntenna = static_cast<tuner_ant_t>(previous);
     const char* init = doc["antenna_init"] | "unknown";
     for (unsigned i = 0; i <= unsigned(AntennaInit::Error); ++i)
         if (!strcmp(init, antennaInitName(static_cast<AntennaInit>(i)))) state.antennaInit = static_cast<AntennaInit>(i);

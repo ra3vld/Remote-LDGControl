@@ -283,6 +283,7 @@
         .ant-btn .ant-label { font-size: 0.9rem; font-weight: 600; }
         .ant-btn.active { background: var(--accent-green); color: #000; opacity: 1; }
         .ant-btn.inactive { background: #1f2937; color: #6b7280; opacity: 0.6; }
+        .ant-btn.unconfirmed { background: #403312; color: #fbbf24; opacity: 1; }
 
         @media (max-width: 550px) {
             #tab-control.active { flex-direction: column; }
@@ -838,12 +839,12 @@
             return sendCommand('antenna_' + ant);
         }
 
-        function updateAntennaButtons(antenna) {
+        function updateAntennaButtons(antenna, last = 0) {
             activeAntenna = antenna;
             const b1 = document.getElementById('btnAnt1');
             const b2 = document.getElementById('btnAnt2');
-            b1.className = 'btn ant-btn ' + (antenna === 1 ? 'active' : (antenna === 2 ? 'inactive' : ''));
-            b2.className = 'btn ant-btn ' + (antenna === 2 ? 'active' : (antenna === 1 ? 'inactive' : ''));
+            b1.className = 'btn ant-btn ' + (antenna === 1 ? 'active' : antenna === 0 && last === 1 ? 'unconfirmed' : 'inactive');
+            b2.className = 'btn ant-btn ' + (antenna === 2 ? 'active' : antenna === 0 && last === 2 ? 'unconfirmed' : 'inactive');
         }
 
         function updateMeter(data) {
@@ -864,7 +865,9 @@
                 document.getElementById('modeValue').textContent = modes[data.mode] || '--';
             }
             if (data.antenna !== undefined) {
-                updateAntennaButtons(data.antenna);
+                updateAntennaButtons(data.antenna, data.antenna_last);
+                if (data.antenna === 0 && (data.antenna_last === 1 || data.antenna_last === 2))
+                    document.getElementById('antennaInitStatus').textContent = 'Не подтверждена; последняя ANT' + data.antenna_last;
             }
 
             drawMeter();

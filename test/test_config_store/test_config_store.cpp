@@ -88,8 +88,9 @@ void test_remote_results_and_source_contract() {
 void test_remote_deadlines_allow_tuning_recovery_and_antenna_selection() {
     TEST_ASSERT_TRUE(ldg::remoteRequestTimeout('F') >= 23000);
     TEST_ASSERT_TRUE(ldg::remoteRequestTimeout('T') >= 23000);
-    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout(TUNER_CMD_SELECT_ANT_A) >= 4500);
-    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout(TUNER_CMD_SELECT_ANT_B) >= 4500);
+    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout(TUNER_CMD_SELECT_ANT_A) >= 10600);
+    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout(TUNER_CMD_SELECT_ANT_B) >= 10600);
+    TEST_ASSERT_TRUE(ldg::remoteRequestTimeout(TUNER_CMD_TOGGLE_ANT) >= 7400);
     TEST_ASSERT_EQUAL_UINT(3000, ldg::remoteRequestTimeout(0));
 }
 

@@ -296,7 +296,9 @@ void DisplayUI::updateMeterScale() {
 }
 
 void DisplayUI::updateState(const tuner_state_t& state) {
-    if (m_antennaInit != state.antennaInit) {
+    const auto lastAntenna = ldg::lastKnownAntenna(state);
+    const bool unconfirmed = state.antenna == ANT_UNKNOWN && ldg::knownAntenna(lastAntenna);
+    if (m_antennaInit != state.antennaInit || m_activeAnt != state.antenna || m_lastAnt != lastAntenna) {
         m_antennaInit = state.antennaInit;
         const char* text = "";
         switch (state.antennaInit) {
@@ -308,9 +310,10 @@ void DisplayUI::updateState(const tuner_state_t& state) {
             case ldg::AntennaInit::Error: text = "ANT: check failed - select manually"; break;
             default: break;
         }
-        lv_label_set_text(m_antennaInitLabel, text);
+        if (unconfirmed) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: last %u (unconfirmed)", unsigned(lastAntenna));
+        else lv_label_set_text(m_antennaInitLabel, text);
         lv_obj_set_style_text_color(m_antennaInitLabel,
-            lv_color_hex(state.antennaInit == ldg::AntennaInit::Error ? 0xff5555 : 0x888888), LV_PART_MAIN);
+            lv_color_hex(unconfirmed ? 0xfbbf24 : state.antennaInit == ldg::AntennaInit::Error ? 0xff5555 : 0x888888), LV_PART_MAIN);
     }
     tuner_meter_t meter = state.meter;
     if (!state.meterValid) {
@@ -320,7 +323,7 @@ void DisplayUI::updateState(const tuner_state_t& state) {
     }
     meter.band = ldg::lastKnownBand(state);
     updateMeter(&meter, ldg::bandIsHeld(state));
-    updateStatus(state.mode, state.antenna);
+    updateStatus(state.mode, state.antenna, lastAntenna);
 }
 
 void DisplayUI::setCommandPending(bool pending) {
@@ -422,7 +425,8 @@ void DisplayUI::updateNetworkInfo() {
         lv_label_set_text_fmt(m_ipLabel, "IP: %s", WiFi.localIP().toString().c_str());
 }
 
-void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna) {
+void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t last) {
+    if (ldg::knownAntenna(antenna)) last = antenna;
     if (mode != m_activeMode) {
         m_activeMode = mode;
         switch (mode) {
@@ -433,8 +437,9 @@ void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna) {
         }
         lv_label_set_text(m_modeButtonLabel, mode == MODE_AUTO ? "SET MANUAL" : "SET AUTO");
     }
-    if (antenna != m_activeAnt) {
+    if (antenna != m_activeAnt || last != m_lastAnt) {
         m_activeAnt = antenna;
+        m_lastAnt = last;
         updateAntButtons();
     }
 }
@@ -446,10 +451,11 @@ void DisplayUI::updateAntButtons() {
 
     lv_color_t activeColor   = lv_color_hex(0x2255aa);
     lv_color_t inactiveColor = lv_color_hex(0x2a2a3a);
+    lv_color_t uncertainColor = lv_color_hex(0x806020);
     lv_obj_set_style_bg_color(m_btnAnt1,
-        m_activeAnt == ANT_A ? activeColor : inactiveColor, LV_PART_MAIN);
+        m_activeAnt == ANT_A ? activeColor : m_activeAnt == ANT_UNKNOWN && m_lastAnt == ANT_A ? uncertainColor : inactiveColor, LV_PART_MAIN);
     lv_obj_set_style_bg_color(m_btnAnt2,
-        m_activeAnt == ANT_B ? activeColor : inactiveColor, LV_PART_MAIN);
+        m_activeAnt == ANT_B ? activeColor : m_activeAnt == ANT_UNKNOWN && m_lastAnt == ANT_B ? uncertainColor : inactiveColor, LV_PART_MAIN);
 }
 
 void DisplayUI::setupTouch() {

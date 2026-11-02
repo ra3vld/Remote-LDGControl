@@ -165,8 +165,26 @@ char TunerProtocol::waitForResponse(uint8_t cmd, uint32_t timeoutMs) {
     }
     m_waitingForResponse = false;
     m_responseWaitMs = millis() - start;
+    m_timedOutCommand = m_pendingResponse ? 0 : cmd;
     m_expectedCommand = 0;
     return m_pendingResponse ? m_pendingResponse : TUNER_RESP_ERROR;
+}
+
+void TunerProtocol::drainLateResponse() {
+    if (!m_timedOutCommand) return;
+    // Keep the response parser active through the timeout boundary. A reply
+    // just after the deadline must not become meter payload or be followed
+    // immediately by S. It can confirm state, but not turn a timeout into
+    // command success. sendCommand() still enforces the post-ACK guard.
+    m_expectedCommand = m_timedOutCommand;
+    m_drainingLateResponse = true;
+    const uint32_t started = millis();
+    while (millis() - started < TUNER_CMD_DELAY_MS) {
+        process();
+        delay(1);
+    }
+    m_drainingLateResponse = false;
+    m_expectedCommand = m_timedOutCommand = 0;
 }
 
 void TunerProtocol::resetCommandTrace(uint8_t exchange) {
@@ -175,6 +193,7 @@ void TunerProtocol::resetCommandTrace(uint8_t exchange) {
     m_commandRxNext = m_commandRxCount = 0;
     m_commandRxBytes = 0;
     m_responseTimeoutMs = m_responseWaitMs = 0;
+    m_lateResponse = m_timedOutCommand = 0;
 }
 
 char TunerProtocol::exchangeCommand(uint8_t cmd) {
@@ -184,6 +203,7 @@ char TunerProtocol::exchangeCommand(uint8_t cmd) {
     const uint32_t timeout = (cmd == TUNER_CMD_MEM_TUNE || cmd == TUNER_CMD_FULL_TUNE)
         ? TUNER_TUNE_TIMEOUT_MS
         : cmd == TUNER_CMD_SYNC ? TUNER_SYNC_TIMEOUT_MS
+        : cmd == TUNER_CMD_TOGGLE_ANT ? TUNER_ANTENNA_TIMEOUT_MS
         : (cmd == TUNER_CMD_BYPASS || cmd == TUNER_CMD_AUTO_MODE || cmd == TUNER_CMD_MANUAL_MODE)
             ? TUNER_MODE_TIMEOUT_MS : TUNER_RESPONSE_TIMEOUT_MS;
     return waitForResponse(cmd, timeout);
@@ -203,10 +223,14 @@ char TunerProtocol::controlResponse(uint8_t cmd) {
         }
         if (ready) response = exchangeCommand(cmd);
     }
+    drainLateResponse();
     m_needsSync = response == TUNER_RESP_ERROR;
-    if (cmd == TUNER_CMD_TOGGLE_ANT) {
-        if (response == TUNER_RESP_ANT_A) m_antenna = ANT_A;
-        else if (response == TUNER_RESP_ANT_B) m_antenna = ANT_B;
+    const bool commandWritten = m_exchange == cmd && m_exchangeWritten;
+    const char stateResponse = response != TUNER_RESP_ERROR ? response :
+        m_exchangeUartError ? 0 : char(m_lateResponse);
+    if (cmd == TUNER_CMD_TOGGLE_ANT && commandWritten) {
+        if (stateResponse == TUNER_RESP_ANT_A) m_antenna = ANT_A;
+        else if (stateResponse == TUNER_RESP_ANT_B) m_antenna = ANT_B;
         else m_antenna = ANT_UNKNOWN;
     } else if (cmd == TUNER_CMD_AUTO_MODE) m_mode = response == TUNER_RESP_AUTO ? MODE_AUTO : MODE_UNKNOWN;
     else if (cmd == TUNER_CMD_MANUAL_MODE) m_mode = response == TUNER_RESP_MANUAL ? MODE_MANUAL : MODE_UNKNOWN;
@@ -222,6 +246,7 @@ char TunerProtocol::controlResponse(uint8_t cmd) {
     m_diagnostics.hasCommand = true;
     m_diagnostics.command = cmd;
     m_diagnostics.response = response != TUNER_RESP_ERROR ? uint8_t(response) : 0;
+    m_diagnostics.lateResponse = m_lateResponse;
     m_diagnostics.commandSuccess = meterRestored && response != TUNER_RESP_ERROR && !failedTune;
     m_diagnostics.commandDurationMs = millis() - started;
     m_diagnostics.exchange = m_exchange;
@@ -339,6 +364,7 @@ void TunerProtocol::publishSnapshot(bool received, bool meterReceived) {
     m_snapshot.meterValid = m_hasMeterData;
     m_snapshot.mode = m_mode;
     m_snapshot.antenna = m_antenna;
+    if (m_antenna != ANT_UNKNOWN) m_snapshot.lastAntenna = m_antenna;
     m_snapshot.antennaInit = m_antennas.init();
     m_snapshot.antennaAuto = m_antennas.automatic();
     if (received) { m_seenResponse = true; m_lastResponseMs = millis(); }
@@ -492,7 +518,7 @@ void TunerProtocol::publishMeterData() {
 }
 
 void TunerProtocol::processResponseByte(uint8_t b) {
-    if (!m_waitingForResponse || m_pendingResponse) return;
+    if (m_drainingLateResponse ? m_lateResponse != 0 : !m_waitingForResponse || m_pendingResponse) return;
     if (m_expectedCommand == TUNER_CMD_SYNC) {
         // Search for the whole signature across reads, ignoring noise. Extra
         // leading zeroes retain the last 15 zeroes as a possible prefix.
@@ -502,10 +528,12 @@ void TunerProtocol::processResponseByte(uint8_t b) {
             m_syncMatched = b == '0' ? (m_syncMatched == SYNC_ZERO_COUNT ? SYNC_ZERO_COUNT : 1) : 0;
         }
         if (m_syncMatched != sizeof(SYNC_RESPONSE) - 1) return;
-        m_pendingResponse = TUNER_CMD_SYNC; // Internal completion marker, not a wire ACK.
+        if (m_drainingLateResponse) m_lateResponse = TUNER_CMD_SYNC;
+        else m_pendingResponse = TUNER_CMD_SYNC; // Internal completion marker, not a wire ACK.
     } else {
         if (!isCommandResponse(m_expectedCommand, b)) return;
-        m_pendingResponse = char(b);
+        if (m_drainingLateResponse) m_lateResponse = b;
+        else m_pendingResponse = char(b);
     }
     m_lastAckMs = millis();
     m_ackGuardActive = true;
@@ -530,7 +558,7 @@ void TunerProtocol::process() {
             // acknowledgement from a damaged batch into command success.
             discard = true;
             m_antennas.invalidateFrame();
-            if (m_waitingForResponse) m_exchangeUartError = true;
+            if (m_waitingForResponse || m_drainingLateResponse) m_exchangeUartError = true;
             m_meterIdx = m_eomCount = 0;
             if (m_state != State::RESPONSE) m_state = State::ERROR;
             else if (m_waitingForResponse) m_pendingResponse = TUNER_RESP_ERROR;
@@ -540,7 +568,7 @@ void TunerProtocol::process() {
         if (value < 0) break;
         const uint8_t b = uint8_t(value);
         tail[count++ % sizeof(tail)] = b;
-        if (m_waitingForResponse) {
+        if (m_waitingForResponse || m_drainingLateResponse) {
             m_commandRx[m_commandRxNext] = b;
             m_commandRxNext = (m_commandRxNext + 1) % sizeof(m_commandRx);
             if (m_commandRxCount < sizeof(m_commandRx)) ++m_commandRxCount;

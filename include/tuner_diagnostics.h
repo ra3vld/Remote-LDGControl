@@ -17,6 +17,7 @@ struct TunerDiagnostics {
     uint8_t rxTailCount = 0;
     bool hasCommand = false, commandSuccess = false;
     uint8_t command = 0, response = 0;
+    uint8_t lateResponse = 0;
     uint32_t commandDurationMs = 0;
     uint8_t exchange = 0;
     bool exchangeWritten = false, exchangeUartError = false, meterRestarted = false;
@@ -50,6 +51,11 @@ inline void writeTunerDiagnostics(JsonObject out, const TunerDiagnostics& d, uin
             else command["ack"] = reply;
         }
         command["success"] = d.commandSuccess;
+        command["late_ack"] = nullptr;
+        if (d.lateResponse) {
+            char late[] = {char(d.lateResponse), '\0'};
+            command["late_ack"] = d.lateResponse == 'Z' ? "sync" : late;
+        }
         command["duration_ms"] = d.commandDurationMs;
         command["exchange"] = nullptr;
         if (d.exchange) {

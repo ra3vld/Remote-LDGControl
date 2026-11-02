@@ -479,16 +479,28 @@ For checks with Home Assistant and an MQTT broker, see
    20 seconds because a full cycle can take 15 seconds and memory tuning can fall back to it.
 4. Wait 250 ms **after receiving the acknowledgement**, then wake and restore telemetry with `S`.
 
-AUTO/MANUAL/BYPASS replies have a 2200 ms deadline, matching the response window
+AUTO/MANUAL/BYPASS, antenna and synchronization replies have a 2200 ms deadline, matching the response window
 in [NeoLDG](https://github.com/RiskAndReward1337/NeoLDG/blob/main/src/LdgTunerController.cpp).
 The former 500 ms limit could restart metering before a delayed mode ACK arrived;
 this does not prove that every reported missing ACK is a delayed response.
-Antenna replies retain their 500 ms deadline; `Z` has a 1-second deadline and
+The former antenna/synchronization limits were 500/1000 ms. `Z`
 must match the complete synchronization string below. Unknown bytes do not
 acknowledge a command or establish a connection. A failed tune (`F`) is a valid
 reply but reports an unsuccessful operation. After a missing response, a full
 `Z` exchange must succeed before another control command is sent, so a late
 reply cannot be mistaken for the next operation's result. Commands are not retried.
+After a timeout, keep the response parser active for a further 250 ms before
+restoring telemetry. A matching reply during this bounded quarantine is exposed
+as `uart.last_command.late_ack`, without changing the failed command result;
+the post-ACK guard still applies. A late antenna ACK can confirm the selected
+port. A failed recovery `Z` that prevented `A` from being sent does not invalidate
+an otherwise confirmed antenna.
+
+When an actually sent `A` has no reply, the current `antenna` remains unknown.
+The new `antenna_last` field retains the last confirmed port (numeric in web
+snapshots, `A`/`B` in MQTT); `antenna_confirmed` distinguishes it from current
+confirmation. Web/LCD show the remembered port in amber and label it unconfirmed.
+It is never used as evidence to skip a necessary antenna command.
 
 ### Startup antenna check and band selection
 

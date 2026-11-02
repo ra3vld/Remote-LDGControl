@@ -501,13 +501,14 @@ void test_mode_timeout_remains_bounded_and_rejects_late_ack_across_clock_wrap() 
         TEST_ASSERT_EQUAL_STRING("timeout", doc["last_command"]["error"].as<const char*>());
         TEST_ASSERT_EQUAL_UINT(2200, doc["last_command"]["timeout_ms"].as<unsigned>());
         TEST_ASSERT_EQUAL_UINT(2200, doc["last_command"]["wait_ms"].as<unsigned>());
-        TEST_ASSERT_EQUAL_UINT(0, doc["last_command"]["rx_bytes"].as<unsigned>());
+        TEST_ASSERT_EQUAL_UINT(1, doc["last_command"]["rx_bytes"].as<unsigned>());
+        TEST_ASSERT_EQUAL_STRING(cmd == 'C' ? "A" : "P", doc["last_command"]["late_ack"].as<const char*>());
         TEST_ASSERT_TRUE(doc["last_command"]["ack"].isNull());
         TEST_ASSERT_FALSE(cmd == 'P' ? tuner.bypass() : tuner.setAutoMode());
         TEST_ASSERT_EQUAL_UINT(1, writes); // Recovery Z must succeed before any retry.
         commandStatus(doc, tuner);
         TEST_ASSERT_EQUAL_STRING("Z", doc["last_command"]["exchange"].as<const char*>());
-        TEST_ASSERT_EQUAL_UINT(1000, doc["last_command"]["timeout_ms"].as<unsigned>());
+        TEST_ASSERT_EQUAL_UINT(2200, doc["last_command"]["timeout_ms"].as<unsigned>());
     }
 }
 
@@ -881,8 +882,105 @@ void test_real_wire_band_selection_is_one_shot_and_never_restores_a_manual_choic
     TEST_ASSERT_TRUE(restored.antennaAuto == ldg::AntennaAuto::Selected);
 }
 
+void test_antenna_and_recovery_sync_accept_delayed_replies_without_repeating_a_toggle() {
+    TunerProtocol tuner; begin(tuner);
+    unsigned toggles = 0;
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+        if (cmd == 'C') serial.bytes.push_back('A');
+        if (cmd == 'A') { ++toggles; serial.schedule(800, {'2'}); }
+    };
+    TEST_ASSERT_TRUE(tuner.setAutoMode());
+    TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+    TEST_ASSERT_EQUAL_UINT(1, toggles);
+    TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getAntenna());
+    TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+    TEST_ASSERT_EQUAL_UINT(1, toggles);
+    TEST_ASSERT_EQUAL_UINT(800, tuner.getDiagnostics().responseWaitMs);
+    // A genuinely missing response requires Z. Its entire signature may also
+    // take longer than the old one-second response window.
+    HardwareSerial::written = nullptr;
+    TEST_ASSERT_FALSE(tuner.setManualMode());
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+        if (cmd == 'Z') serial.schedule(1500, {syncReply.begin(), syncReply.end()});
+        if (cmd == 'A') { ++toggles; serial.schedule(800, {'1'}); }
+    };
+    TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_A));
+    TEST_ASSERT_EQUAL_UINT(2, toggles);
+}
+
+void test_antenna_timeout_preserves_last_port_without_claiming_current_confirmation() {
+    TunerProtocol tuner; begin(tuner);
+    HardwareSerial::written = [](HardwareSerial& serial, uint8_t cmd) {
+        if (cmd == 'A') serial.bytes.push_back('2');
+    };
+    TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+    HardwareSerial::written = nullptr;
+    TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_A));
+    auto state = tuner.getState();
+    TEST_ASSERT_EQUAL_INT(ANT_UNKNOWN, state.antenna);
+    TEST_ASSERT_EQUAL_INT(ANT_B, state.lastAntenna);
+    JsonDocument doc; ldg::writeState(doc, state, false);
+    TEST_ASSERT_FALSE(doc["antenna_confirmed"].as<bool>());
+    TEST_ASSERT_EQUAL_INT(ANT_B, doc["antenna_last"].as<int>());
+    state = ldg::readWebState(doc.as<JsonVariantConst>());
+    TEST_ASSERT_EQUAL_INT(ANT_UNKNOWN, state.antenna);
+    TEST_ASSERT_EQUAL_INT(ANT_B, state.lastAntenna);
+    // Still uncertain: selecting the last known port must not report success
+    // or blindly toggle after the recovery signature is missing.
+    TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_B));
+    TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getState().lastAntenna);
+    TEST_ASSERT_EQUAL_INT('Z', tuner.getDiagnostics().exchange);
+}
+
+void test_failed_recovery_before_antenna_command_preserves_the_confirmed_port() {
+    TunerProtocol tuner; begin(tuner);
+    unsigned toggles = 0;
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+        if (cmd == 'A') { ++toggles; serial.bytes.push_back('2'); }
+    };
+    TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+    TEST_ASSERT_FALSE(tuner.setAutoMode());
+    TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_A)); // Fails in Z; A never sent.
+    TEST_ASSERT_EQUAL_UINT(1, toggles);
+    TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getAntenna());
+    TEST_ASSERT_EQUAL_INT('Z', tuner.getDiagnostics().exchange);
+}
+
+void test_just_late_antenna_reply_is_quarantined_and_guards_meter_restart() {
+    for (uint32_t clock : {0u, 0xffffff00u}) {
+        testMillis = clock; HardwareSerial::written = nullptr;
+        TunerProtocol tuner; begin(tuner);
+        uint32_t ackAt = 0, wakeAt = 0, meterAt = 0;
+        bool sent = false, woke = false;
+        unsigned toggles = 0;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+            if (cmd == 'A') {
+                ++toggles; sent = true; ackAt = millis() + 2201;
+                serial.schedule(2201, {'2'});
+            } else if (sent && cmd == ' ' && !woke) { wakeAt = millis(); woke = true; }
+            else if (cmd == 'S') meterAt = millis();
+        };
+        TEST_ASSERT_FALSE(tuner.selectAntenna(ANT_B));
+        TEST_ASSERT_EQUAL_UINT(1, toggles);
+        TEST_ASSERT_TRUE(woke);
+        TEST_ASSERT_TRUE(int32_t(wakeAt - ackAt) >= 200);
+        TEST_ASSERT_TRUE(int32_t(meterAt - ackAt) >= 200);
+        const auto diagnostics = tuner.getDiagnostics();
+        TEST_ASSERT_EQUAL_UINT(2200, diagnostics.responseWaitMs);
+        TEST_ASSERT_EQUAL_INT('2', diagnostics.lateResponse);
+        TEST_ASSERT_FALSE(diagnostics.commandSuccess);
+        TEST_ASSERT_EQUAL_INT(ANT_B, tuner.getAntenna());
+        feed(tuner, frame(0, 0, 2328));
+        TEST_ASSERT_EQUAL_UINT(0, tuner.getDiagnostics().framingErrors);
+    }
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_antenna_timeout_preserves_last_port_without_claiming_current_confirmation);
+    RUN_TEST(test_failed_recovery_before_antenna_command_preserves_the_confirmed_port);
+    RUN_TEST(test_just_late_antenna_reply_is_quarantined_and_guards_meter_restart);
+    RUN_TEST(test_antenna_and_recovery_sync_accept_delayed_replies_without_repeating_a_toggle);
     RUN_TEST(test_antenna_startup_probe_restores_both_ports_and_respects_ack_guard);
     RUN_TEST(test_startup_missing_either_ack_never_blindly_retries_and_manual_selection_recovers);
     RUN_TEST(test_real_wire_band_selection_is_one_shot_and_never_restores_a_manual_choice);
