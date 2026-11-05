@@ -346,7 +346,7 @@
                             <span class="ant-label" id="ant2Label">ANT 2</span>
                         </button>
                     </div>
-                    <button class="btn btn-orange" onclick="sendCommand('bypass')" title="Enable passthrough. The tuner protocol does not define a bypass-off command.">Enable bypass</button>
+                    <button class="btn btn-orange" id="btnBypass" onclick="toggleBypass()" title="Enable bypass; when active, switch it off by returning to AUTO.">BYPASS ON</button>
                     <button class="btn btn-blue" id="btnMode" onclick="toggleTuningMode()">Set Auto</button>
                 </div>
             </div>
@@ -400,6 +400,47 @@
                 <p style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.4rem;">
                     To change WiFi network, press the reset button on the device to launch the captive portal.
                 </p>
+            </div>
+            <div class="settings-section">
+                <h3>Шкала мощности</h3>
+                <div class="form-group">
+                    <label for="meterRange">Общий предел FWD / REF, Вт (1–1000)</label>
+                    <input type="number" id="meterRange" min="1" max="1000" step="1" value="1000">
+                </div>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:0.5rem">
+                        <input type="checkbox" id="meterLogarithmic" style="width:auto"> Логарифмическая шкала
+                    </label>
+                </div>
+                <button class="btn btn-blue" type="button" id="btnSaveMeter" onclick="saveMeterSettings()" disabled>Применить и сохранить</button>
+                <p id="meterSettingsStatus" aria-live="polite">Ожидание настроек платы…</p>
+            </div>
+            <div class="settings-section">
+                <h3>Яркость дисплея</h3>
+                <p id="brightnessStatus" aria-live="polite">Ожидание данных дисплея…</p>
+                <div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem">
+                    <input type="checkbox" id="brightnessAuto" style="width:auto" onchange="updateBrightnessControls()"> Автоматически по датчику освещения
+                </label></div>
+                <div class="form-group"><label for="brightnessManual">Ручная яркость, %</label>
+                    <input id="brightnessManual" type="number" min="1" max="100" value="100"></div>
+                <div class="form-row">
+                    <div class="form-group"><label for="brightnessMin">Минимум в темноте, %</label>
+                        <input id="brightnessMin" type="number" min="1" max="100" value="15"></div>
+                    <div class="form-group"><label for="brightnessMax">Максимум на свету, %</label>
+                        <input id="brightnessMax" type="number" min="1" max="100" value="100"></div>
+                </div>
+                <details><summary>Калибровка датчика</summary>
+                    <p>Закройте датчик или осветите его, дождитесь обновления показаний и запомните соответствующее значение.</p>
+                    <div class="form-row">
+                        <div class="form-group"><label for="brightnessDark">Темнота (0–4095)</label>
+                            <input id="brightnessDark" type="number" min="0" max="4095" value="3500">
+                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessDark')">Запомнить темноту</button></div>
+                        <div class="form-group"><label for="brightnessBright">Яркий свет (0–4095)</label>
+                            <input id="brightnessBright" type="number" min="0" max="4095" value="300">
+                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessBright')">Запомнить яркий свет</button></div>
+                    </div>
+                </details>
+                <button class="btn btn-blue" type="button" id="btnSaveBrightness" onclick="saveBrightnessSettings()" disabled>Применить и сохранить</button>
             </div>
             <div class="settings-section">
                 <h3>MQTT</h3>
@@ -532,12 +573,47 @@
             refPower: null,
             swr: null,
             maxPower: 1000,
-            highScale: true,
+            logarithmic: false,
             band: '--'
         };
         let meterScaleRevision = null;
         let meterScaleEpoch = 0;
         let scaleRequestPending = false;
+        let meterSettingsDirty = false;
+        let meterSettingsLoaded = false;
+        let meterSettingsRendered = null;
+
+        function powerFraction(power) {
+            const f = Number.isFinite(power) && power > 0 ? Math.min(power / meterState.maxPower, 1) : 0;
+            return meterState.logarithmic ? Math.log1p(99 * f) / Math.log(100) : f;
+        }
+        function powerAtFraction(f) {
+            return meterState.maxPower * (meterState.logarithmic ? Math.expm1(f * Math.log(100)) / 99 : f);
+        }
+        function powerTick(value) {
+            return value > 0 && value < 1 ? value.toFixed(2) : value > 0 && value < 10 ? value.toFixed(1) : value.toFixed(0);
+        }
+        function meterSettingsEdited() {
+            return meterSettingsDirty || (meterSettingsRendered !== null &&
+                (document.getElementById('meterRange').value !== meterSettingsRendered.watts ||
+                 document.getElementById('meterLogarithmic').checked !== meterSettingsRendered.logarithmic));
+        }
+        function renderMeterSettings(force = false) {
+            // Compare with the last rendered form, not the incoming live state.
+            // This also protects browser/autofill edits before an event arrives.
+            if (!force && (meterSettingsEdited() || scaleRequestPending)) return;
+            document.getElementById('meterRange').value = String(meterState.maxPower);
+            document.getElementById('meterLogarithmic').checked = meterState.logarithmic;
+            meterSettingsRendered = { watts: String(meterState.maxPower), logarithmic: meterState.logarithmic };
+        }
+        for (const id of ['meterRange', 'meterLogarithmic']) {
+            const markEdited = () => {
+                meterSettingsDirty = true;
+                document.getElementById('meterSettingsStatus').textContent = 'Есть изменения — нажмите «Применить и сохранить» или «Save settings».';
+            };
+            document.getElementById(id).addEventListener('input', markEdited);
+            document.getElementById(id).addEventListener('change', markEdited);
+        }
 
         function drawMeterFace() {
             const w = canvas.width;
@@ -600,7 +676,7 @@
                     // Skip the 100% per-arc label; shared "max" label below
                     // sits above the arc crossing.
                     if (major && i < N) {
-                        const val = Math.round(f * meterState.maxPower);
+                        const val = powerTick(powerAtFraction(f));
                         const lx = pivotX + cos * (arm - 22);
                         const ly = pivotY + sin * (arm - 22);
                         ctx.fillStyle = color;
@@ -641,7 +717,7 @@
 
         function drawMeter() {
             const w = canvas.width, h = canvas.height;
-            const faceKey = [w, h, meterState.maxPower].join(':');
+            const faceKey = [w, h, meterState.maxPower, meterState.logarithmic].join(':');
             const drawKey = [faceKey, meterState.fwdPower, meterState.refPower, meterState.swr].join(':');
             if (drawKey === lastMeterDrawKey) return;
             if (!meterFace || meterFaceKey !== faceKey) {
@@ -663,8 +739,8 @@
             // Needles: fixed length = arm, tip walks along the per-pivot arc.
             //   Forward:  φ = π     + fwdFrac·(π/2)    (left → up)
             //   Reflected:φ = 2π − refFrac·(π/2)       (right → up)
-            const fwdFrac = Math.min(meterState.fwdPower / meterState.maxPower, 1);
-            const refFrac = Math.min(meterState.refPower / meterState.maxPower, 1);
+            const fwdFrac = powerFraction(meterState.fwdPower);
+            const refFrac = powerFraction(meterState.refPower);
             const fwdTipPhi = Math.PI + fwdFrac * (Math.PI / 2);
             const refTipPhi = 2 * Math.PI - refFrac * (Math.PI / 2);
             const fwdTipX = fwdPx + arm * Math.cos(fwdTipPhi);
@@ -735,9 +811,9 @@
                 let first = true;
                 let lastPt = null;
                 for (let i = 1; i <= 100; i++) {
-                    const fwdFrac = i / 100;
-                    const refFrac = fwdFrac * gammaSq;
-                    if (refFrac > 1) continue;
+                    const power = (i / 100) * meterState.maxPower;
+                    const fwdFrac = powerFraction(power);
+                    const refFrac = powerFraction(power * gammaSq);
 
                     const fwdPhi = Math.PI + fwdFrac * (Math.PI / 2);
                     const refPhi = 2 * Math.PI - refFrac * (Math.PI / 2);
@@ -784,7 +860,8 @@
         function applyMeterScale(data, epoch = meterScaleEpoch) {
             const watts = data.meter_scale;
             const revision = data.meter_scale_revision;
-            if (epoch !== meterScaleEpoch || (watts !== 100 && watts !== 1000)
+            const logarithmic = data.meter_logarithmic === undefined ? false : data.meter_logarithmic;
+            if (epoch !== meterScaleEpoch || !Number.isInteger(watts) || watts < 1 || watts > 1000 || typeof logarithmic !== 'boolean'
                 || !Number.isInteger(revision) || revision < 0 || revision > 0xffffffff) return false;
             // HTTP responses can arrive after a newer WebSocket update.
             if (meterScaleRevision !== null) {
@@ -793,9 +870,127 @@
             }
             meterScaleRevision = revision;
             meterState.maxPower = watts;
-            meterState.highScale = watts === 1000;
-            document.getElementById('scaleValue').textContent = watts + 'W';
+            meterState.logarithmic = logarithmic;
+            document.getElementById('scaleValue').textContent = watts + 'W' + (logarithmic ? ' LOG' : '');
+            meterSettingsLoaded = true;
+            document.getElementById('btnSaveMeter').disabled = scaleRequestPending;
+            if (!meterSettingsEdited()) document.getElementById('meterSettingsStatus').textContent = 'Одинаковая шкала на LCD и в браузерах.';
+            renderMeterSettings();
             return true;
+        }
+
+        async function saveMeterSettings() {
+            if (!meterSettingsLoaded || scaleRequestPending) return false;
+            const watts = Number(document.getElementById('meterRange').value);
+            const logarithmic = document.getElementById('meterLogarithmic').checked;
+            if (!Number.isInteger(watts) || watts < 1 || watts > 1000) {
+                showToast('Предел мощности должен быть целым числом от 1 до 1000 Вт', 'error');
+                return false;
+            }
+            scaleRequestPending = true;
+            const epoch = meterScaleEpoch;
+            const button = document.getElementById('btnSaveMeter');
+            button.disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const resp = await fetch('/api/meter-scale', { method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+                    body: JSON.stringify({ meter_scale: watts,
+                        meter_logarithmic: logarithmic, save: true }) });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                if (epoch !== meterScaleEpoch) throw new Error('Соединение изменилось; проверьте настройки платы');
+                if (data.meter_scale !== watts || data.meter_logarithmic !== logarithmic ||
+                    !Number.isInteger(data.meter_scale_revision) || data.meter_scale_revision < 0 || data.meter_scale_revision > 0xffffffff)
+                    throw new Error('Плата не подтвердила выбранную шкалу');
+                applyMeterScale(data, epoch);
+                // Keep a draft made while this request was in flight.
+                if (document.getElementById('meterRange').value === String(watts) &&
+                    document.getElementById('meterLogarithmic').checked === logarithmic) {
+                    meterSettingsDirty = false;
+                    renderMeterSettings(true);
+                    document.getElementById('meterSettingsStatus').textContent = 'Настройки шкалы сохранены.';
+                }
+                drawMeter();
+                showToast('Настройки шкалы сохранены');
+                return true;
+            } catch (err) {
+                showToast('Не удалось сохранить шкалу: ' + err.message, 'error');
+                return false;
+            } finally {
+                clearTimeout(timeout);
+                scaleRequestPending = false;
+                button.disabled = !meterSettingsLoaded;
+            }
+        }
+
+        let brightnessLoaded = false;
+        let brightnessPending = false;
+        let lightRaw = null;
+        let lightReadAt = 0;
+        function updateBacklightStatus(data) {
+            if (!data || typeof data.supported !== 'boolean') return;
+            lightRaw = Number.isInteger(data.light_raw) && data.light_raw >= 0 && data.light_raw <= 4095 ? data.light_raw : null;
+            lightReadAt = Date.now();
+            document.getElementById('brightnessStatus').textContent = !data.supported
+                ? 'Встроенное управление яркостью недоступно на этой плате.'
+                : data.active ? 'Яркость: ' + data.brightness + '% · Датчик: ' + lightRaw
+                : 'Ожидание подсветки; если сообщение сохраняется, проверьте запуск PWM.';
+        }
+        function updateBrightnessControls() {
+            document.getElementById('brightnessManual').disabled = document.getElementById('brightnessAuto').checked;
+        }
+        function calibrateBrightness(id) {
+            if (!brightnessLoaded || lightRaw === null || Date.now() - lightReadAt > 10000) {
+                showToast('Нет свежих данных датчика', 'error'); return;
+            }
+            document.getElementById(id).value = String(lightRaw);
+        }
+        async function loadBrightnessSettings() {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const resp = await fetch('/api/display-config', { signal: controller.signal });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                updateBacklightStatus(data);
+                if (!data.supported) return;
+                const ids = { manual: 'brightnessManual', minimum: 'brightnessMin', maximum: 'brightnessMax',
+                    dark_adc: 'brightnessDark', bright_adc: 'brightnessBright' };
+                for (const [key, id] of Object.entries(ids)) document.getElementById(id).value = String(data[key]);
+                document.getElementById('brightnessAuto').checked = data.automatic;
+                updateBrightnessControls();
+                brightnessLoaded = true;
+                document.getElementById('btnSaveBrightness').disabled = false;
+            } catch (err) { document.getElementById('brightnessStatus').textContent = 'Не удалось загрузить настройки яркости'; }
+            finally { clearTimeout(timeout); }
+        }
+        async function saveBrightnessSettings() {
+            if (!brightnessLoaded || brightnessPending) return;
+            const settings = { automatic: document.getElementById('brightnessAuto').checked,
+                manual: Number(document.getElementById('brightnessManual').value),
+                minimum: Number(document.getElementById('brightnessMin').value),
+                maximum: Number(document.getElementById('brightnessMax').value),
+                dark_adc: Number(document.getElementById('brightnessDark').value),
+                bright_adc: Number(document.getElementById('brightnessBright').value) };
+            if (![settings.manual, settings.minimum, settings.maximum].every(n => Number.isInteger(n) && n >= 1 && n <= 100) ||
+                settings.minimum > settings.maximum ||
+                ![settings.dark_adc, settings.bright_adc].every(n => Number.isInteger(n) && n >= 0 && n <= 4095) ||
+                Math.abs(settings.dark_adc - settings.bright_adc) < 100) {
+                showToast('Проверьте яркость 1–100%, минимум ≤ максимум и разницу калибровки не менее 100', 'error'); return;
+            }
+            brightnessPending = true;
+            const button = document.getElementById('btnSaveBrightness'); button.disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const resp = await fetch('/api/display-config', { method: 'POST', signal: controller.signal,
+                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
+                if (!resp.ok || (await resp.json()).result !== 'ok') throw new Error('save');
+                showToast('Настройки яркости сохранены');
+            } catch (err) { showToast('Не удалось сохранить яркость', 'error'); }
+            finally { clearTimeout(timeout); brightnessPending = false; button.disabled = false; }
         }
 
         async function toggleMeterScale() {
@@ -819,6 +1014,7 @@
             } finally {
                 clearTimeout(timeout);
                 scaleRequestPending = false;
+                document.getElementById('btnSaveMeter').disabled = !meterSettingsLoaded;
             }
         }
 
@@ -830,6 +1026,10 @@
 
         function toggleTuningMode() {
             return sendCommand(activeMode === 1 ? 'manual' : 'auto');
+        }
+
+        function toggleBypass() {
+            return sendCommand(activeMode === 3 ? 'auto' : 'bypass');
         }
 
         function selectAntenna(ant) {
@@ -861,6 +1061,7 @@
             if (data.mode !== undefined) {
                 activeMode = Number.isInteger(data.mode) && data.mode >= 0 && data.mode <= 3 ? data.mode : 0;
                 document.getElementById('btnMode').textContent = activeMode === 1 ? 'Set Manual' : 'Set Auto';
+                document.getElementById('btnBypass').textContent = activeMode === 3 ? 'BYPASS OFF' : 'BYPASS ON';
                 const modes = { 0: '--', 1: 'AUTO', 2: 'MANUAL', 3: 'BYPASS' };
                 document.getElementById('modeValue').textContent = modes[data.mode] || '--';
             }
@@ -1018,6 +1219,7 @@
                     if (applyMeterScale(data, epoch)) drawMeter();
                     if (!data.mqtt) throw new Error('MQTT diagnostics missing; update firmware');
                     updateMqttStatus(data.mqtt);
+                    updateBacklightStatus(data.display);
                     document.getElementById('deviceRuntime').textContent = Number.isFinite(data.uptime_ms)
                         ? 'Device uptime: ' + Math.floor(data.uptime_ms / 1000) + ' s'
                           + (data.firmware_build ? ' · Build: ' + data.firmware_build : '') : '';
@@ -1159,6 +1361,8 @@
         }
 
         async function saveSettings() {
+            // The main settings button must also save edits in the scale form.
+            if (meterSettingsEdited() && !(await saveMeterSettings())) return;
             const config = {
                 mqttBroker: document.getElementById('mqttBroker').value,
                 mqttPort: parseInt(document.getElementById('mqttPort').value),
@@ -1213,6 +1417,7 @@
         connectWS();
         loadSettings();
         loadAntennaSettings();
+        loadBrightnessSettings();
         refreshMqttStatus();
     </script>
 </body>

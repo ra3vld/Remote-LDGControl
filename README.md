@@ -9,9 +9,10 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
   - Auto mode selection
   - Antenna A/B switching
 - **Real-time Metering**: Forward power, reflected power, SWR, band detection
-  - Shared 100/1000 W scale: changing it on the touchscreen or in any browser
-    updates the display and all connected pages. The scale starts at 1000 W
-    after a device restart; switching it does not write settings to flash.
+  - Shared 1–1000 W range, with linear or logarithmic scaling and saved defaults.
+    Touching the dial still switches 100/1000 W without writing flash.
+  - Sunton backlight: manual brightness or smooth automatic control using the
+    onboard light sensor. See [display settings](docs/display-settings.md).
 - **Web Interface**: Responsive browser UI with WebSocket live updates
 - **MQTT Integration**: Per-device telemetry, adaptive 1/30-second updates, and Home Assistant auto discovery (six sensors and six command buttons)
 - **Touchscreen Display**: Sunton ESP32-3248S035C or BTT TFT35-SPI with custom cross-needle meter
@@ -219,7 +220,8 @@ All endpoints require HTTP Basic Auth.
 | GET | `/` | Web UI |
 | GET | `/api/status` | JSON status, MQTT diagnostics, `uptime_ms`, `reset_reason`, and `firmware_build` |
 | POST | `/api/mqtt/reconnect` | Ask the MQTT worker to reconnect without restarting the device |
-| POST | `/api/meter-scale` | Set the shared scale with `{"meter_scale":100}` or `{"meter_scale":1000}`, or switch it with `{"toggle":true}` |
+| POST | `/api/meter-scale` | Shared 1–1000 W range, `meter_logarithmic`, optional `save:true`, or runtime `toggle:true` |
+| GET, POST | `/api/display-config` | Backlight settings, ambient ADC/current brightness; POST saves settings on Sunton |
 | GET | `/api/config` | Current configuration |
 | POST | `/api/config` | Save/apply configuration; `restart` is true only when network settings require it |
 | POST | `/api/command/toggle` | Toggle antenna A/B |
@@ -231,13 +233,16 @@ All endpoints require HTTP Basic Auth.
 | POST | `/api/command/auto` | Set auto mode |
 | POST | `/api/command/manual` | Set manual mode |
 
-The scale endpoint returns `meter_scale` and `meter_scale_revision`. Both fields
+The scale endpoint returns `meter_scale`, `meter_logarithmic` and `meter_scale_revision`. These fields
 are also included in `/api/status` and live WebSocket meter updates, including
 when the tuner is idle. Invalid scale requests return HTTP 400. To install this
 feature, upload both the application and LittleFS (`uploadfs`) and reload the
 browser page. Run `pio test -e native`, `node tests/test_meter_scale_web.cjs` and
 `node tests/test_control_web.cjs`
 for the shared-state and page synchronization regression checks.
+`node tests/test_display_settings_web.cjs` checks saved custom/log ranges and
+brightness settings/calibration. See [display settings](docs/display-settings.md)
+for the complete API and persistence rules.
 `node tests/test_settings_web.cjs` checks runtime saves, MQTT reconnect,
 single status polling and uptime diagnostics.
 
@@ -566,6 +571,11 @@ rewrites the table. `/api/status`, WebSocket and MQTT snapshots expose
 only from acknowledged control commands; changes made at the tuner's front
 panel cannot be discovered from the power telemetry. `P` confirms bypass;
 the protocol specification does not promise a toggle or report an exit state.
+The LCD and browser button shows **BYPASS OFF** while bypass is confirmed and
+**BYPASS ON** otherwise. Pressing **BYPASS OFF** selects AUTO (`C`, acknowledged
+with `A`), the bypass exit described in the AT-1000ProII Operations Manual
+(Rev A, page 16); it does not send `P` again. Labels change only on state updates,
+so an unconfirmed command never displays a successful local toggle.
 
 ### Meter Telemetry
 

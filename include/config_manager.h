@@ -6,6 +6,8 @@
 #include "config.h"
 #include "device_config.h"
 #include "antenna_settings.h"
+#include "meter_scale.h"
+#include "brightness_control.h"
 
 
 class ConfigManager {
@@ -17,6 +19,10 @@ public:
     bool update(const DeviceConfig& config);
     ldg::AntennaSettings antennaSettings() const;
     bool updateAntennaSettings(const ldg::AntennaSettings& settings);
+    ldg::MeterSettings meterSettings() const;
+    bool updateMeterSettings(const ldg::MeterSettings& settings);
+    ldg::BrightnessSettings brightnessSettings() const;
+    bool updateBrightnessSettings(const ldg::BrightnessSettings& settings);
     bool setupWiFi();
     bool reset();
     void serviceIdle();
@@ -38,6 +44,8 @@ private:
     Preferences m_prefs;
     DeviceConfig m_config;
     ldg::AntennaSettings m_antennaSettings;
+    ldg::MeterSettings m_meterSettings;
+    ldg::BrightnessSettings m_brightnessSettings;
     mutable portMUX_TYPE m_configMux = portMUX_INITIALIZER_UNLOCKED;
     void (*m_portalIdleCb)() = nullptr;
 

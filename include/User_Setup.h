@@ -18,7 +18,11 @@
 #define TFT_RGB_ORDER TFT_BGR
 #define TFT_INVERSION_OFF
 #define USE_HSPI_PORT
-#define SPI_FREQUENCY 40000000
+// The ESP32-3248S035C BSP uses 80 MHz on the onboard ST7796/HSPI bus.
+// Override with -DSPI_FREQUENCY=40000000 if a panel needs the slower clock.
+#ifndef SPI_FREQUENCY
+#define SPI_FREQUENCY 80000000
+#endif
 #else
 // External BTT TFT35-SPI V2.1 (ILI9488).
 #define TFT_MISO 19
@@ -29,7 +33,9 @@
 #define TFT_RST  -1
 #define TFT_BL   32
 #define ILI9488_DRIVER
+#ifndef SPI_FREQUENCY
 #define SPI_FREQUENCY 20000000
+#endif
 #endif
 
 #define LOAD_GLCD

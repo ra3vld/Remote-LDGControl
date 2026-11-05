@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include "meter_mapping.h"
 
 namespace ldg {
 
@@ -19,8 +20,9 @@ public:
     Tick ticks[2][9]{};
     Curve curves[5]{};
 
-    bool resize(int width, int height) {
-        if (width == m_width && height == m_height) return false;
+    bool resize(int width, int height, bool logarithmic = false) {
+        if (width == m_width && height == m_height && logarithmic == m_logarithmic) return false;
+        m_logarithmic = logarithmic;
         m_width = width;
         m_height = height;
         centerX = width / 2;
@@ -48,8 +50,8 @@ public:
             for (int k = 1; k <= 40; ++k) {
                 const float fraction = float(k) / 40.0f;
                 const float reflected = fminf(g2 * fraction, 1.0f);
-                const float forwardAngle = pi() - fraction * (pi() / 2.0f);
-                const float reflectedAngle = reflected * (pi() / 2.0f);
+                const float forwardAngle = pi() - meterFraction(fraction, 1, logarithmic) * (pi() / 2.0f);
+                const float reflectedAngle = meterFraction(reflected, 1, logarithmic) * (pi() / 2.0f);
                 const float sinR = sinf(reflectedAngle);
                 const float sinD = sinf(forwardAngle - reflectedAngle);
                 if (fabsf(sinD) < 0.001f || fabsf(sinR) < 0.001f) {
@@ -93,6 +95,7 @@ public:
 
 private:
     int m_width = 0, m_height = 0;
+    bool m_logarithmic = false;
     float m_forwardFraction = -1, m_reflectedFraction = -1;
     Point m_forward{}, m_reflected{};
     static float pi() { return 3.14159265f; }

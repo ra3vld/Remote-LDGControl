@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include "display_ui.h"
 #include "config_manager.h"
 #include "mqtt_protocol.h"
@@ -35,6 +36,7 @@ void setUp() {
     strcpy(configManager.config.ant2Name,"Vertical");
     ui=new DisplayUI;
     TEST_ASSERT_TRUE(ui->begin(command,&scale));
+    ui->testRenderer(true,false); // Pixel tests use exact endpoints; motion has separate tests.
     render();
     TFT_eSPI::instance->flushes.clear();
 }
@@ -161,6 +163,110 @@ void test_partial_repaints_match_full_draw_for_both_scales_and_invalid_readings(
         }
     }
 }
+
+void test_custom_log_scale_matches_needle_power_and_partial_repaints() {
+    tuner_state_t state; state.meterValid=true;
+    state.meter.forward_power_watts=60; state.meter.reflected_power_watts=6; state.meter.swr=1.5;
+    scale.set(600,true); ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"600W LOG"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"FWD 60.0W"));
+    ldg::MeterGeometry geometry; geometry.resize(300,280,true);
+    const auto tip=geometry.forwardNeedle(ldg::meterFraction(60,600,true));
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00ff00).full,TFT_eSPI::instance->pixels[tip.y*480+tip.x]);
+    for (const uint16_t maximum : {1,50,600,1000}) for (const bool log : {false,true}) {
+        scale.set(maximum,log); render();
+        for (const float ratio : {0.f,0.01f,0.1f,0.8f,1.f,0.f}) {
+            state.meter.forward_power_watts=ratio*maximum;
+            state.meter.reflected_power_watts=ratio*maximum/10;
+            ui->updateState(state); render();
+            const auto incremental=TFT_eSPI::instance->pixels;
+            lv_obj_invalidate(lv_scr_act()); render();
+            TEST_ASSERT_EQUAL_MEMORY(incremental.data(),TFT_eSPI::instance->pixels.data(),incremental.size()*sizeof(uint16_t));
+        }
+    }
+}
+void test_fast_telemetry_bursts_render_only_the_latest_sample_without_full_screen_refresh() {
+    tuner_state_t state; state.meterValid=true; state.meter.swr=1.2;
+    state.meter.band=BAND_40M;
+    ui->updateState(state); render();
+    TFT_eSPI::instance->flushes.clear();
+    for (int packet=1;packet<=100;++packet) {
+        state.meter.forward_power_watts=packet%2 ? 900 : 30;
+        state.meter.reflected_power_watts=packet%2 ? 90 : 3;
+        ui->updateState(state);
+    }
+    render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"FWD 30.0W"));
+    unsigned pixels=0;
+    for (const auto& flush:TFT_eSPI::instance->flushes) {
+        TEST_ASSERT_LESS_OR_EQUAL_INT(310,flush.x+flush.w);
+        pixels+=flush.w*flush.h;
+    }
+    std::printf("100 queued RF samples: %u transferred pixels; full screen is 153600\n",pixels);
+    TEST_ASSERT_LESS_THAN_UINT(42000,pixels);
+    const auto incremental=TFT_eSPI::instance->pixels;
+    lv_obj_invalidate(lv_scr_act()); render();
+    TEST_ASSERT_EQUAL_MEMORY(incremental.data(),TFT_eSPI::instance->pixels.data(),incremental.size()*sizeof(uint16_t));
+}
+
+void test_compressed_face_is_pixel_identical_to_vectors_for_ranges_log_and_widget_moves() {
+    auto* meter=lv_obj_get_child(lv_scr_act(),0);
+    tuner_state_t state;state.meterValid=true;state.meter.swr=1.8;
+    for (const bool log : {false,true}) for (const uint16_t watts : {1,100,600,1000}) {
+        scale.set(watts,log);state.meter.forward_power_watts=watts*0.37;
+        state.meter.reflected_power_watts=watts*0.04;ui->updateState(state);
+        ui->testRenderer(false,false);render();
+        const auto reference=TFT_eSPI::instance->pixels;
+        ui->testRenderer(true,false);render();
+        TEST_ASSERT_EQUAL_MEMORY(reference.data(),TFT_eSPI::instance->pixels.data(),reference.size()*sizeof(uint16_t));
+        JsonDocument d;ui->writeDiagnostics(d.to<JsonObject>());
+        TEST_ASSERT_GREATER_THAN_UINT(0,d["face_bytes"].as<unsigned>());
+        TEST_ASSERT_LESS_OR_EQUAL_UINT(ldg::MeterFaceCache::MaxBytes,d["face_bytes"].as<unsigned>());
+    }
+    lv_obj_set_pos(meter,7,9);ui->testRenderer(false,false);render();
+    const auto moved=TFT_eSPI::instance->pixels;
+    ui->testRenderer(true,false);render();
+    TEST_ASSERT_EQUAL_MEMORY(moved.data(),TFT_eSPI::instance->pixels.data(),moved.size()*sizeof(uint16_t));
+}
+void test_warm_needle_render_benchmark_and_cache_reuse() {
+    tuner_state_t state;state.meterValid=true;state.meter.swr=1.2;state.meter.band=BAND_40M;
+    const auto benchmark=[&](bool cached) {
+        ui->testRenderer(cached,false);ui->testDelta(cached);ui->testLegacyNeedles(!cached);render();
+        TFT_eSPI::instance->flushes.clear();
+        auto start=std::chrono::steady_clock::now();
+        for(int frame=0;frame<100;++frame) {
+            state.meter.forward_power_watts=frame%2 ? 550 : 450;
+            state.meter.reflected_power_watts=frame%2 ? 25 : 15;
+            ui->updateState(state);render();
+        }
+        const double us=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count()/100;
+        unsigned pixels=0;for(const auto& flush:TFT_eSPI::instance->flushes)pixels+=flush.w*flush.h;
+        std::printf("%s: %u pixels/frame, %zu SPI windows/frame\n",cached?"Fast renderer":"Legacy renderer",pixels/100,TFT_eSPI::instance->flushes.size()/100);
+        return us;
+    };
+    const double vectorUs=benchmark(false), cachedUs=benchmark(true);
+    JsonDocument d;ui->writeDiagnostics(d.to<JsonObject>());
+    const auto builds=d["face_builds"].as<unsigned>(), vectors=d["vector_draws"].as<unsigned>();
+    state.meter.forward_power_watts=100;ui->updateState(state);render();
+    ui->writeDiagnostics(d.as<JsonObject>());
+    TEST_ASSERT_EQUAL_UINT(builds,d["face_builds"].as<unsigned>());
+    TEST_ASSERT_EQUAL_UINT(vectors,d["vector_draws"].as<unsigned>());
+    std::printf("Needle CPU benchmark: vector %.1f us/frame, cached %.1f us/frame, %.2fx; face %u bytes\n",
+        vectorUs,cachedUs,vectorUs/cachedUs,d["face_bytes"].as<unsigned>());
+}
+void test_animated_needle_settles_to_latest_data_without_changing_digital_measurement() {
+    ui->testRenderer(true,true);
+    tuner_state_t state;state.meterValid=true;state.meter.forward_power_watts=1000;state.meter.swr=1;
+    ui->updateState(state);render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"FWD 1000.0W"));
+    auto first=TFT_eSPI::instance->pixels;
+    render();TEST_ASSERT_TRUE(first!=TFT_eSPI::instance->pixels);
+    state.meter.forward_power_watts=40;ui->updateState(state);
+    for(int i=0;i<20;++i)render();
+    const auto settled=TFT_eSPI::instance->pixels;
+    ui->testRenderer(true,false);ui->updateState(state);render();
+    TEST_ASSERT_EQUAL_MEMORY(settled.data(),TFT_eSPI::instance->pixels.data(),settled.size()*sizeof(uint16_t));
+}
 void test_dial_moves_with_its_widget_instead_of_using_screen_coordinates() {
     auto* meter=lv_obj_get_child(lv_scr_act(),0);
     lv_obj_set_pos(meter,7,9); render();
@@ -191,6 +297,20 @@ void test_mode_button_selects_the_opposite_confirmed_mode() {
     auto* automatic=label(lv_scr_act(),"SET AUTO"); TEST_ASSERT_NOT_NULL(automatic);
     lv_event_send(lv_obj_get_parent(automatic),LV_EVENT_CLICKED,nullptr);
     TEST_ASSERT_EQUAL_UINT8('C',lastCommand);
+}
+void test_bypass_button_exits_via_auto_and_waits_for_confirmed_state() {
+    ui->updateStatus(MODE_MANUAL,ANT_A); render();
+    auto* enable=label(lv_scr_act(),"BYPASS ON"); TEST_ASSERT_NOT_NULL(enable);
+    lv_event_send(lv_obj_get_parent(enable),LV_EVENT_CLICKED,nullptr);
+    TEST_ASSERT_EQUAL_UINT8('P',lastCommand);
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"BYPASS ON"));
+    ui->updateStatus(MODE_BYPASS,ANT_A); render();
+    auto* disable=label(lv_scr_act(),"BYPASS OFF"); TEST_ASSERT_NOT_NULL(disable);
+    lv_event_send(lv_obj_get_parent(disable),LV_EVENT_CLICKED,nullptr);
+    TEST_ASSERT_EQUAL_UINT8('C',lastCommand);
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"BYPASS OFF"));
+    ui->updateStatus(MODE_AUTO,ANT_A); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"BYPASS ON"));
 }
 void test_feedback_remains_pending_until_completion_and_then_expires() {
     ldg::CommandFeedback feedback;
@@ -279,6 +399,12 @@ int main() {
     RUN_TEST(test_dial_moves_with_its_widget_instead_of_using_screen_coordinates);
     RUN_TEST(test_lcd_pivots_and_needle_ends_use_the_reduced_dial_radius);
     RUN_TEST(test_mode_button_selects_the_opposite_confirmed_mode);
+    RUN_TEST(test_bypass_button_exits_via_auto_and_waits_for_confirmed_state);
+    RUN_TEST(test_custom_log_scale_matches_needle_power_and_partial_repaints);
+    RUN_TEST(test_fast_telemetry_bursts_render_only_the_latest_sample_without_full_screen_refresh);
+    RUN_TEST(test_compressed_face_is_pixel_identical_to_vectors_for_ranges_log_and_widget_moves);
+    RUN_TEST(test_warm_needle_render_benchmark_and_cache_reuse);
+    RUN_TEST(test_animated_needle_settles_to_latest_data_without_changing_digital_measurement);
     RUN_TEST(test_feedback_remains_pending_until_completion_and_then_expires);
     RUN_TEST(test_changed_antenna_names_refresh_without_recreating_the_screen);
     return UNITY_END();

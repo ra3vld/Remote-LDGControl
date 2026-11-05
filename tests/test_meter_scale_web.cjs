@@ -16,8 +16,10 @@ const deferred = () => {
 
 function board() {
     return {
-        watts: 1000, revision: 0, sockets: [], posts: 0,
-        snapshot() { return { meter_scale: this.watts, meter_scale_revision: this.revision }; },
+        watts: 1000, logarithmic: false, revision: 0, sockets: [], posts: 0,
+        brightness: { supported: true, active: true, light_raw: 1500, brightness: 100,
+            automatic: false, manual: 100, minimum: 15, maximum: 100, dark_adc: 3500, bright_adc: 300 },
+        snapshot() { return { meter_scale: this.watts, meter_logarithmic: this.logarithmic, meter_scale_revision: this.revision }; },
         broadcast(data = this.snapshot()) {
             for (const socket of this.sockets) if (socket.opened) socket.message(data);
         },
@@ -27,11 +29,21 @@ function board() {
             this.broadcast();
         },
         async fetch(url, options = {}) {
+            if (url === '/api/display-config') {
+                if (options.method === 'POST') {
+                    if (this.holdBrightness) await this.holdBrightness.promise;
+                    if (this.failBrightness) return { ok: false, status: 500 };
+                    this.brightnessPosts = (this.brightnessPosts || 0) + 1;
+                    Object.assign(this.brightness, JSON.parse(options.body));
+                    return { ok: true, json: async () => ({ result: 'ok' }) };
+                }
+                return { ok: true, json: async () => ({ ...this.brightness }) };
+            }
             if (url === '/api/antenna-config') return { ok: true, json: async () => ({ enabled: false, bands: Array(11).fill(0) }) };
             if (url === '/api/ws-token') return { ok: true, json: async () => ({ token: 'test' }) };
             if (url === '/api/config') return { ok: true, json: async () => ({}) };
             if (url === '/api/status') {
-                const data = { ...this.snapshot(), mqtt: { state: 'disabled', enabled: false,
+                const data = { ...this.snapshot(), display: { ...this.brightness }, mqtt: { state: 'disabled', enabled: false,
                     message: 'Disabled', attempts: 0 } };
                 if (this.holdStatus) await this.holdStatus.promise;
                 return { ok: true, json: async () => data };
@@ -39,10 +51,22 @@ function board() {
             assert.equal(url, '/api/meter-scale');
             assert.equal(options.method, 'POST');
             assert.equal(options.headers['Content-Type'], 'application/json');
-            assert.deepEqual(JSON.parse(options.body), { toggle: true });
+            const request = JSON.parse(options.body);
             this.posts++;
             if (this.failPost) return { ok: false, status: 503 };
-            this.tap();
+            if (request.toggle) {
+                assert.deepEqual(request, { toggle: true });
+                this.tap();
+            } else {
+                assert.ok(Number.isInteger(request.meter_scale) && request.meter_scale >= 1 && request.meter_scale <= 1000);
+                assert.equal(typeof request.meter_logarithmic, 'boolean');
+                if (this.watts !== request.meter_scale || this.logarithmic !== request.meter_logarithmic) {
+                    this.watts = request.meter_scale; this.logarithmic = request.meter_logarithmic;
+                    this.revision = (this.revision + 1) >>> 0;
+                    this.broadcast();
+                }
+                if (request.save) this.savedMeter = { watts: this.watts, logarithmic: this.logarithmic };
+            }
             const data = this.snapshot();
             if (this.holdPost) await this.holdPost.promise;
             return { ok: true, json: async () => data };
@@ -112,6 +136,7 @@ async function run() {
     assert.equal(a.element('bandValue').textContent, 'Band: unknown');
     await a.click();
     assert.equal(shared.watts, 100);
+    assert.equal(a.element('btnSaveMeter').disabled, false, 'Quick range toggle must re-enable settings save');
     assert.equal(a.watts(), 100);
     assert.equal(b.watts(), 100);
     shared.tap();
@@ -179,7 +204,7 @@ async function run() {
     a.socket.message({ meter_scale: 1000, meter_scale_revision: 0 });
     a.socket.message({ meter_scale: 100, meter_scale_revision: 0xfffffffe });
     assert.equal(a.watts(), 1000);
-    a.socket.message({ meter_scale: 600, meter_scale_revision: 1 });
+    a.socket.message({ meter_scale: 1001, meter_scale_revision: 1 });
     a.socket.message({ meter_scale: 100, meter_scale_revision: '1' });
     assert.equal(a.watts(), 1000);
 

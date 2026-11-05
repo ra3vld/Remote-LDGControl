@@ -1,5 +1,10 @@
 #include "web_server.h"
 #include "config_manager.h"
+#include "display_backlight.h"
+#ifdef WITH_DISPLAY
+#include "display_ui.h"
+extern DisplayUI display;
+#endif
 #include "config.h"
 #include "mqtt_protocol.h"
 #include "security.h"
@@ -242,7 +247,7 @@ static void h_root(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     res->setHeader("Content-Type", "text/html; charset=utf-8");
 
     if (LittleFS.exists("/index.html")) {
-        File f = LittleFS.open("/index.html", "r");
+        fs::File f = LittleFS.open("/index.html", "r");
         if (f) {
             uint8_t buf[512];
             int n;
@@ -281,6 +286,10 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     doc["uptime_ms"] = millis();
     doc["reset_reason"] = int(esp_reset_reason());
     doc["firmware_build"] = __DATE__ " " __TIME__;
+    displayBacklight.writeStatus(doc["display"].to<JsonObject>());
+#ifdef WITH_DISPLAY
+    display.writeDiagnostics(doc["lcd"].to<JsonObject>());
+#endif
     if (self->getTuner()) {
         ldg::writeTunerDiagnostics(doc["uart"].to<JsonObject>(),
             self->getTuner()->getDiagnostics(), millis());
@@ -303,16 +312,59 @@ static void h_meter_scale(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (!scale) { sendJson(res, 503, "{\"error\":\"meter scale unavailable\"}"); return; }
 
     JsonDocument request;
+    ldg::MeterScale candidate;
+    const auto before = scale->snapshot();
+    candidate.set(before.watts, before.logarithmic);
     if (deserializeJson(request, readRequestBody(req)) ||
-        !ldg::applyMeterScaleRequest(*scale, request.as<JsonVariantConst>())) {
-        sendJson(res, 400, "{\"error\":\"use meter_scale: 100 or 1000, or toggle: true\"}");
+        !ldg::applyMeterScaleRequest(candidate, request.as<JsonVariantConst>()) ||
+        (!request["save"].isUnbound() && (!request["save"].is<bool>() || !request["save"].as<bool>() ||
+            !request["meter_scale"].is<uint16_t>() || !request["meter_logarithmic"].is<bool>() ||
+            !request["toggle"].isUnbound()))) {
+        sendJson(res, 400, "{\"error\":\"use meter_scale: 1..1000, meter_logarithmic: boolean, or toggle: true; save requires both settings\"}");
         return;
     }
+    if (request["save"] | false) {
+        const auto value = candidate.snapshot();
+        ldg::MeterSettings settings;
+        settings.watts = value.watts;
+        settings.logarithmic = value.logarithmic;
+        if (!configManager.updateMeterSettings(settings)) {
+            sendJson(res, 500, "{\"error\":\"cannot save meter settings\"}");
+            return;
+        }
+    }
+    ldg::applyMeterScaleRequest(*scale, request.as<JsonVariantConst>());
     JsonDocument response;
     ldg::writeMeterScale(response, scale->snapshot());
     String out;
     serializeJson(response, out);
     sendJson(res, 200, out);
+}
+
+static void h_display_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    JsonDocument doc;
+    ldg::writeBrightnessJson(doc, configManager.brightnessSettings());
+    displayBacklight.writeStatus(doc.as<JsonObject>());
+    String out;
+    serializeJson(doc, out);
+    sendJson(res, 200, out);
+}
+static void h_display_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    if (!DisplayBacklight::supported()) {
+        sendJson(res, 400, "{\"error\":\"onboard backlight control unavailable on this board\"}"); return;
+    }
+    JsonDocument doc;
+    ldg::BrightnessSettings settings;
+    if (deserializeJson(doc, readRequestBody(req)) ||
+        !ldg::parseBrightnessSettings(doc.as<JsonVariantConst>(), settings)) {
+        sendJson(res, 400, "{\"error\":\"invalid brightness settings or ADC calibration\"}"); return;
+    }
+    if (!configManager.updateBrightnessSettings(settings)) {
+        sendJson(res, 500, "{\"error\":\"cannot save brightness settings\"}"); return;
+    }
+    sendJson(res, 200, "{\"result\":\"ok\"}");
 }
 
 static void h_mqtt_reconnect(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
@@ -572,6 +624,8 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     m_server->registerNode(new hsv::ResourceNode("/",                   "GET",  &h_root));
     m_server->registerNode(new hsv::ResourceNode("/api/status",         "GET",  &h_status));
     m_server->registerNode(new hsv::ResourceNode("/api/meter-scale",    "POST", &h_meter_scale));
+    m_server->registerNode(new hsv::ResourceNode("/api/display-config", "GET", &h_display_config_get));
+    m_server->registerNode(new hsv::ResourceNode("/api/display-config", "POST", &h_display_config_post));
     m_server->registerNode(new hsv::ResourceNode("/api/mqtt/reconnect", "POST", &h_mqtt_reconnect));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "GET",  &h_config_get));
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "POST", &h_config_post));

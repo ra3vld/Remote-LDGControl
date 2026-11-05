@@ -15,6 +15,7 @@ using portMUX_TYPE = int;
 #define portEXIT_CRITICAL(mux) ((void)(mux))
 extern uint32_t testMillis;
 inline uint32_t millis() { return testMillis; }
+inline uint32_t micros() { return testMillis * 1000; }
 inline void delay(uint32_t ms) { testMillis += ms; }
 inline void esp_fill_random(void* buffer, size_t length) { memset(buffer, 0x5a, length); }
 #define SERIAL_8N1 0

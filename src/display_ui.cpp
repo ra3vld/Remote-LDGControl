@@ -6,6 +6,8 @@
 #include <Wire.h>
 #include <math.h>
 #include <algorithm>
+#include "display_backlight.h"
+#include <src/draw/sw/lv_draw_sw.h>
 
 DisplayUI* DisplayUI::s_instance = nullptr;
 
@@ -56,6 +58,7 @@ DisplayUI::DisplayUI()
 }
 
 DisplayUI::~DisplayUI() {
+    std::free(m_deltaScratch);
     if (m_tft) delete m_tft;
     s_instance = nullptr;
 }
@@ -93,8 +96,10 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     disp_drv.hor_res = DISPLAY_WIDTH;
     disp_drv.ver_res = DISPLAY_HEIGHT;
     disp_drv.flush_cb = displayFlush;
+    disp_drv.monitor_cb = displayMonitor;
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
+    m_deltaScratch = static_cast<lv_color_t*>(std::malloc(DISPLAY_WIDTH * 10 * sizeof(lv_color_t)));
 
     setupTouch();
 
@@ -242,6 +247,7 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
 
     makeBtn(&m_btnBypass, "BYPASS ON", btnX, antY + antH + btnGap, btnW, btnH,
             lv_color_hex(0xcc8800), lv_color_hex(0xffaa00));
+    m_bypassButtonLabel = lv_obj_get_child(m_btnBypass, 0);
     makeBtn(&m_btnAuto,   "SET AUTO", btnX, antY + antH + btnGap + btnH + btnGap, btnW, btnH,
             lv_color_hex(0x2255aa), lv_color_hex(0x3366cc));
     m_modeButtonLabel = lv_obj_get_child(m_btnAuto, 0);
@@ -258,18 +264,33 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     lv_obj_add_event_cb(m_btnAnt2,     btnAnt2Event,     LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(m_btnBypass,   btnBypassEvent,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(m_btnAuto,     btnAutoEvent,     LV_EVENT_CLICKED, NULL);
+    updateMeterScale();
 
 #ifdef BOARD_ESP32_3248S035C
     lv_refr_now(NULL);
-    digitalWrite(TFT_BL, HIGH);
+    displayBacklight.begin();
     Serial.println("Display: Sunton ST7796 480x320 ready");
 #endif
     return true;
 }
 
 void DisplayUI::loop() {
+#ifdef BOARD_ESP32_3248S035C
+    displayBacklight.loop();
+#endif
     // Web requests only change the atomic model; all LVGL calls stay here.
     updateMeterScale();
+    // UART can publish much faster than the LCD refreshes. Consume only the
+    // latest sample once per frame so invalid rectangles cannot accumulate
+    // across intermediate samples and overflow LVGL's invalid-area list.
+    if (millis() - m_lastMeterRender >= LV_DISP_DEF_REFR_PERIOD) {
+        if (m_meterPending) {
+            updateMeter(&m_pendingMeter, m_pendingBandHeld);
+            m_meterPending = false;
+        }
+        animateNeedles(millis());
+        m_lastMeterRender = millis();
+    }
     if (m_feedbackFinished && millis() - m_feedbackAt >= 4000) {
         lv_label_set_text(m_commandLabel, "");
         m_feedbackFinished = false;
@@ -288,10 +309,24 @@ void DisplayUI::loop() {
 
 void DisplayUI::updateMeterScale() {
     if (!m_meterScale) return;
-    const uint16_t watts = m_meterScale->snapshot().watts;
-    if (m_maxPower == watts) return;
+    const auto settings = m_meterScale->snapshot();
+    const uint16_t watts = settings.watts;
+    if (m_maxPower == watts && m_logarithmic == settings.logarithmic && m_tickLabels[4][0]) return;
+    m_faceAttempted = false;
+    ++m_faceVersion;
+    m_face.clear();
     m_maxPower = watts;
-    lv_label_set_text_fmt(m_scaleLabel, "%uW", unsigned(watts));
+    m_logarithmic = settings.logarithmic;
+    m_forwardFraction = ldg::meterFraction(m_fwdPower, m_maxPower, m_logarithmic);
+    m_reflectedFraction = ldg::meterFraction(m_refPower, m_maxPower, m_logarithmic);
+    m_forwardMotion.snap(m_forwardFraction, millis());
+    m_reflectedMotion.snap(m_reflectedFraction, millis());
+    for (int i = 0; i <= 4; ++i) {
+        const float value = ldg::meterPower(float(i) / 4, watts, m_logarithmic);
+        snprintf(m_tickLabels[i], sizeof(m_tickLabels[i]), value > 0 && value < 1 ? "%.2f" :
+                 value > 0 && value < 10 ? "%.1f" : "%.0f", double(value));
+    }
+    lv_label_set_text_fmt(m_scaleLabel, "%uW%s", unsigned(watts), m_logarithmic ? " LOG" : "");
     lv_obj_invalidate(m_meter);
 }
 
@@ -322,7 +357,9 @@ void DisplayUI::updateState(const tuner_state_t& state) {
         meter.swr = NAN;
     }
     meter.band = ldg::lastKnownBand(state);
-    updateMeter(&meter, ldg::bandIsHeld(state));
+    m_pendingMeter = meter;
+    m_pendingBandHeld = ldg::bandIsHeld(state);
+    m_meterPending = true;
     updateStatus(state.mode, state.antenna, lastAntenna);
 }
 
@@ -364,21 +401,24 @@ void DisplayUI::updateMeter(const tuner_meter_t* meter, bool bandHeld) {
         updatePowerText(m_fwdPowerLabel, "FWD", forward, forwardValid);
     if (reflected != m_refPower || reflectedValid != m_refValid)
         updatePowerText(m_refPowerLabel, "REF", reflected, reflectedValid);
+    m_fwdPower = forward;
+    m_refPower = reflected;
     m_fwdValid = forwardValid;
     m_refValid = reflectedValid;
-    if (forward != m_fwdPower || reflected != m_refPower) {
-        m_geometry.resize(lv_obj_get_width(m_meter), lv_obj_get_height(m_meter));
-        const auto oldForward = m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f));
-        const auto oldReflected = m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f));
-        m_fwdPower = forward;
-        m_refPower = reflected;
-        invalidateNeedle(m_geometry.forwardPivot, oldForward,
-            m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f)));
-        invalidateNeedle(m_geometry.reflectedPivot, oldReflected,
-            m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f)));
-    }
-    if (swr != m_swr && !(std::isnan(swr) && std::isnan(m_swr))) {
-        m_swr = swr;
+    const float forwardTarget = ldg::meterFraction(forward, m_maxPower, m_logarithmic);
+    const float reflectedTarget = ldg::meterFraction(reflected, m_maxPower, m_logarithmic);
+    m_forwardMotion.target(forwardTarget);
+    m_reflectedMotion.target(reflectedTarget);
+    if (!forwardValid || !m_smoothing) m_forwardMotion.snap(forwardTarget, millis());
+    if (!reflectedValid || !m_smoothing) m_reflectedMotion.snap(reflectedTarget, millis());
+    char swrText[16];
+    if (std::isfinite(swr)) snprintf(swrText, sizeof(swrText), "%.1f:1", double(swr));
+    else snprintf(swrText, sizeof(swrText), "--");
+    auto swrColor = [](float value) { return !std::isfinite(value) ? 0 : value > 2 ? 3 : value > 1.5f ? 2 : 1; };
+    const bool swrChanged = strcmp(swrText, m_swrText) || swrColor(swr) != swrColor(m_swr);
+    m_swr = swr;
+    if (swrChanged) {
+        strcpy(m_swrText, swrText);
         lv_area_t bounds;
         lv_obj_get_coords(m_meter, &bounds);
         const int cx = lv_obj_get_width(m_meter) / 2;
@@ -394,6 +434,16 @@ void DisplayUI::updateMeter(const tuner_meter_t* meter, bool bandHeld) {
         lv_label_set_text_fmt(m_bandLabel, "Band: %s%s", TunerProtocol::bandToString(m_band),
                               bandHeld ? " (last)" : "");
     }
+}
+
+void DisplayUI::animateNeedles(uint32_t now) {
+    m_geometry.resize(lv_obj_get_width(m_meter), lv_obj_get_height(m_meter), m_logarithmic);
+    const auto oldForward = m_geometry.forwardNeedle(m_forwardFraction);
+    const auto oldReflected = m_geometry.reflectedNeedle(m_reflectedFraction);
+    m_forwardFraction = m_forwardMotion.advance(now);
+    m_reflectedFraction = m_reflectedMotion.advance(now);
+    invalidateNeedle(m_geometry.forwardPivot, oldForward, m_geometry.forwardNeedle(m_forwardFraction));
+    invalidateNeedle(m_geometry.reflectedPivot, oldReflected, m_geometry.reflectedNeedle(m_reflectedFraction));
 }
 
 void DisplayUI::invalidateNeedle(ldg::MeterGeometry::Point pivot,
@@ -419,6 +469,7 @@ void DisplayUI::invalidateNeedle(ldg::MeterGeometry::Point pivot,
 }
 
 void DisplayUI::updateNetworkInfo() {
+    m_previousValid = false;
     if (m_ssidLabel)
         lv_label_set_text_fmt(m_ssidLabel, "SSID: %s", WiFi.SSID().c_str());
     if (m_ipLabel)
@@ -436,6 +487,7 @@ void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t
             default:           lv_label_set_text(m_modeLabel, "Mode: --"); break;
         }
         lv_label_set_text(m_modeButtonLabel, mode == MODE_AUTO ? "SET MANUAL" : "SET AUTO");
+        lv_label_set_text(m_bypassButtonLabel, mode == MODE_BYPASS ? "BYPASS OFF" : "BYPASS ON");
     }
     if (antenna != m_activeAnt || last != m_lastAnt) {
         m_activeAnt = antenna;
@@ -514,22 +566,11 @@ void DisplayUI::drawMeterEvent(lv_event_t* e) {
     if (s_instance) s_instance->drawCrossNeedle(e);
 }
 
-void DisplayUI::drawCrossNeedle(lv_event_t* e) {
-    lv_draw_ctx_t* draw_ctx = lv_event_get_draw_ctx(e);
-    lv_obj_t* obj = lv_event_get_target(e);
-    m_geometry.resize(lv_obj_get_width(obj), lv_obj_get_height(obj));
-    lv_area_t bounds;
-    lv_obj_get_coords(obj, &bounds);
+void DisplayUI::drawMeterFace(lv_draw_ctx_t* draw_ctx, const lv_area_t& bounds) {
     const int ox = bounds.x1, oy = bounds.y1;
-    const int cx = m_geometry.centerX + ox, cy = m_geometry.centerY + oy;
     const int arm = m_geometry.radius;
     const int fwdPx = m_geometry.forwardPivot.x + ox, fwdPy = m_geometry.forwardPivot.y + oy;
     const int refPx = m_geometry.reflectedPivot.x + ox, refPy = m_geometry.reflectedPivot.y + oy;
-    const auto localFwd = m_geometry.forwardNeedle(fminf(m_fwdPower / m_maxPower, 1.0f));
-    const auto localRef = m_geometry.reflectedNeedle(fminf(m_refPower / m_maxPower, 1.0f));
-    const lv_point_t fwdTip = {lv_coord_t(localFwd.x + ox), lv_coord_t(localFwd.y + oy)};
-    const lv_point_t refTip = {lv_coord_t(localRef.x + ox), lv_coord_t(localRef.y + oy)};
-
     // ----- Scale arcs (one per pivot, each spanning the full 90° sweep) -----
     // Forward arc: upper-left quarter around fwd pivot (LVGL 180° → 270°, clockwise = left→up)
     // Reflected arc: upper-right quarter around ref pivot (LVGL 270° → 360°, clockwise = up→right)
@@ -544,9 +585,11 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     lv_draw_arc(draw_ctx, &arc_dsc, &ref_ctr, arm, 270, 360);
 
     // ----- Tick marks + labels along each arc -----
-    static const char* const highLabels[] = {"", "250", "500", "750", "1000"};
-    static const char* const lowLabels[] = {"", "25", "50", "75", "100"};
-    const char* const* labels = m_maxPower == 100 ? lowLabels : highLabels;
+    const auto visible = [draw_ctx](int x1, int y1, int x2, int y2, int padding) {
+        const auto* clip = draw_ctx->clip_area;
+        return std::max(x1, x2) + padding >= clip->x1 && std::min(x1, x2) - padding <= clip->x2 &&
+               std::max(y1, y2) + padding >= clip->y1 && std::min(y1, y2) - padding <= clip->y2;
+    };
     for (int side = 0; side < 2; ++side) {
         const uint32_t color = side == 0 ? 0x22c55e : 0xef4444;
         for (int i = 0; i <= 8; ++i) {
@@ -558,7 +601,7 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
             lv_draw_line_dsc_init(&tick_dsc);
             tick_dsc.color = major ? lv_color_hex(color) : lv_color_hex(0x666666);
             tick_dsc.width = major ? 2 : 1;
-            lv_draw_line(draw_ctx, &tick_dsc, &p1, &p2);
+            if (visible(p1.x, p1.y, p2.x, p2.y, 3)) lv_draw_line(draw_ctx, &tick_dsc, &p1, &p2);
             if (major && i > 0) {
                 lv_draw_label_dsc_t ld;
                 lv_draw_label_dsc_init(&ld);
@@ -568,7 +611,8 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
                 const int lx = tick.label.x + ox, ly = tick.label.y + oy;
                 lv_area_t la = {(lv_coord_t)(lx-16),(lv_coord_t)(ly-8),
                                 (lv_coord_t)(lx+16),(lv_coord_t)(ly+8)};
-                lv_draw_label(draw_ctx, &ld, &la, labels[i / 2], NULL);
+                if (visible(la.x1, la.y1, la.x2, la.y2, 0))
+                    lv_draw_label(draw_ctx, &ld, &la, m_tickLabels[i / 2], NULL);
             }
         }
     }
@@ -586,15 +630,100 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
             const auto& line = curve.lines[i];
             lv_point_t p1 = {lv_coord_t(line.from.x + ox), lv_coord_t(line.from.y + oy)};
             lv_point_t p2 = {lv_coord_t(line.to.x + ox), lv_coord_t(line.to.y + oy)};
-            lv_draw_line(draw_ctx, &curve_dsc, &p1, &p2);
+            if (visible(p1.x, p1.y, p2.x, p2.y, 2)) lv_draw_line(draw_ctx, &curve_dsc, &p1, &p2);
         }
     }
 
+}
+
+bool DisplayUI::buildMeterFace(const lv_area_t& bounds) {
+    const int width = lv_area_get_width(&bounds), height = lv_area_get_height(&bounds);
+    const auto background = lv_obj_get_style_bg_color(m_meter, LV_PART_MAIN);
+    if (!m_face.count(width, height, background.full)) return false;
+    auto* scratch = static_cast<lv_color_t*>(std::malloc(width * 8 * sizeof(lv_color_t)));
+    if (!scratch) return false;
+    lv_draw_sw_ctx_t software;
+    lv_draw_sw_init_ctx(nullptr, &software.base_draw);
+    auto* context = &software.base_draw;
+    bool success = true;
+    for (int pass = 0; pass < 2 && success; ++pass) {
+        for (int y = 0; y < height && success; y += 8) {
+            const int rows = std::min(8, height - y);
+            std::fill(scratch, scratch + width * rows, background);
+            lv_area_t stripe = {bounds.x1, lv_coord_t(bounds.y1 + y), bounds.x2, lv_coord_t(bounds.y1 + y + rows - 1)};
+            context->buf = scratch;
+            context->buf_area = &stripe;
+            context->clip_area = &stripe;
+            drawMeterFace(context, bounds);
+            for (int row = 0; row < rows && success; ++row)
+                success = m_face.append(reinterpret_cast<const uint16_t*>(scratch + row * width));
+        }
+        if (success) success = pass == 0 ? m_face.allocate() : m_face.finish();
+    }
+    lv_draw_sw_deinit_ctx(nullptr, context);
+    std::free(scratch);
+    if (!success) m_face.clear();
+    return success;
+}
+
+// Direct antialiased RGB565 stroke: visit only rows crossing a 3-pixel
+// needle, rather than constructing LVGL line masks again for every strip.
+// The endpoint/pivot circles are still rendered by LVGL below.
+static void rasterNeedle(lv_draw_ctx_t* context, lv_point_t pivot, lv_point_t tip, lv_color_t color) {
+    const float dx = tip.x - pivot.x, dy = tip.y - pivot.y;
+    const float squared = dx * dx + dy * dy;
+    if (squared < 1) return;
+    const float length = sqrtf(squared), inverse = 1.0f / length;
+    const auto& clip = *context->clip_area;
+    const int top = std::max<int>(clip.y1,std::min(pivot.y,tip.y)-2);
+    const int bottom = std::min<int>(clip.y2,std::max(pivot.y,tip.y)+2);
+    const int minimumX = std::max<int>(clip.x1,std::min(pivot.x,tip.x)-2);
+    const int maximumX = std::min<int>(clip.x2,std::max(pivot.x,tip.x)+2);
+    const float slope = dy != 0 ? dx / dy : 0, half = dy != 0 ? 2 * length / fabsf(dy) : 0;
+    const int stride = lv_area_get_width(context->buf_area);
+    auto* buffer = static_cast<lv_color_t*>(context->buf);
+    for (int y=top;y<=bottom;++y) {
+        int left=minimumX,right=maximumX;
+        if (dy != 0) {
+            const float center=pivot.x+slope*(y-pivot.y);
+            left=std::max(left,int(floorf(center-half)));
+            right=std::min(right,int(ceilf(center+half)));
+        }
+        auto* row=buffer+(y-context->buf_area->y1)*stride;
+        for(int x=left;x<=right;++x) {
+            const float vx=x-pivot.x,vy=y-pivot.y;
+            const float dot=vx*dx+vy*dy;
+            float distance;
+            if(dot<0)distance=sqrtf(vx*vx+vy*vy);
+            else if(dot>squared) {
+                const float ex=x-tip.x,ey=y-tip.y;distance=sqrtf(ex*ex+ey*ey);
+            } else distance=fabsf(vx*dy-vy*dx)*inverse;
+            if(distance>=2)continue;
+            auto& pixel=row[x-context->buf_area->x1];
+            if(distance<=1)pixel=color;
+            else pixel=lv_color_mix(color,pixel,lv_opa_t((2-distance)*255+0.5f));
+        }
+    }
+}
+
+void DisplayUI::drawMeterForeground(lv_draw_ctx_t* draw_ctx, const lv_area_t& bounds,
+                                    float forward, float reflected, float swr, const char* swrText) {
+    const int ox = bounds.x1, oy = bounds.y1;
+    const int cx = m_geometry.centerX + ox, cy = m_geometry.centerY + oy, arm = m_geometry.radius;
+    const int fwdPx = m_geometry.forwardPivot.x + ox, fwdPy = m_geometry.forwardPivot.y + oy;
+    const int refPx = m_geometry.reflectedPivot.x + ox, refPy = m_geometry.reflectedPivot.y + oy;
+    const auto f = m_geometry.forwardNeedle(forward), r = m_geometry.reflectedNeedle(reflected);
+    const lv_point_t fwdTip = {lv_coord_t(f.x + ox),lv_coord_t(f.y + oy)};
+    const lv_point_t refTip = {lv_coord_t(r.x + ox),lv_coord_t(r.y + oy)};
     // ----- Needles -----
     lv_draw_line_dsc_t needle_dsc;
     lv_draw_line_dsc_init(&needle_dsc);
     needle_dsc.width     = 3;
     needle_dsc.round_end = true;
+    if (m_fastNeedles) {
+        rasterNeedle(draw_ctx,{lv_coord_t(fwdPx),lv_coord_t(fwdPy)},fwdTip,lv_color_hex(0x00ff00));
+        rasterNeedle(draw_ctx,{lv_coord_t(refPx),lv_coord_t(refPy)},refTip,lv_color_hex(0xff0000));
+    } else {
     needle_dsc.color = lv_color_hex(0x00ff00);
     { lv_point_t p1={(lv_coord_t)fwdPx,(lv_coord_t)fwdPy},
                  p2={fwdTip.x, fwdTip.y};
@@ -603,6 +732,7 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     { lv_point_t p1={(lv_coord_t)refPx,(lv_coord_t)refPy},
                  p2={refTip.x, refTip.y};
       lv_draw_line(draw_ctx, &needle_dsc, &p1, &p2); }
+    }
 
     // ----- Pivot dots -----
     lv_draw_rect_dsc_t rd;
@@ -618,32 +748,199 @@ void DisplayUI::drawCrossNeedle(lv_event_t* e) {
     lv_draw_rect(draw_ctx, &rd, &ra);
 
     // ----- SWR text -----
-    if (m_swrTextValue != m_swr) {
-        m_swrTextValue = m_swr;
-        if (std::isfinite(m_swr)) snprintf(m_swrText, sizeof(m_swrText), "%.1f:1", m_swr);
-        else snprintf(m_swrText, sizeof(m_swrText), "--");
-    }
     lv_draw_label_dsc_t swr_dsc;
     lv_draw_label_dsc_init(&swr_dsc);
-    swr_dsc.color = !std::isfinite(m_swr) ? lv_color_hex(0x888888) : (m_swr > 2.0f) ? lv_color_hex(0xff4444) :
-                    (m_swr > 1.5f) ? lv_color_hex(0xffaa00) : lv_color_hex(0x00ff00);
+    swr_dsc.color = !std::isfinite(swr) ? lv_color_hex(0x888888) : (swr > 2.0f) ? lv_color_hex(0xff4444) :
+                    (swr > 1.5f) ? lv_color_hex(0xffaa00) : lv_color_hex(0x00ff00);
     swr_dsc.font  = &lv_font_montserrat_24;
     swr_dsc.align = LV_TEXT_ALIGN_CENTER;
     lv_area_t swr_a = {(lv_coord_t)(cx-50),(lv_coord_t)(cy-arm/2-12),
                        (lv_coord_t)(cx+50),(lv_coord_t)(cy-arm/2+12)};
-    lv_draw_label(draw_ctx, &swr_dsc, &swr_a, m_swrText, NULL);
+    lv_draw_label(draw_ctx, &swr_dsc, &swr_a, swrText, NULL);
+}
+
+void DisplayUI::drawCrossNeedle(lv_event_t* e) {
+    const uint32_t drawStarted = micros();
+    lv_draw_ctx_t* draw_ctx = lv_event_get_draw_ctx(e);
+    lv_obj_t* obj = lv_event_get_target(e);
+    m_geometry.resize(lv_obj_get_width(obj), lv_obj_get_height(obj), m_logarithmic);
+    lv_area_t bounds;
+    lv_obj_get_coords(obj, &bounds);
+    if (memcmp(&bounds, &m_faceBounds, sizeof(bounds))) {
+        m_faceBounds = bounds; m_faceAttempted = false; ++m_faceVersion; m_face.clear();
+    }
+    const int ox = bounds.x1, oy = bounds.y1;
+    const int cx = m_geometry.centerX + ox, cy = m_geometry.centerY + oy;
+    const int arm = m_geometry.radius;
+    const int fwdPx = m_geometry.forwardPivot.x + ox, fwdPy = m_geometry.forwardPivot.y + oy;
+    const int refPx = m_geometry.reflectedPivot.x + ox, refPy = m_geometry.reflectedPivot.y + oy;
+    const auto localFwd = m_geometry.forwardNeedle(m_forwardFraction);
+    const auto localRef = m_geometry.reflectedNeedle(m_reflectedFraction);
+    const lv_point_t fwdTip = {lv_coord_t(localFwd.x + ox), lv_coord_t(localFwd.y + oy)};
+    const lv_point_t refTip = {lv_coord_t(localRef.x + ox), lv_coord_t(localRef.y + oy)};
+
+    if (m_faceAllowed && !m_faceAttempted) {
+        m_faceAttempted = true;
+        const uint32_t started = micros();
+        const bool built = buildMeterFace(bounds);
+        portENTER_CRITICAL(&m_diagnosticsMux);
+        ++m_diagnostics.faceBuilds;
+        m_diagnostics.faceBuildUs = micros() - started;
+        m_diagnostics.faceBytes = built ? m_face.bytes() : 0;
+        portEXIT_CRITICAL(&m_diagnosticsMux);
+    }
+    if (m_faceAllowed && m_face.valid()) {
+        lv_area_t clip;
+        if (_lv_area_intersect(&clip, &bounds, draw_ctx->clip_area)) {
+            const int stride = lv_area_get_width(draw_ctx->buf_area);
+            auto* destination = static_cast<uint16_t*>(draw_ctx->buf);
+            for (int y = clip.y1; y <= clip.y2; ++y) {
+                auto* row = destination + (y - draw_ctx->buf_area->y1) * stride + clip.x1 - draw_ctx->buf_area->x1;
+                m_face.copyRow(row, y - oy, clip.x1 - ox, clip.x2 - ox);
+            }
+        }
+        portENTER_CRITICAL(&m_diagnosticsMux);
+        ++m_diagnostics.faceHits;
+        portEXIT_CRITICAL(&m_diagnosticsMux);
+    } else {
+        drawMeterFace(draw_ctx, bounds);
+        portENTER_CRITICAL(&m_diagnosticsMux);
+        ++m_diagnostics.vectorDraws;
+        portEXIT_CRITICAL(&m_diagnosticsMux);
+    }
+
+    drawMeterForeground(draw_ctx, bounds, m_forwardFraction, m_reflectedFraction, m_swr, m_swrText);
+    m_frameDrawUs += micros() - drawStarted;
 }
 
 void DisplayUI::displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p) {
-    uint32_t w = area->x2 - area->x1 + 1;
-    uint32_t h = area->y2 - area->y1 + 1;
-
-    s_instance->m_tft->startWrite();
-    s_instance->m_tft->setAddrWindow(area->x1, area->y1, w, h);
-    s_instance->m_tft->pushColors((uint16_t*)&color_p->full, w * h, true);
-    s_instance->m_tft->endWrite();
-
+    auto* self = s_instance;
+    const uint32_t started = micros();
+    const int width = lv_area_get_width(area), height = lv_area_get_height(area);
+    lv_area_t graph = self->m_faceBounds, difference;
+    // Reconstruct the previous dial including its two overlaid power labels,
+    // so unchanged glyphs and empty label backgrounds need no SPI transfer.
+    const bool delta = self->m_deltaAllowed && self->m_deltaScratch && self->m_faceAllowed &&
+        self->m_face.valid() && self->m_previousValid && self->m_previousFaceVersion == self->m_faceVersion &&
+        _lv_area_intersect(&difference, area, &graph);
+    if (delta) {
+        const uint32_t drawStarted = micros();
+        const int stride = lv_area_get_width(&difference);
+        for (int y = difference.y1; y <= difference.y2; ++y)
+            self->m_face.copyRow(reinterpret_cast<uint16_t*>(self->m_deltaScratch + (y - difference.y1) * stride),
+                y - graph.y1, difference.x1 - graph.x1, difference.x2 - graph.x1);
+        lv_draw_sw_ctx_t software;
+        lv_draw_sw_init_ctx(disp, &software.base_draw);
+        software.base_draw.buf = self->m_deltaScratch;
+        software.base_draw.buf_area = &difference;
+        software.base_draw.clip_area = &difference;
+        self->drawMeterForeground(&software.base_draw, self->m_faceBounds,
+            self->m_previousForward, self->m_previousReflected, self->m_previousSwr, self->m_previousSwrText);
+        const auto oldLabel = [&software](lv_obj_t* label, const char* text) {
+            lv_draw_label_dsc_t dsc;
+            lv_draw_label_dsc_init(&dsc);
+            lv_obj_init_draw_label_dsc(label, LV_PART_MAIN, &dsc);
+            lv_area_t bounds;
+            lv_obj_get_content_coords(label, &bounds);
+            lv_draw_label(&software.base_draw, &dsc, &bounds, text, nullptr);
+        };
+        oldLabel(self->m_fwdPowerLabel,self->m_previousForwardText);
+        oldLabel(self->m_refPowerLabel,self->m_previousReflectedText);
+        lv_draw_sw_deinit_ctx(disp, &software.base_draw);
+        self->m_frameDrawUs += micros() - drawStarted;
+        portENTER_CRITICAL(&self->m_diagnosticsMux);
+        ++self->m_diagnostics.deltaFlushes;
+        portEXIT_CRITICAL(&self->m_diagnosticsMux);
+    }
+    self->m_tft->startWrite();
+    const auto send = [self](int x, int y, int w, int h, lv_color_t* source) {
+        if (w <= 0 || h <= 0) return;
+        self->m_tft->setAddrWindow(x, y, w, h);
+        self->m_tft->pushColors(reinterpret_cast<uint16_t*>(source), w * h, true);
+        self->m_frameSentPixels += w * h;
+    };
+    if (!delta) send(area->x1, area->y1, width, height, color_p);
+    else {
+        const int length=lv_area_get_width(&difference);
+        // Batch changed pixels into short rectangles. One SPI address window
+        // per tiny run on every row would cost more than the saved pixel data.
+        for(int top=difference.y1;top<=difference.y2;top+=4) {
+            const int rows=std::min(4,int(difference.y2)-top+1);
+            bool dirty[DISPLAY_WIDTH] = {};
+            for(int row=0;row<rows;++row) {
+                const auto* before=self->m_deltaScratch+(top+row-difference.y1)*length;
+                const auto* after=color_p+(top+row-area->y1)*width+difference.x1-area->x1;
+                for(int x=0;x<length;++x)dirty[x]|=before[x].full!=after[x].full;
+            }
+            auto* packed=self->m_deltaScratch+(top-difference.y1)*length;
+            for(int x=0;x<length;) {
+                while(x<length && !dirty[x])++x;
+                if(x==length)break;
+                const int first=x++;
+                int unchanged=0;
+                while(x<length) {
+                    unchanged=dirty[x]?0:unchanged+1;++x;
+                    if(unchanged==4){x-=4;break;}
+                }
+                const int columns=x-first;
+                for(int row=0;row<rows;++row)
+                    memcpy(packed+row*columns,color_p+(top+row-area->y1)*width+difference.x1-area->x1+first,
+                        columns*sizeof(lv_color_t));
+                send(difference.x1+first,top,columns,rows,packed);
+            }
+        }
+        // Uncached siblings/outer areas retain the normal LVGL pixels.
+        send(area->x1,area->y1,width,difference.y1-area->y1,color_p);
+        send(area->x1,difference.y2+1,width,area->y2-difference.y2,
+            color_p+(difference.y2+1-area->y1)*width);
+        const auto side=[&](int x,int columns) {
+            if(columns<=0)return;
+            const int rows=lv_area_get_height(&difference);
+            for(int row=0;row<rows;++row)
+                memcpy(self->m_deltaScratch+row*columns,
+                    color_p+(difference.y1+row-area->y1)*width+x-area->x1,columns*sizeof(lv_color_t));
+            send(x,difference.y1,columns,rows,self->m_deltaScratch);
+        };
+        side(area->x1,difference.x1-area->x1);
+        side(difference.x2+1,area->x2-difference.x2);
+    }
+    self->m_tft->endWrite();
+    self->m_frameFlushUs += micros() - started;
     lv_disp_flush_ready(disp);
+}
+
+void DisplayUI::displayMonitor(lv_disp_drv_t*, uint32_t timeMs, uint32_t pixels) {
+    auto* self = s_instance;
+    portENTER_CRITICAL(&self->m_diagnosticsMux);
+    auto& d = self->m_diagnostics;
+    ++d.frames; d.frameMs = timeMs; d.maxFrameMs = std::max(d.maxFrameMs, timeMs);
+    d.pixels = pixels; d.flushUs = self->m_frameFlushUs; d.drawUs = self->m_frameDrawUs;
+    d.sentPixels = self->m_frameSentPixels;
+    portEXIT_CRITICAL(&self->m_diagnosticsMux);
+    self->m_frameFlushUs = self->m_frameDrawUs = self->m_frameSentPixels = 0;
+    self->m_previousValid = self->m_face.valid();
+    self->m_previousFaceVersion = self->m_faceVersion;
+    self->m_previousForward = self->m_forwardFraction; self->m_previousReflected = self->m_reflectedFraction;
+    self->m_previousSwr = self->m_swr;
+    strcpy(self->m_previousSwrText,self->m_swrText);
+    snprintf(self->m_previousForwardText,sizeof(self->m_previousForwardText),"%s",lv_label_get_text(self->m_fwdPowerLabel));
+    snprintf(self->m_previousReflectedText,sizeof(self->m_previousReflectedText),"%s",lv_label_get_text(self->m_refPowerLabel));
+}
+
+void DisplayUI::writeDiagnostics(JsonObject doc) const {
+    portENTER_CRITICAL(&m_diagnosticsMux);
+    const auto d = m_diagnostics;
+    portEXIT_CRITICAL(&m_diagnosticsMux);
+    doc["frames"] = d.frames; doc["frame_ms"] = d.frameMs; doc["max_frame_ms"] = d.maxFrameMs;
+    doc["pixels"] = d.pixels; doc["flush_us"] = d.flushUs; doc["draw_us"] = d.drawUs;
+    doc["face_bytes"] = d.faceBytes; doc["face_build_us"] = d.faceBuildUs;
+    doc["sent_pixels"] = d.sentPixels; doc["delta_flushes"] = d.deltaFlushes;
+    doc["face_builds"] = d.faceBuilds; doc["cache_hits"] = d.faceHits; doc["vector_draws"] = d.vectorDraws;
+#ifdef ARDUINO_ARCH_ESP32
+    doc["spi_write_hz"] = SPI_FREQUENCY;
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["largest_block"] = ESP.getMaxAllocHeap();
+#endif
 }
 
 void DisplayUI::btnMemTuneEvent(lv_event_t* e) {
@@ -665,7 +962,9 @@ void DisplayUI::btnAnt2Event(lv_event_t* e) {
 }
 
 void DisplayUI::btnBypassEvent(lv_event_t* e) {
-    if (s_instance && s_instance->m_commandHandler) s_instance->m_commandHandler(TUNER_CMD_BYPASS);
+    if (s_instance && s_instance->m_commandHandler)
+        s_instance->m_commandHandler(s_instance->m_activeMode == MODE_BYPASS
+            ? TUNER_CMD_AUTO_MODE : TUNER_CMD_BYPASS);
 }
 
 void DisplayUI::btnAutoEvent(lv_event_t* e) {

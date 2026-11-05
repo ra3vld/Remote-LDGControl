@@ -288,11 +288,46 @@ bool ConfigManager::begin() {
     return save(get());
 }
 
+ldg::MeterSettings ConfigManager::meterSettings() const {
+    portENTER_CRITICAL(&m_configMux);
+    const auto settings = m_meterSettings;
+    portEXIT_CRITICAL(&m_configMux);
+    return settings;
+}
+
+bool ConfigManager::updateMeterSettings(const ldg::MeterSettings& settings) {
+    if (!ldg::validMeterSettings(settings) || !m_prefs.begin("ldg-config", false)) return false;
+    const bool saved = ldg::writeMeterSettings(m_prefs, settings);
+    m_prefs.end();
+    if (!saved) return false;
+    portENTER_CRITICAL(&m_configMux);
+    m_meterSettings = settings;
+    portEXIT_CRITICAL(&m_configMux);
+    return true;
+}
+
 DeviceConfig ConfigManager::get() const {
     portENTER_CRITICAL(&m_configMux);
     const DeviceConfig config = m_config;
     portEXIT_CRITICAL(&m_configMux);
     return config;
+}
+
+ldg::BrightnessSettings ConfigManager::brightnessSettings() const {
+    portENTER_CRITICAL(&m_configMux);
+    const auto settings = m_brightnessSettings;
+    portEXIT_CRITICAL(&m_configMux);
+    return settings;
+}
+bool ConfigManager::updateBrightnessSettings(const ldg::BrightnessSettings& settings) {
+    if (!ldg::validBrightnessSettings(settings) || !m_prefs.begin("ldg-config", false)) return false;
+    const bool saved = ldg::writeBrightnessSettings(m_prefs, settings);
+    m_prefs.end();
+    if (!saved) return false;
+    portENTER_CRITICAL(&m_configMux);
+    m_brightnessSettings = settings;
+    portEXIT_CRITICAL(&m_configMux);
+    return true;
 }
 
 bool ConfigManager::update(const DeviceConfig& config) {
@@ -553,6 +588,8 @@ bool ConfigManager::load() {
     if (!m_prefs.begin("ldg-config", true)) return false;
     // Absent/invalid band settings use defaults without affecting configV1.
     ldg::readAntennaSettings(m_prefs, m_antennaSettings);
+    ldg::readMeterSettings(m_prefs, m_meterSettings);
+    ldg::readBrightnessSettings(m_prefs, m_brightnessSettings);
     if (m_prefs.isKey("configV1")) {
         const bool loaded = ldg::readConfig(m_prefs, m_config);
         m_prefs.end();

@@ -50,6 +50,23 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     await vm.runInContext('toggleTuningMode()', ui.context);
     assert.equal(commands.at(-1), '/api/command/auto');
 
+    assert.equal(ui.element('btnBypass').textContent, 'BYPASS ON');
+    await vm.runInContext('toggleBypass()', ui.context);
+    assert.equal(commands.at(-1), '/api/command/bypass');
+    assert.equal(ui.element('btnBypass').textContent, 'BYPASS ON', 'Wait for confirmed bypass state');
+    ui.socket.message({ ...server.snapshot(), mode: 3 });
+    assert.equal(ui.element('btnBypass').textContent, 'BYPASS OFF');
+    server.failCommand = true;
+    await vm.runInContext('toggleBypass()', ui.context);
+    assert.equal(commands.at(-1), '/api/command/auto');
+    assert.equal(ui.element('btnBypass').textContent, 'BYPASS OFF', 'A failed exit must not clear bypass');
+    delete server.failCommand;
+    await vm.runInContext('toggleBypass()', ui.context);
+    assert.equal(commands.at(-1), '/api/command/auto');
+    assert.equal(ui.element('btnBypass').textContent, 'BYPASS OFF', 'Wait for confirmed AUTO state');
+    ui.socket.message({ ...server.snapshot(), mode: 1 });
+    assert.equal(ui.element('btnBypass').textContent, 'BYPASS ON');
+
     server.holdCommand = deferred();
     const tune = vm.runInContext("sendCommand('full_tune')", ui.context);
     await tick();

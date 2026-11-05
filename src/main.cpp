@@ -341,6 +341,8 @@ void setup() {
 
     // Load configuration from NVS
     if (!configManager.begin()) Serial.println("ERROR: configuration persistence unavailable");
+    const auto savedMeter = configManager.meterSettings();
+    meterScale.set(savedMeter.watts, savedMeter.logarithmic);
 
     setupFS();
 
@@ -417,15 +419,18 @@ void setup() {
         Serial.printf("ERROR: web server failed to start - port %u may still be bound\n", WEB_PORT);
     }
 
-    // HTTP and WebSocket processing never owns UART or LVGL state.
-    xTaskCreatePinnedToCore(
+    // Keep network work on core 0 with MQTT/remote polling. A high-priority
+    // web task on core 1 can preempt LVGL for an entire socket/logging burst.
+    // UART metering retains priority 2 on core 1; UI stays on the Arduino loop.
+    if (xTaskCreatePinnedToCore(
         [](void*) {
             for (;;) {
                 webServer.loop();
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
         },
-        "webServer", 16384, NULL, 5, NULL, 1);
+        "webServer", 16384, NULL, 1, NULL, 0) != pdPASS)
+        Serial.println("ERROR: web task could not start");
 
     Serial.println("=== System Ready ===");
 }
