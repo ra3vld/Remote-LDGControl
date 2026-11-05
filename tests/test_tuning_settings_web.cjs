@@ -1,0 +1,53 @@
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
+(async () => {
+    const server = board(); const original = server.fetch;
+    server.tuning = { auto_fallback: false, swr_threshold: 2 };
+    server.tuningPosts = 0;
+    server.fetch = async function(url, options = {}) {
+        if (url !== '/api/tuning-config') return original.call(this, url, options);
+        if (options.method === 'POST') {
+            ++this.tuningPosts;
+            if (this.holdTuning) await this.holdTuning.promise;
+            if (this.failTuning) return { ok: false, json: async () => ({ error: 'save failed' }) };
+            this.tuning = JSON.parse(options.body);
+            return { ok: true, json: async () => ({ result: 'ok', restart: false }) };
+        }
+        if (this.offlineTuning) throw new Error('offline');
+        return { ok: true, json: async () => ({ ...this.tuning }) };
+    };
+    const ui = await page(server);
+    assert.equal(ui.element('tuningSwrThreshold').value, '2.0');
+    assert.equal(ui.element('tuningSwrThreshold').disabled, true);
+    assert.equal(ui.element('btnSaveTuning').disabled, false);
+    ui.element('tuningAutoFallback').checked = true;
+    ui.element('tuningSwrThreshold').value = '2.5';
+    vm.runInContext('updateTuningFields()', ui.context);
+    assert.equal(ui.element('tuningSwrThreshold').disabled, false);
+    server.holdTuning = deferred(); const save = vm.runInContext('saveTuningSettings()', ui.context);
+    await tick(); await vm.runInContext('saveTuningSettings()', ui.context);
+    assert.equal(server.tuningPosts, 1); assert.equal(ui.element('btnSaveTuning').disabled, true);
+    server.holdTuning.resolve(); await save; delete server.holdTuning;
+    assert.deepEqual(server.tuning, { auto_fallback: true, swr_threshold: 2.5 });
+    assert.doesNotMatch(ui.element('toast').textContent, /restart/i);
+    const reloaded = await page(server);
+    assert.equal(reloaded.element('tuningAutoFallback').checked, true);
+    assert.equal(reloaded.element('tuningSwrThreshold').value, '2.5');
+    ui.element('tuningSwrThreshold').value = '2.05';
+    await vm.runInContext('saveTuningSettings()', ui.context); assert.equal(server.tuningPosts, 1);
+    ui.element('tuningSwrThreshold').value = '3'; server.failTuning = true;
+    await vm.runInContext('saveTuningSettings()', ui.context);
+    assert.equal(server.tuning.swr_threshold, 2.5); assert.match(ui.element('toast').textContent, /save failed/);
+    assert.equal(ui.element('btnSaveTuning').disabled, false);
+    server.broadcast({ ...server.snapshot(), mode: 4, tuner_mode: 1, tuning_state: 'auto_active' });
+    assert.match(ui.element('tuningStatus').textContent, /AUTO.*конца передачи/);
+    assert.equal(ui.element('tuningSwrThreshold').value, '3', 'Live state must preserve unsaved settings');
+    server.broadcast({ ...server.snapshot(), tuning_state: 'returning_manual' });
+    assert.match(ui.element('tuningStatus').textContent, /Возврат.*MANUAL/);
+    server.offlineTuning = true; const offline = await page(server);
+    assert.equal(offline.element('btnSaveTuning').disabled, true);
+    await vm.runInContext('saveTuningSettings()', offline.context); assert.equal(server.tuningPosts, 2);
+    assert.match(offline.element('tuningSettingsStatus').textContent, /Не удалось загрузить/);
+    console.log('PASS: managed tuning settings, persistence, duplicate clicks, validation, failure, offline, live status and unsaved edits');
+})().catch(error => { console.error(error); process.exitCode = 1; });

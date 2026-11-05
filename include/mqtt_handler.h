@@ -16,7 +16,8 @@ public:
     ~MqttHandler();
 
     bool begin(WiFiClient& wifiClient, mqtt_command_handler_t cmdHandler,
-               tuner_state_getter_t stateGetter);
+               tuner_state_getter_t stateGetter, ldg::BridgeGetter bridgeGetter=nullptr,
+               ldg::BridgeHandler bridgeHandler=nullptr);
     void disconnect();
     void loop();
     bool isConnected() const;
@@ -41,6 +42,9 @@ private:
     mqtt_command_handler_t m_commandHandler = nullptr;
     // PubSubClient retains the hostname pointer passed to setServer().
     std::string m_broker;
+    ldg::BridgeGetter m_bridgeGetter=nullptr;
+    ldg::BridgeHandler m_bridgeHandler=nullptr;
+    ldg::BridgeCache m_bridgeCache;
     ldg::MqttReadings m_readings;
     ldg::MqttSession* m_session = nullptr;
     ldg::MqttIdentity m_identity;

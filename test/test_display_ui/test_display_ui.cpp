@@ -44,7 +44,12 @@ void tearDown() {
     lv_mem_monitor_t memory;
     lv_mem_monitor(&memory);
     TEST_ASSERT_LESS_THAN_UINT(LV_MEM_SIZE - 4096, memory.max_used);
-    delete ui; ui=nullptr; lv_deinit();
+    // Keep one LVGL allocator lifetime for the suite. lv_deinit() recreates the
+    // pool without resetting its high-water counters in LVGL 8; repeated init
+    // then reports phantom usage from discarded screens. Remove the real
+    // display/objects between tests and retain the same allocator instead.
+    lv_disp_remove(lv_disp_get_default());
+    delete ui; ui=nullptr;
 }
 
 void test_scale_label_is_visible_and_matches_the_dial() {
@@ -293,11 +298,21 @@ void test_lcd_pivots_and_needle_ends_use_the_reduced_dial_radius() {
     TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00aa00).full, pixels[260*480+270]);
     TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xaa0000).full, pixels[260*480+30]);
 }
-void test_mode_button_selects_the_opposite_confirmed_mode() {
+void test_mode_button_cycles_manual_auto_controlled() {
     ui->updateStatus(MODE_AUTO,ANT_A); render();
+    auto* controlled=label(lv_scr_act(),"CONTROLLED"); TEST_ASSERT_NOT_NULL(controlled);
+    TEST_ASSERT_LESS_OR_EQUAL_INT(lv_obj_get_content_width(lv_obj_get_parent(controlled)),lv_obj_get_width(controlled));
+    lv_event_send(lv_obj_get_parent(controlled),LV_EVENT_CLICKED,nullptr);
+    TEST_ASSERT_EQUAL_UINT8(TUNER_CMD_CONTROLLED_MODE,lastCommand);
+    ui->updateStatus(MODE_CONTROLLED,ANT_A,ANT_A,MODE_MANUAL); render();
     auto* manual=label(lv_scr_act(),"SET MANUAL"); TEST_ASSERT_NOT_NULL(manual);
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"Mode: CONTROLLED"));
+    tuner_state_t temporary; temporary.tuningManaged = true; temporary.mode = MODE_AUTO;
+    ui->updateState(temporary); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"Mode: CONTROLLED"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"SET MANUAL"));
     lv_event_send(lv_obj_get_parent(manual),LV_EVENT_CLICKED,nullptr);
-    TEST_ASSERT_EQUAL_UINT8('M',lastCommand);
+    TEST_ASSERT_EQUAL_UINT8(TUNER_CMD_MANUAL_MODE,lastCommand);
     ui->updateStatus(MODE_MANUAL,ANT_A); render();
     auto* automatic=label(lv_scr_act(),"SET AUTO"); TEST_ASSERT_NOT_NULL(automatic);
     lv_event_send(lv_obj_get_parent(automatic),LV_EVENT_CLICKED,nullptr);
@@ -418,8 +433,57 @@ void test_last_confirmed_antenna_is_visible_as_unconfirmed_after_a_failed_comman
     TEST_ASSERT_NULL(label(lv_scr_act(), "ANT: last 2 (unconfirmed)"));
 }
 
+void test_tci_frequency_and_connection_fit_above_ip_and_wait_reason_is_visible() {
+    tuner_state_t state;
+    state.radio.connection = ldg::RadioConnection::Ready;
+    state.radio.frequencyValid = state.radio.rxKnown = state.radio.tuneKnown = true;
+    state.radio.txFrequencyHz = 14074000;
+    state.antennaFromRadio = true;
+    state.antennaInit = ldg::AntennaInit::Ready;
+    state.antennaAuto = ldg::AntennaAuto::WaitingRx;
+    ui->updateState(state); render();
+    auto* radio = label(lv_scr_act(),"TCI RX 14.074000 20m\nready / TCI");
+    TEST_ASSERT_NOT_NULL(radio);
+    TEST_ASSERT_FALSE(lv_obj_has_flag(radio,LV_OBJ_FLAG_HIDDEN));
+    lv_area_t area; lv_obj_get_coords(radio,&area);
+    TEST_ASSERT_LESS_THAN_INT(480,area.x2);
+    TEST_ASSERT_LESS_THAN_INT(22,area.y2);
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"ANT: Ready; TCI: waiting RX (no tune)"));
+    const char* capture = getenv("LDG_TCI_LCD_PPM");
+    if (capture) {
+        FILE* file = fopen(capture,"wb"); TEST_ASSERT_NOT_NULL(file);
+        fprintf(file,"P6\n480 320\n255\n");
+        for (uint16_t color : TFT_eSPI::instance->pixels) {
+            const uint8_t rgb[] = {uint8_t((color>>11)*255/31),uint8_t(((color>>5)&63)*255/63),uint8_t((color&31)*255/31)};
+            fwrite(rgb,1,3,file);
+        }
+        fclose(file);
+    }
+    state.radio.connection = ldg::RadioConnection::Disconnected;
+    state.radio.frequencyValid = state.radio.rxKnown = false; state.antennaFromRadio = false;
+    ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"TCI ? --\ndisconnected / LDG"));
+    ui->updateState(tuner_state_t{}); render();
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"SSID: Test WiFi"));
+    TEST_ASSERT_NULL(label(lv_scr_act(),"TCI ? --\ndisconnected / LDG"));
+}
+
+void test_managed_tuning_progress_updates_without_rebuilding_screen() {
+    tuner_state_t state; state.tuningManaged = true;
+    auto* screen = lv_scr_act();
+    state.tuningState = ldg::TuningState::MemoryTune; ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(screen,"MEM TUNE"));
+    state.tuningState = ldg::TuningState::AutoActive; ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(screen,"AUTO until RF off"));
+    state.tuningState = ldg::TuningState::ReturningManual; ui->updateState(state); render();
+    TEST_ASSERT_NOT_NULL(label(screen,"returning to MANUAL"));
+    TEST_ASSERT_EQUAL_PTR(screen,lv_scr_act());
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_managed_tuning_progress_updates_without_rebuilding_screen);
+    RUN_TEST(test_tci_frequency_and_connection_fit_above_ip_and_wait_reason_is_visible);
     RUN_TEST(test_last_confirmed_antenna_is_visible_as_unconfirmed_after_a_failed_command);
     RUN_TEST(test_antenna_initialization_status_is_visible_and_changes_without_recreating_screen);
     RUN_TEST(test_automatic_antenna_reasons_are_visible_on_lcd);
@@ -431,7 +495,7 @@ int main() {
     RUN_TEST(test_partial_repaints_match_full_draw_for_both_scales_and_invalid_readings);
     RUN_TEST(test_dial_moves_with_its_widget_instead_of_using_screen_coordinates);
     RUN_TEST(test_lcd_pivots_and_needle_ends_use_the_reduced_dial_radius);
-    RUN_TEST(test_mode_button_selects_the_opposite_confirmed_mode);
+    RUN_TEST(test_mode_button_cycles_manual_auto_controlled);
     RUN_TEST(test_bypass_button_exits_via_auto_and_waits_for_confirmed_state);
     RUN_TEST(test_custom_log_scale_matches_needle_power_and_partial_repaints);
     RUN_TEST(test_fast_telemetry_bursts_render_only_the_latest_sample_without_full_screen_refresh);
@@ -440,5 +504,6 @@ int main() {
     RUN_TEST(test_animated_needle_settles_to_latest_data_without_changing_digital_measurement);
     RUN_TEST(test_feedback_remains_pending_until_completion_and_then_expires);
     RUN_TEST(test_changed_antenna_names_refresh_without_recreating_the_screen);
+    lv_deinit();
     return UNITY_END();
 }

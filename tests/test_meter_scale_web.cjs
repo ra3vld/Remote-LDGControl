@@ -40,6 +40,7 @@ function board() {
                 return { ok: true, json: async () => ({ ...this.brightness }) };
             }
             if (url === '/api/antenna-config') return { ok: true, json: async () => ({ enabled: false, bands: Array(11).fill(0) }) };
+            if (url === '/api/tuning-config') return { ok: true, json: async () => ({ auto_fallback: false, swr_threshold: 2 }) };
             if (url === '/api/ws-token') return { ok: true, json: async () => ({ token: 'test' }) };
             if (url === '/api/config') return { ok: true, json: async () => ({}) };
             if (url === '/api/status') {

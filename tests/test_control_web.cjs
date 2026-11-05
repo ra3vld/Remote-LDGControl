@@ -42,14 +42,27 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     await vm.runInContext('selectAntenna(2)', ui.context);
     assert.equal(commands.at(-1), '/api/command/antenna_2');
     ui.socket.message({ ...server.snapshot(), mode: 1, fwd_power: 100, ref_power: 1, swr: 1.2 });
-    assert.equal(ui.element('btnMode').textContent, 'Set Manual');
+    assert.equal(ui.element('btnMode').textContent, 'Set Controlled');
     await vm.runInContext('toggleTuningMode()', ui.context);
-    assert.equal(commands.at(-1), '/api/command/manual');
+    assert.equal(commands.at(-1), '/api/command/controlled');
     ui.socket.message({ ...server.snapshot(), mode: 2, fwd_power: 100, ref_power: 1, swr: 1.2 });
     assert.equal(ui.element('btnMode').textContent, 'Set Auto');
     await vm.runInContext('toggleTuningMode()', ui.context);
     assert.equal(commands.at(-1), '/api/command/auto');
 
+    ui.socket.message({ ...server.snapshot(), mode: 4, tuner_mode: 2, tuning_state: 'waiting_rf' });
+    assert.equal(ui.element('modeValue').textContent, 'CONTROLLED');
+    assert.equal(ui.element('btnMode').textContent, 'Set Manual');
+    await vm.runInContext('toggleTuningMode()', ui.context);
+    assert.equal(commands.at(-1), '/api/command/manual');
+    ui.socket.message({ ...server.snapshot(), mode: 4, tuner_mode: 1, tuning_state: 'auto_active' });
+    assert.equal(ui.element('modeValue').textContent, 'CONTROLLED', 'Temporary AUTO must not change the operating mode');
+    assert.equal(ui.element('btnMode').textContent, 'Set Manual');
+    ui.socket.message({ ...server.snapshot(), mode: 4, tuner_mode: 3 });
+    assert.equal(ui.element('btnBypass').textContent, 'BYPASS OFF');
+    await vm.runInContext('toggleBypass()', ui.context);
+    assert.equal(commands.at(-1), '/api/command/controlled', 'Exit bypass without dropping CONTROLLED');
+    ui.socket.message({ ...server.snapshot(), mode: 2 });
     assert.equal(ui.element('btnBypass').textContent, 'BYPASS ON');
     await vm.runInContext('toggleBypass()', ui.context);
     assert.equal(commands.at(-1), '/api/command/bypass');
@@ -66,6 +79,22 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     assert.equal(ui.element('btnBypass').textContent, 'BYPASS OFF', 'Wait for confirmed AUTO state');
     ui.socket.message({ ...server.snapshot(), mode: 1 });
     assert.equal(ui.element('btnBypass').textContent, 'BYPASS ON');
+
+    // Mode responses carry ACK-confirmed modes even if telemetry is delayed.
+    const originalFetch = server.fetch;
+    server.fetch = async function(url, options) {
+        const reply = await originalFetch.call(this, url, options);
+        const mode = { manual: 2, auto: 1, controlled: 4 }[url.split('/').at(-1)];
+        return mode === undefined ? reply : { ok: true, json: async () => ({ result: 'success', mode, tuner_mode: mode === 4 ? 2 : mode }) };
+    };
+    const httpOnly = await page(server);
+    httpOnly.socket.message({ mode: 2, tuner_mode: 2 });
+    for (const [command, mode] of [['auto', 'AUTO'], ['controlled', 'CONTROLLED'], ['manual', 'MANUAL']]) {
+        await vm.runInContext('toggleTuningMode()', httpOnly.context);
+        assert.equal(commands.at(-1), '/api/command/' + command);
+        assert.equal(httpOnly.element('modeValue').textContent, mode);
+    }
+    server.fetch = originalFetch;
 
     server.holdCommand = deferred();
     const tune = vm.runInContext("sendCommand('full_tune')", ui.context);

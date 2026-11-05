@@ -251,7 +251,7 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     makeBtn(&m_btnBypass, "BYPASS ON", btnX, antY + antH + btnGap, btnW, btnH,
             lv_color_hex(0xcc8800), lv_color_hex(0xffaa00));
     m_bypassButtonLabel = lv_obj_get_child(m_btnBypass, 0);
-    makeBtn(&m_btnAuto,   "SET AUTO", btnX, antY + antH + btnGap + btnH + btnGap, btnW, btnH,
+    makeBtn(&m_btnAuto,   "SET MANUAL", btnX, antY + antH + btnGap + btnH + btnGap, btnW, btnH,
             lv_color_hex(0x2255aa), lv_color_hex(0x3366cc));
     m_modeButtonLabel = lv_obj_get_child(m_btnAuto, 0);
     m_commandLabel = lv_label_create(m_scr);
@@ -334,10 +334,39 @@ void DisplayUI::updateMeterScale() {
 }
 
 void DisplayUI::updateState(const tuner_state_t& state) {
+    if (m_ssidLabel) {
+        const auto& radio = state.radio;
+        const bool enabled = radio.connection != ldg::RadioConnection::Disabled;
+        if (enabled != m_radioVisible) {
+            m_radioVisible = enabled;
+            lv_obj_set_style_text_font(m_ssidLabel, enabled ? &lv_font_montserrat_10 : &lv_font_montserrat_14, LV_PART_MAIN);
+            lv_obj_set_style_text_color(m_ssidLabel, lv_color_hex(enabled ? 0x66ccff : 0x666666), LV_PART_MAIN);
+            lv_obj_set_width(m_ssidLabel, enabled ? 172 : LV_SIZE_CONTENT);
+            if (enabled) {
+                lv_obj_set_align(m_ssidLabel, LV_ALIGN_TOP_LEFT);
+                lv_obj_set_pos(m_ssidLabel, 305, 0);
+                lv_label_set_long_mode(m_ssidLabel, LV_LABEL_LONG_CLIP);
+            }
+            else {
+                lv_label_set_text_fmt(m_ssidLabel, "SSID: %s", WiFi.SSID().c_str());
+                lv_obj_align(m_ssidLabel, LV_ALIGN_TOP_RIGHT, -5, 5);
+                m_radioText[0] = 0;
+            }
+        }
+        char text[sizeof(m_radioText)];
+        const char* trx = radio.transmitting ? "TX" : radio.rxKnown ? "RX" : "?";
+        if (radio.frequencyValid)
+            snprintf(text, sizeof(text), "TCI %s %llu.%06llu %s\n%s / %s", trx,
+                     (unsigned long long)(radio.txFrequencyHz / 1000000), (unsigned long long)(radio.txFrequencyHz % 1000000),
+                     ldg::radioBandName(radio.txFrequencyHz), ldg::radioConnectionName(radio.connection), state.antennaFromRadio ? "TCI" : "LDG");
+        else snprintf(text, sizeof(text), "TCI %s --\n%s / %s", trx, ldg::radioConnectionName(radio.connection), state.antennaFromRadio ? "TCI" : "LDG");
+        if (enabled && strcmp(text, m_radioText)) { strcpy(m_radioText, text); lv_label_set_text(m_ssidLabel, text); }
+    }
     const auto lastAntenna = ldg::lastKnownAntenna(state);
     const bool unconfirmed = state.antenna == ANT_UNKNOWN && ldg::knownAntenna(lastAntenna);
-    if (m_antennaInit != state.antennaInit || m_antennaAuto != state.antennaAuto ||
+    if (m_tuningState != state.tuningState || m_antennaInit != state.antennaInit || m_antennaAuto != state.antennaAuto ||
         m_activeAnt != state.antenna || m_lastAnt != lastAntenna) {
+        m_tuningState = state.tuningState;
         m_antennaInit = state.antennaInit;
         m_antennaAuto = state.antennaAuto;
         const char* text = "";
@@ -371,9 +400,28 @@ void DisplayUI::updateState(const tuner_state_t& state) {
             case ldg::AntennaAuto::TuneBandChanged: reason = "selected; tune band changed"; break;
             case ldg::AntennaAuto::TuneManual: reason = "selected; tune cancelled by user"; break;
             case ldg::AntennaAuto::WaitingTuner: reason = "waiting tuner; choice saved"; break;
+            case ldg::AntennaAuto::WaitingRadio: reason = "TCI: waiting valid TX band"; break;
+            case ldg::AntennaAuto::WaitingRx: reason = "TCI: waiting RX (no tune)"; break;
+            case ldg::AntennaAuto::WaitingBand: reason = "TCI: waiting stable band"; break;
             default: break;
         }
-        if (unconfirmed && reason) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: last %u ?; %s", unsigned(lastAntenna), reason);
+        const char* tune = nullptr;
+        switch (state.tuningState) {
+            case ldg::TuningState::WaitingManual: tune = "waiting MANUAL acknowledgement"; break;
+            case ldg::TuningState::WaitingRf: tune = "MANUAL: waiting for new TX"; break;
+            case ldg::TuningState::MemoryTune: tune = "MEM TUNE"; break;
+            case ldg::TuningState::WaitingSwr: tune = "checking SWR after MEM TUNE"; break;
+            case ldg::TuningState::Matched: tune = "MEM TUNE complete"; break;
+            case ldg::TuningState::AutoActive: tune = "AUTO until RF off"; break;
+            case ldg::TuningState::ReturningManual: tune = "returning to MANUAL"; break;
+            case ldg::TuningState::HighPower: tune = "tune blocked: power >=100W"; break;
+            case ldg::TuningState::NoFreshData: tune = "no fresh SWR after MEM TUNE"; break;
+            case ldg::TuningState::Error: tune = "tune/mode not confirmed"; break;
+            case ldg::TuningState::ManualOverride: tune = "user override until next TX"; break;
+            default: break; // WaitingAntenna retains the specific antenna reason.
+        }
+        if (tune) lv_label_set_text(m_antennaInitLabel, tune);
+        else if (unconfirmed && reason) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: last %u ?; %s", unsigned(lastAntenna), reason);
         else if (unconfirmed) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: last %u (unconfirmed)", unsigned(lastAntenna));
         else if (reason) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: Ready; %s", reason);
         else lv_label_set_text(m_antennaInitLabel, text);
@@ -390,7 +438,7 @@ void DisplayUI::updateState(const tuner_state_t& state) {
     m_pendingMeter = meter;
     m_pendingBandHeld = ldg::bandIsHeld(state);
     m_meterPending = true;
-    updateStatus(state.mode, state.antenna, lastAntenna);
+    updateStatus(ldg::operatingMode(state), state.antenna, lastAntenna, state.mode);
 }
 
 void DisplayUI::setCommandPending(bool pending) {
@@ -500,13 +548,14 @@ void DisplayUI::invalidateNeedle(ldg::MeterGeometry::Point pivot,
 
 void DisplayUI::updateNetworkInfo() {
     m_previousValid = false;
-    if (m_ssidLabel)
+    if (m_ssidLabel && !m_radioVisible)
         lv_label_set_text_fmt(m_ssidLabel, "SSID: %s", WiFi.SSID().c_str());
     if (m_ipLabel)
         lv_label_set_text_fmt(m_ipLabel, "IP: %s", WiFi.localIP().toString().c_str());
 }
 
-void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t last) {
+void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t last, tuner_mode_t physical) {
+    if (mode != MODE_CONTROLLED) physical = mode;
     if (ldg::knownAntenna(antenna)) last = antenna;
     if (mode != m_activeMode) {
         m_activeMode = mode;
@@ -514,10 +563,14 @@ void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t
             case MODE_AUTO:    lv_label_set_text(m_modeLabel, "Mode: AUTO"); break;
             case MODE_MANUAL:  lv_label_set_text(m_modeLabel, "Mode: MANUAL"); break;
             case MODE_BYPASS:  lv_label_set_text(m_modeLabel, "Mode: BYPASS"); break;
+            case MODE_CONTROLLED: lv_label_set_text(m_modeLabel, "Mode: CONTROLLED"); break;
             default:           lv_label_set_text(m_modeLabel, "Mode: --"); break;
         }
-        lv_label_set_text(m_modeButtonLabel, mode == MODE_AUTO ? "SET MANUAL" : "SET AUTO");
-        lv_label_set_text(m_bypassButtonLabel, mode == MODE_BYPASS ? "BYPASS OFF" : "BYPASS ON");
+        lv_label_set_text(m_modeButtonLabel, mode == MODE_MANUAL ? "SET AUTO" : mode == MODE_AUTO ? "CONTROLLED" : "SET MANUAL");
+    }
+    if (physical != m_tunerMode) {
+        m_tunerMode = physical;
+        lv_label_set_text(m_bypassButtonLabel, physical == MODE_BYPASS ? "BYPASS OFF" : "BYPASS ON");
     }
     if (antenna != m_activeAnt || last != m_lastAnt) {
         m_activeAnt = antenna;
@@ -998,14 +1051,13 @@ void DisplayUI::btnAnt2Event(lv_event_t* e) {
 
 void DisplayUI::btnBypassEvent(lv_event_t* e) {
     if (s_instance && s_instance->m_commandHandler)
-        s_instance->m_commandHandler(s_instance->m_activeMode == MODE_BYPASS
-            ? TUNER_CMD_AUTO_MODE : TUNER_CMD_BYPASS);
+        s_instance->m_commandHandler(s_instance->m_tunerMode == MODE_BYPASS
+            ? (s_instance->m_activeMode == MODE_CONTROLLED ? TUNER_CMD_CONTROLLED_MODE : TUNER_CMD_AUTO_MODE) : TUNER_CMD_BYPASS);
 }
 
 void DisplayUI::btnAutoEvent(lv_event_t* e) {
     if (s_instance && s_instance->m_commandHandler)
-        s_instance->m_commandHandler(s_instance->m_activeMode == MODE_AUTO
-            ? TUNER_CMD_MANUAL_MODE : TUNER_CMD_AUTO_MODE);
+        s_instance->m_commandHandler(ldg::nextModeCommand(s_instance->m_activeMode));
 }
 
 void DisplayUI::meterTapEvent(lv_event_t* e) {

@@ -1,0 +1,21 @@
+--- a/src/WebSocketsServer.cpp
++++ b/src/WebSocketsServer.cpp
+@@ -455,7 +455,9 @@
+             client->tcp = TCPclient;
+ 
+ #if (WEBSOCKETS_NETWORK_TYPE == NETWORK_ESP8266) || (WEBSOCKETS_NETWORK_TYPE == NETWORK_ESP32)
++#ifdef HAS_SSL
+             client->isSSL = false;
++#endif
+             client->tcp->setNoDelay(true);
+ #endif
+ #if (WEBSOCKETS_NETWORK_TYPE != NETWORK_ESP8266_ASYNC)
+@@ -567,7 +569,7 @@
+  * @param client WSclient_t *  ptr to the client struct
+  */
+ void WebSocketsServerCore::clientDisconnect(WSclient_t * client) {
+-#if (WEBSOCKETS_NETWORK_TYPE == NETWORK_ESP8266) || (WEBSOCKETS_NETWORK_TYPE == NETWORK_ESP32) || (WEBSOCKETS_NETWORK_TYPE == NETWORK_RP2040)
++#ifdef HAS_SSL
+     if(client->isSSL && client->ssl) {
+         if(client->ssl->connected()) {
+             client->ssl->flush();

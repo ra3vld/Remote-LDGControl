@@ -1,6 +1,7 @@
 #ifndef CONFIG_MANAGER_H
 #define CONFIG_MANAGER_H
 #include "config.h"
+#include "radio_settings.h"
 struct DeviceConfig {
     char mqttBroker[64] = "test-broker";
     uint16_t mqttPort = 1883;
@@ -13,6 +14,8 @@ struct DeviceConfig {
 };
 struct FakeConfigManager {
     DeviceConfig config;
+    ldg::RadioSettings radio;
+    ldg::RadioSettings radioSettings() const { return radio; }
     DeviceConfig get() const { return config; }
 };
 extern FakeConfigManager configManager;

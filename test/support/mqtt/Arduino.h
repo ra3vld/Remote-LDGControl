@@ -31,6 +31,7 @@ struct FakeSerial {
     std::string output;
     void print(const char* text) { output += text; }
     void println() { output += '\n'; }
+    void println(const char* text) { print(text); println(); }
     void printf(const char* format, ...) {
         char buffer[768];
         va_list args;

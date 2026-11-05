@@ -20,11 +20,13 @@ class MqttSession {
 public:
     MqttSession(MqttTransport& transport, const MqttIdentity& identity,
                 bool (*commandHandler)(uint8_t), uint32_t (*clock)() = nullptr,
-                MqttReadings* readings = nullptr)
+                MqttReadings* readings = nullptr, BridgeGetter bridgeGetter = nullptr,
+                BridgeHandler bridgeHandler = nullptr, BridgeCache* cache = nullptr, tuner_state_t (*stateGetter)() = nullptr)
         : m_transport(transport), m_identity(identity), m_commandHandler(commandHandler), m_clock(clock),
           m_readings(readings ? readings : &m_ownedReadings),
+          m_bridgeGetter(bridgeGetter),m_bridgeHandler(bridgeHandler),m_cache(cache),m_stateGetter(stateGetter),
           m_stateTopic(identity.base + "/state"), m_commandTopic(identity.base + "/command"),
-          m_statusTopic(identity.base + "/status"), m_responseTopic(identity.base + "/command/response") {}
+          m_statusTopic(identity.base + "/status"), m_responseTopic(identity.base + "/command/response"),m_radioTopic(identity.base + "/radio/state") {}
     MqttSession(const MqttSession&) = delete;
     MqttSession& operator=(const MqttSession&) = delete;
 
@@ -34,6 +36,7 @@ public:
         m_configurationUrl = configurationUrl;
         m_discoveryIndex = 0;
         m_schedule.requestImmediate();
+        m_radioPublished=false;
         return m_transport.subscribe(m_commandTopic.c_str()) &&
             (!m_discoveryEnabled || m_transport.subscribe(HA_STATUS_TOPIC)) &&
             m_transport.publish(m_statusTopic.c_str(), "online", true);
@@ -57,8 +60,23 @@ public:
         if (m_schedule.due(now, state)) {
             JsonDocument doc;
             m_readings->write(doc, state);
+            const auto context=m_bridgeGetter ? m_bridgeGetter() : BridgeState{};
+            // A source may switch between the value snapshot and metadata read.
+            // Drop that frame; never grant a local token alongside remote values.
+            if (m_bridgeGetter && context.remote!=state.remote) return;
+            if (m_bridgeGetter) writeBridgeState(doc,context);
             if (sendDocument(m_stateTopic, doc, MQTT_RETAIN_TELEMETRY))
                 m_schedule.published(m_clock ? m_clock() : now, state);
+        }
+        if (m_bridgeGetter && (!m_radioPublished || (state.radio.provider != RadioProvider::None && now-m_radioAt>=1000) || state.radio.provider!=m_radioProvider)) {
+            JsonDocument doc;
+            writeRadioJson(doc.to<JsonObject>(),state.radio);
+            doc.remove("free_heap"); doc.remove("largest_block"); doc.remove("stack_free");
+            if (!state.radio.xitKnown) doc["xit_offset_hz"]=nullptr;
+            const auto context=m_bridgeGetter();
+            if (context.remote!=state.remote) return;
+            doc["source_token"]=context.sourceToken;
+            if (sendDocument(m_radioTopic,doc,true)) { m_radioPublished=true; m_radioAt=now; m_radioProvider=state.radio.provider; }
         }
     }
 
@@ -71,13 +89,38 @@ public:
             return;
         }
         if (m_commandTopic != topic) return;
-        const MqttCommand command = parseCommand(payload, length);
+        if (length>MQTT_PACKET_SIZE) return;
+        MqttCommand command = parseCommand(payload, length);
         const char* result = command.error;
-        if (!result) {
+        if (!result && command.extended) {
+            command.request.command=command.byte;
+            result=m_cache ? m_cache->find(command.request) : "invalid_request";
+            if (!result) {
+                result=m_bridgeGetter ? validateBridgeRequest(command.request,m_bridgeGetter()) : "invalid_request";
+                if (!result && m_bridgeGetter().busy) result="busy";
+                if (!result) {
+                    // Keep controller liveness valid during a long synchronous tune.
+                    if (m_bridgeGetter && m_stateGetter) {
+                        const auto current=m_stateGetter(); auto context=m_bridgeGetter(); context.busy=true;
+                        if (context.remote==current.remote) {
+                            JsonDocument state; m_readings->observe(current); m_readings->write(state,current);
+                            writeBridgeState(state,context); sendDocument(m_stateTopic,state,true);
+                        }
+                    }
+                    result=m_bridgeHandler ? m_bridgeHandler(command.request) : "invalid_request";
+                }
+                m_cache->save(command.request,result);
+            }
+            m_schedule.requestImmediate();
+        } else if (!result) {
             result = m_commandHandler && m_commandHandler(command.byte) ? "success" : "failed";
             m_schedule.requestImmediate();
         }
         JsonDocument response;
+        if (command.extended && command.request.requestId[0]) {
+            response["request_id"]=command.request.requestId;
+            response["source_token"]=command.request.sourceToken;
+        }
         response["command"] = command.name;
         response["result"] = result;
         sendDocument(m_responseTopic, response, false);
@@ -108,12 +151,19 @@ private:
     uint32_t (*m_clock)();
     MqttReadings m_ownedReadings;
     MqttReadings* m_readings;
+    BridgeGetter m_bridgeGetter;
+    BridgeHandler m_bridgeHandler;
+    BridgeCache* m_cache;
+    tuner_state_t (*m_stateGetter)();
+    uint32_t m_radioAt=0;
+    bool m_radioPublished=false;
+    RadioProvider m_radioProvider=RadioProvider::None;
     MqttStateSchedule m_schedule;
     bool m_discoveryEnabled = true;
     size_t m_discoveryIndex = MQTT_ENTITY_COUNT;
     std::string m_model;
     std::string m_configurationUrl;
-    const std::string m_stateTopic, m_commandTopic, m_statusTopic, m_responseTopic;
+    const std::string m_stateTopic, m_commandTopic, m_statusTopic, m_responseTopic, m_radioTopic;
     char m_payload[MQTT_PACKET_SIZE]{};
 };
 

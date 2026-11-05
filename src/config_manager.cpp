@@ -282,7 +282,69 @@ bool ConfigManager::updateAntennaSettings(const ldg::AntennaSettings& settings) 
     return true;
 }
 
+ldg::TuningSettings ConfigManager::tuningSettings() const {
+    portENTER_CRITICAL(&m_configMux);
+    const auto settings = m_tuningSettings;
+    portEXIT_CRITICAL(&m_configMux);
+    return settings;
+}
+
+bool ConfigManager::updateTuningMode(bool controlled) {
+    ldg::TuningSettings settings;
+    settings.managed = controlled;
+    return saveTuningChange(settings, true);
+}
+
+bool ConfigManager::updateTuningOptions(const ldg::TuningSettings& settings) {
+    return saveTuningChange(settings, false);
+}
+
+bool ConfigManager::saveTuningChange(const ldg::TuningSettings& settings, bool modeOnly) {
+    if (!ldg::validTuningSettings(settings) || !m_tuningWriteMutex ||
+        xSemaphoreTake(m_tuningWriteMutex, portMAX_DELAY) != pdTRUE) return false;
+    // The HTTP task saves options while the UART task selects modes. Merge
+    // under the same lock and use a private NVS handle, never m_prefs across tasks.
+    auto candidate = tuningSettings();
+    if (modeOnly) candidate.managed = settings.managed;
+    else { candidate.autoFallback = settings.autoFallback; candidate.swrTenths = settings.swrTenths; }
+    bool saved = ldg::sameTuningSettings(candidate, tuningSettings());
+    if (!saved) {
+        Preferences prefs;
+        if (prefs.begin("ldg-config", false)) {
+            saved = ldg::writeTuningSettings(prefs, candidate);
+            prefs.end();
+        }
+    }
+    if (saved) {
+        portENTER_CRITICAL(&m_configMux);
+        m_tuningSettings = candidate;
+        portEXIT_CRITICAL(&m_configMux);
+    }
+    xSemaphoreGive(m_tuningWriteMutex);
+    return saved;
+}
+
+ldg::RadioSettings ConfigManager::radioSettings() const {
+    portENTER_CRITICAL(&m_configMux);
+    const auto settings = m_radioSettings;
+    portEXIT_CRITICAL(&m_configMux);
+    return settings;
+}
+
+bool ConfigManager::updateRadioSettings(const ldg::RadioSettings& settings) {
+    if (!ldg::validRadioSettings(settings) || !m_prefs.begin("ldg-config", false)) return false;
+    const bool saved = ldg::writeRadioSettings(m_prefs, settings);
+    m_prefs.end();
+    if (!saved) return false;
+    portENTER_CRITICAL(&m_configMux);
+    m_radioSettings = settings;
+    portEXIT_CRITICAL(&m_configMux);
+    return true;
+}
+
 bool ConfigManager::begin() {
+    if (!m_tuningWriteMutex) m_tuningWriteMutex = xSemaphoreCreateMutex();
+    if (!m_tuningWriteMutex) return false;
     if (load()) return true;
     loadDefaults();
     return save(get());
@@ -588,6 +650,8 @@ bool ConfigManager::load() {
     if (!m_prefs.begin("ldg-config", true)) return false;
     // Absent/invalid band settings use defaults without affecting configV1.
     ldg::readAntennaSettings(m_prefs, m_antennaSettings);
+    ldg::readRadioSettings(m_prefs, m_radioSettings);
+    ldg::readTuningSettings(m_prefs, m_tuningSettings);
     ldg::readMeterSettings(m_prefs, m_meterSettings);
     ldg::readBrightnessSettings(m_prefs, m_brightnessSettings);
     if (m_prefs.isKey("configV1")) {

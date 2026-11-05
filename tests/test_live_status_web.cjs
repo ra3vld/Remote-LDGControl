@@ -8,7 +8,7 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     await ui.advance(3000);
     assert.equal(vm.runInContext('meterState.fwdPower',ui.context),40);
     assert.equal(ui.element('bandValue').textContent,'Band: 40m');
-    assert.equal(ui.element('btnMode').textContent,'Set Manual');
+    assert.equal(ui.element('btnMode').textContent,'Set Controlled');
     assert.match(ui.element('btnAnt2').className,/\bactive\b/);
 
     ui.socket.message({...server.snapshot(),fwd_power:25,ref_power:0,swr:1,band:'20m',mode:2,antenna:1});

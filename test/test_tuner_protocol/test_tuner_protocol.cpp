@@ -5,6 +5,7 @@
 #include "tuner_protocol.h"
 #include "voltage_sensor.h"
 #include "mqtt_protocol.h"
+#include "operating_mode.h"
 #include "../../src/tuner_protocol.cpp"
 
 uint32_t testMillis = 0;
@@ -1476,8 +1477,329 @@ void test_unknown_tuner_mode_preserves_mode_and_selects_only_after_rf_off() {
     TEST_ASSERT_EQUAL_UINT(3, toggles);
 }
 
+static ldg::RadioState radioFixture;
+static ldg::RadioState readRadioFixture() { return radioFixture; }
+
+void test_tci_checks_the_final_relay_write_and_defers_tx_stale_power_and_source_loss() {
+    for (unsigned scenario = 0; scenario < 4; ++scenario) {
+        testMillis = 0;
+        radioFixture = ldg::RadioState{};
+        radioFixture.connection = ldg::RadioConnection::Ready;
+        radioFixture.frequencyValid = radioFixture.rxKnown = radioFixture.tuneKnown = true;
+        radioFixture.txFrequencyHz = 14074000; radioFixture.stableMs = 200;
+        TunerProtocol tuner;
+        tuner.setRadioStateGetter(readRadioFixture);
+        unsigned toggles = 0, tunes = 0; bool selecting = false, injected = false;
+        tuner_ant_t antenna = ANT_A;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+            respondSync(serial,cmd);
+            if (cmd == 'S') {
+                if (!(scenario == 2 && selecting && injected))
+                    for (auto byte : frame(0,0,0)) serial.bytes.push_back(byte);
+                if (scenario == 3 && selecting && toggles == 3) { radioFixture.transmitting = true; injected = true; }
+            }
+            if (cmd == 'M') serial.bytes.push_back('M');
+            if (cmd == 'C') serial.bytes.push_back('A');
+            if (cmd == 'T' || cmd == 'F') { ++tunes; serial.bytes.push_back('T'); }
+            if (cmd == 'X' && selecting && tuner.getMode() == MODE_MANUAL && !injected && scenario != 3) {
+                injected = true;
+                if (scenario == 0) radioFixture.transmitting = true;
+                if (scenario == 1) radioFixture.connection = ldg::RadioConnection::Disconnected;
+                if (scenario == 2) testMillis += 600; // Fresh before X, stale at the actual A byte.
+            }
+            if (cmd == 'A') {
+                ++toggles;
+                if (!(scenario == 3 && selecting && toggles == 3)) antenna = antenna == ANT_A ? ANT_B : ANT_A;
+                serial.bytes.push_back(antenna == ANT_A ? '1' : '2');
+            }
+        };
+        begin(tuner);
+        ldg::AntennaSettings settings; settings.enabled = true; settings.bands[BAND_20M] = ANT_B;
+        tuner.configureAntennas(settings);
+        feed(tuner,frame(0,0,0)); tuner.serviceAntennas(); // Establish original port using two ACKs.
+        TEST_ASSERT_EQUAL_UINT(2,toggles);
+        TEST_ASSERT_EQUAL_INT(int(ldg::AntennaInit::Ready),int(tuner.getState().antennaInit));
+        tuner.serviceAntennas(); // Confirm initial AUTO policy.
+        selecting = true;
+        feed(tuner,frame(0,0,0)); tuner.serviceAntennas();
+        TEST_ASSERT_TRUE(injected);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(scenario == 3 ? 3 : 2,toggles,
+            scenario == 0 ? "TX before A" : scenario == 1 ? "TCI loss before A" : scenario == 2 ? "Stale zero before A" : "TX before recovery A");
+        TEST_ASSERT_EQUAL_UINT(0,tunes);
+        TEST_ASSERT_EQUAL_INT(MODE_AUTO,tuner.getMode());
+        selecting = false;
+        if (scenario == 1) {
+            for (unsigned i = 0; i < 3; ++i) { feed(tuner,frame(0,0,0)); tuner.serviceAntennas(); }
+            TEST_ASSERT_FALSE(tuner.getState().antennaFromRadio);
+            TEST_ASSERT_EQUAL_UINT(2,toggles); // Loss does not execute held TCI intent.
+        } else {
+            radioFixture.transmitting = false;
+            feed(tuner,frame(0,0,0)); tuner.serviceAntennas();
+            TEST_ASSERT_EQUAL_INT(ANT_B,tuner.getAntenna());
+            TEST_ASSERT_EQUAL_UINT(scenario == 3 ? 4 : 3,toggles);
+            TEST_ASSERT_EQUAL_UINT(0,tunes);
+        }
+    }
+}
+
+void test_tci_startup_probe_defers_restoring_original_port_when_tx_starts() {
+    radioFixture = ldg::RadioState{};
+    radioFixture.connection = ldg::RadioConnection::Ready;
+    radioFixture.frequencyValid = radioFixture.rxKnown = radioFixture.tuneKnown = true;
+    radioFixture.txFrequencyHz = 14074000; radioFixture.stableMs = 200;
+    TunerProtocol tuner; tuner.setRadioStateGetter(readRadioFixture);
+    unsigned toggles = 0;
+    HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+        respondSync(serial,cmd);
+        if (cmd == 'A') { ++toggles; serial.bytes.push_back(toggles % 2 ? '2' : '1'); }
+        if (cmd == 'S') {
+            for (auto byte : frame(0,0,0)) serial.bytes.push_back(byte);
+            if (toggles == 1) radioFixture.transmitting = true;
+        }
+    };
+    begin(tuner); feed(tuner,frame(0,0,0)); tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(1,toggles);
+    TEST_ASSERT_EQUAL_INT(int(ldg::AntennaInit::Restoring),int(tuner.getState().antennaInit));
+    feed(tuner,frame(0,0,0)); tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(1,toggles);
+    radioFixture.transmitting = false;
+    feed(tuner,frame(0,0,0)); tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(2,toggles);
+    TEST_ASSERT_EQUAL_INT(ANT_A,tuner.getAntenna());
+    TEST_ASSERT_EQUAL_INT(int(ldg::AntennaInit::Ready),int(tuner.getState().antennaInit));
+}
+
+void test_managed_mode_tunes_every_tx_without_reselecting_same_band_or_restoring_native_auto() {
+    for (bool fallback : {false, true}) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner; begin(tuner);
+        uint16_t band = 2328, fwd = 0, reflected = 0;
+        unsigned toggles = 0, memories = 0, autos = 0, manuals = 0;
+        uint8_t antenna = 2;
+        std::string wire;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+            respondSync(serial,cmd);
+            if (cmd == 'M') { ++manuals; serial.bytes.push_back('M'); wire += 'M'; }
+            if (cmd == 'C') { ++autos; serial.bytes.push_back('A'); wire += 'C'; }
+            if (cmd == 'A') { ++toggles; antenna = antenna == 1 ? 2 : 1; serial.bytes.push_back(antenna == 1 ? '1' : '2'); wire += 'A'; }
+            if (cmd == 'T') { ++memories; serial.bytes.push_back('T'); wire += 'T'; }
+            if (cmd == 'S') for (auto b : frame(fwd,reflected,band)) serial.bytes.push_back(b);
+        };
+        ldg::AntennaSettings antennas; antennas.enabled = 1;
+        antennas.bands[BAND_40M] = ANT_A; antennas.bands[BAND_20M] = ANT_B;
+        tuner.configureAntennas(antennas);
+        ldg::TuningSettings profile; profile.managed = 1; profile.autoFallback = fallback;
+        tuner.configureTuning(profile);
+        feed(tuner,frame(0,0,band)); tuner.serviceAntennas(); // M confirmed first.
+        tuner.serviceAntennas(); // Startup probe returns ANT2.
+        TEST_ASSERT_EQUAL_INT(ANT_B,tuner.getAntenna());
+        TEST_ASSERT_EQUAL_INT(MODE_MANUAL,tuner.getMode());
+        TEST_ASSERT_EQUAL_UINT(2,toggles);
+        wire.clear(); fwd = 150; reflected = fallback ? 60 : 0; // ~40W, SWR 2.33.
+        for (int i = 0; i < 3; ++i) feed(tuner,frame(fwd,reflected,band));
+        tuner.serviceAntennas(); // First 40m must select ANT1, then T exactly once.
+        TEST_ASSERT_EQUAL_STRING("AT",wire.c_str());
+        TEST_ASSERT_EQUAL_UINT(1,memories); TEST_ASSERT_EQUAL_UINT(0,autos);
+        for (int i = 0; i < 4; ++i) { feed(tuner,frame(fwd,reflected,band)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(fallback ? 1 : 0,autos);
+        TEST_ASSERT_EQUAL_INT(fallback ? MODE_AUTO : MODE_MANUAL,tuner.getMode());
+        const unsigned selected = toggles;
+        fwd = reflected = 0;
+        for (int i = 0; i <= 8; ++i) { testMillis += 200; feed(tuner,frame(0,0,band)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_INT(MODE_MANUAL,tuner.getMode());
+        fwd = 150; reflected = 0;
+        for (int i = 0; i < 3; ++i) feed(tuner,frame(fwd,reflected,band));
+        tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(2,memories); TEST_ASSERT_EQUAL_UINT(selected,toggles);
+        // A manual port selection stays selected on subsequent transmissions.
+        tuner.noteManualCommand(); tuner.manualCommandStarted();
+        TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B)); tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_B,true);
+        fwd = 0;
+        for (int i = 0; i <= 8; ++i) { testMillis += 200; feed(tuner,frame(0,0,band)); tuner.serviceAntennas(); }
+        fwd = 150;
+        for (int i = 0; i < 3; ++i) feed(tuner,frame(fwd,0,band));
+        tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_INT(ANT_B,tuner.getAntenna()); TEST_ASSERT_EQUAL_UINT(3,memories);
+        TEST_ASSERT_EQUAL_UINT(selected+1,toggles);
+        TEST_ASSERT_EQUAL_UINT(fallback ? 1 : 0,autos);
+        TEST_ASSERT_EQUAL_UINT(fallback ? 2 : 1,manuals);
+    }
+}
+void test_managed_mode_does_not_tune_without_confirmed_port_mode_or_safe_rf() {
+    for (int scenario = 0; scenario < 5; ++scenario) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner; begin(tuner);
+        unsigned memories = 0, manuals = 0;
+        HardwareSerial::written = [&](HardwareSerial& serial,uint8_t cmd) {
+            respondSync(serial,cmd);
+            if (cmd == 'M') { ++manuals; if (scenario != 0) serial.bytes.push_back('M'); }
+            if (cmd == 'A') serial.bytes.push_back('1');
+            if (cmd == 'T') { ++memories; serial.bytes.push_back('F'); }
+        };
+        if (scenario != 1) {
+            tuner.manualCommandStarted(); TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_A));
+            tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_A,true);
+        }
+        ldg::TuningSettings profile; profile.managed = 1; tuner.configureTuning(profile);
+        const uint16_t power = scenario == 2 ? 375 : 150; // 100W+ is never a tuning authorizer.
+        for (int i=0;i<3;++i) feed(tuner,frame(power,0,2328));
+        if (scenario == 3) testMillis += 600;
+        tuner.serviceAntennas(scenario == 4);
+        for (int i=0;i<4;++i) tuner.serviceAntennas(scenario == 4);
+        TEST_ASSERT_EQUAL_UINT(0,memories);
+        TEST_ASSERT_LESS_OR_EQUAL_UINT(2,manuals);
+    }
+}
+
+void test_managed_fallback_retries_once_but_not_after_rf_becomes_unsafe() {
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        HardwareSerial::written = nullptr;
+        TunerProtocol tuner; begin(tuner);
+        unsigned memories = 0, autos = 0;
+        uint16_t fwd = 150;
+        HardwareSerial::written = [&](HardwareSerial& serial,uint8_t cmd) {
+            respondSync(serial,cmd);
+            if (cmd == 'M') serial.bytes.push_back('M');
+            if (cmd == 'A') serial.bytes.push_back('1');
+            if (cmd == 'T') { ++memories; serial.bytes.push_back('F'); }
+            if (cmd == 'C') {
+                ++autos;
+                if (autos == 2) serial.bytes.push_back('A');
+                if (scenario == 1) fwd = 375; // RF rises above 100 W after the first C loses its ACK.
+                if (scenario == 2) fwd = 0; // Or transmission ends.
+            }
+            if (cmd == 'S') for (auto b : frame(fwd,60,2328)) serial.bytes.push_back(b);
+        };
+        tuner.manualCommandStarted(); TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_A));
+        tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_A,true);
+        ldg::TuningSettings profile; profile.managed = profile.autoFallback = 1; tuner.configureTuning(profile);
+        for (int i=0;i<3;++i) feed(tuner,frame(150,60,2328));
+        tuner.serviceAntennas(); tuner.serviceAntennas();
+        for (int i=0;i<3;++i) { feed(tuner,frame(150,60,2328)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(1,memories);
+        TEST_ASSERT_EQUAL_UINT(scenario == 0 ? 2 : 1,autos);
+        for (int i=0;i<5;++i) tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(scenario == 0 ? 2 : 1,autos);
+        fwd = 0;
+        for (int i=0;i<=8;++i) { testMillis += 200; feed(tuner,frame(0,0,2328)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_INT(MODE_MANUAL,tuner.getMode());
+    }
+}
+
+void test_manual_command_queued_during_antenna_selection_cancels_unstarted_memory_tune() {
+    HardwareSerial::written = nullptr;
+    TunerProtocol tuner; begin(tuner);
+    unsigned toggles = 0, memories = 0;
+    bool rf = false;
+    HardwareSerial::written = [&](HardwareSerial& serial,uint8_t cmd) {
+        respondSync(serial,cmd);
+        if (cmd == 'M') serial.bytes.push_back('M');
+        if (cmd == 'A') {
+            ++toggles; serial.bytes.push_back(toggles % 2 ? '2' : '1');
+            if (rf) tuner.noteManualCommand(); // ANT2 requested while the automatic A is in flight.
+        }
+        if (cmd == 'T') { ++memories; serial.bytes.push_back('T'); }
+        if (cmd == 'S') for (auto b : frame(rf?150:0,0,1160)) serial.bytes.push_back(b);
+    };
+    ldg::AntennaSettings antennas; antennas.enabled = 1; antennas.bands[BAND_20M] = ANT_B;
+    tuner.configureAntennas(antennas);
+    ldg::TuningSettings profile; profile.managed = 1; tuner.configureTuning(profile);
+    feed(tuner,frame(0,0,1160)); tuner.serviceAntennas(); tuner.serviceAntennas();
+    rf = true;
+    for (int i=0;i<3;++i) feed(tuner,frame(150,0,1160));
+    tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_UINT(3,toggles); TEST_ASSERT_EQUAL_INT(ANT_B,tuner.getAntenna());
+    TEST_ASSERT_EQUAL_UINT(0,memories);
+    TEST_ASSERT_TRUE(tuner.getState().tuningState==ldg::TuningState::ManualOverride);
+}
+
+struct ModeConfig {
+    ldg::TuningSettings settings;
+    bool writable = true;
+    unsigned saves = 0;
+    ldg::TuningSettings tuningSettings() const { return settings; }
+    bool updateTuningMode(bool controlled) {
+        if (!writable) return false;
+        settings.managed = controlled; ++saves; return true;
+    }
+};
+void test_three_operating_modes_are_exclusive_and_controlled_never_reaches_uart() {
+    HardwareSerial::written = nullptr;
+    TunerProtocol tuner; begin(tuner);
+    ModeConfig config;
+    std::string wire;
+    uint16_t fwd = 0;
+    HardwareSerial::written = [&](HardwareSerial& serial,uint8_t cmd) {
+        TEST_ASSERT_NOT_EQUAL(TUNER_CMD_CONTROLLED_MODE,cmd);
+        respondSync(serial,cmd);
+        if (cmd == 'A') serial.bytes.push_back('1');
+        if (cmd == 'M' || cmd == 'C' || cmd == 'T') wire += char(cmd);
+        if (cmd == 'M') serial.bytes.push_back('M');
+        if (cmd == 'C') serial.bytes.push_back('A');
+        if (cmd == 'T') serial.bytes.push_back('T');
+        if (cmd == 'S') for (auto b : frame(fwd,0,2328)) serial.bytes.push_back(b);
+    };
+    tuner.manualCommandStarted(); TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_A));
+    tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_A,true);
+    for (uint8_t cmd : {uint8_t(TUNER_CMD_MANUAL_MODE),uint8_t(TUNER_CMD_AUTO_MODE)}) {
+        TEST_ASSERT_TRUE(ldg::selectOperatingMode(config,tuner,cmd));
+        TEST_ASSERT_FALSE(config.settings.managed);
+        for (int i=0;i<3;++i) feed(tuner,frame(150,0,2328));
+        tuner.serviceAntennas();
+        TEST_ASSERT_TRUE(wire.find('T') == std::string::npos);
+    }
+    fwd = 150;
+    TEST_ASSERT_TRUE(ldg::selectOperatingMode(config,tuner,TUNER_CMD_CONTROLLED_MODE));
+    TEST_ASSERT_TRUE(config.settings.managed);
+    TEST_ASSERT_EQUAL_INT(MODE_CONTROLLED,ldg::operatingMode(tuner.getState()));
+    TEST_ASSERT_EQUAL_INT(MODE_MANUAL,tuner.getMode());
+    for (int i=0;i<3;++i) feed(tuner,frame(fwd,0,2328));
+    tuner.serviceAntennas(); TEST_ASSERT_EQUAL_STRING("MCMT",wire.c_str());
+    TEST_ASSERT_TRUE(tuner.setAutoMode()); // Temporary high-SWR fallback is physical AUTO only.
+    JsonDocument doc; ldg::writeState(doc,tuner.getState(),false);
+    TEST_ASSERT_EQUAL_INT(MODE_CONTROLLED,doc["mode"].as<int>());
+    TEST_ASSERT_EQUAL_INT(MODE_AUTO,doc["tuner_mode"].as<int>());
+    const auto forwarded = ldg::readWebState(doc.as<JsonVariantConst>());
+    TEST_ASSERT_EQUAL_INT(MODE_CONTROLLED,ldg::operatingMode(forwarded));
+    TEST_ASSERT_EQUAL_INT(MODE_AUTO,forwarded.mode);
+    ldg::writeState(doc,tuner.getState(),true);
+    TEST_ASSERT_EQUAL_STRING("controlled",doc["mode"].as<const char*>());
+    TEST_ASSERT_EQUAL_STRING("auto",doc["tuner_mode"].as<const char*>());
+    TEST_ASSERT_TRUE(ldg::selectOperatingMode(config,tuner,TUNER_CMD_MANUAL_MODE));
+    TEST_ASSERT_EQUAL_INT(MODE_MANUAL,ldg::operatingMode(tuner.getState()));
+    fwd = 0;
+    for (int i=0;i<=8;++i) { testMillis += 200; feed(tuner,frame(0,0,2328)); tuner.serviceAntennas(); }
+    fwd = 150;
+    for (int i=0;i<3;++i) feed(tuner,frame(fwd,0,2328));
+    tuner.serviceAntennas();
+    TEST_ASSERT_EQUAL_STRING("MCMTCM",wire.c_str());
+}
+void test_failed_mode_persistence_does_not_change_policy_or_send_a_command() {
+    TunerProtocol tuner; begin(tuner); ModeConfig config; config.writable = false;
+    unsigned writes = 0;
+    HardwareSerial::written = [&](HardwareSerial&,uint8_t) { ++writes; };
+    TEST_ASSERT_FALSE(ldg::selectOperatingMode(config,tuner,TUNER_CMD_CONTROLLED_MODE));
+    TEST_ASSERT_FALSE(tuner.getState().tuningManaged); TEST_ASSERT_EQUAL_UINT(0,writes);
+    TEST_ASSERT_FALSE(ldg::selectOperatingMode(config,tuner,TUNER_CMD_MEM_TUNE));
+    TEST_ASSERT_EQUAL_UINT(0,writes);
+    config.writable = true;
+    TEST_ASSERT_FALSE(ldg::selectOperatingMode(config,tuner,TUNER_CMD_CONTROLLED_MODE)); // No M ACK.
+    TEST_ASSERT_TRUE(tuner.getState().tuningManaged);
+    TEST_ASSERT_EQUAL_INT(MODE_UNKNOWN,tuner.getMode());
+    TEST_ASSERT_EQUAL_INT(MODE_CONTROLLED,ldg::operatingMode(tuner.getState()));
+    TEST_ASSERT_TRUE(tuner.getState().tuningState == ldg::TuningState::Error);
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_three_operating_modes_are_exclusive_and_controlled_never_reaches_uart);
+    RUN_TEST(test_failed_mode_persistence_does_not_change_policy_or_send_a_command);
+    RUN_TEST(test_manual_command_queued_during_antenna_selection_cancels_unstarted_memory_tune);
+    RUN_TEST(test_managed_fallback_retries_once_but_not_after_rf_becomes_unsafe);
+    RUN_TEST(test_managed_mode_tunes_every_tx_without_reselecting_same_band_or_restoring_native_auto);
+    RUN_TEST(test_managed_mode_does_not_tune_without_confirmed_port_mode_or_safe_rf);
+    RUN_TEST(test_tci_checks_the_final_relay_write_and_defers_tx_stale_power_and_source_loss);
+    RUN_TEST(test_tci_startup_probe_defers_restoring_original_port_when_tx_starts);
     RUN_TEST(test_auto_band_selection_guards_mode_and_restores_it_even_after_failures);
     RUN_TEST(test_failed_old_auto_tune_keeps_first_band_choice_and_recovers_without_a_successful_match);
     RUN_TEST(test_auto_antenna_change_retunes_once_after_ack_and_before_restoring_auto);

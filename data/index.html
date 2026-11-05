@@ -333,6 +333,9 @@
                     <div class="status-row"><span>Mode</span><span id="modeValue">--</span></div>
                     <div class="status-row"><span>Антенна</span><span id="antennaInitStatus">--</span></div>
                     <div class="status-row"><span>Автовыбор</span><span id="antennaAutoStatus">--</span></div>
+                    <div class="status-row"><span>Настройка</span><span id="tuningStatus">--</span></div>
+                    <div class="status-row"><span>Трансивер</span><span id="radioStatus">TCI выключен · LDG</span></div>
+                    <div class="status-row"><span>Будущий TX</span><span id="radioFrequency">--</span></div>
                 </div>
                 <div class="button-stack">
                     <button class="btn btn-red" onclick="sendCommand('memory_tune')">Mem Tune</button>
@@ -348,7 +351,7 @@
                         </button>
                     </div>
                     <button class="btn btn-orange" id="btnBypass" onclick="toggleBypass()" title="Enable bypass; when active, switch it off by returning to AUTO.">BYPASS ON</button>
-                    <button class="btn btn-blue" id="btnMode" onclick="toggleTuningMode()">Set Auto</button>
+                    <button class="btn btn-blue" id="btnMode" onclick="toggleTuningMode()">Set Manual</button>
                 </div>
             </div>
         </div>
@@ -525,6 +528,28 @@
                 <div id="antennaBandTable"></div>
                 <button type="button" class="btn-save" id="btnSaveAntennas" onclick="saveAntennaSettings()" disabled>Сохранить таблицу антенн</button>
                 <p id="antennaSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка таблицы…</p>
+            </div>
+            <div class="settings-section">
+                <h3>Параметры CONTROLLED</h3>
+                <p style="font-size:0.75rem;color:var(--text-secondary)">Выбирается кнопкой режима на главном экране: MANUAL → AUTO → CONTROLLED → MANUAL. Эти параметры действуют только в CONTROLLED.</p>
+                <p style="font-size:0.75rem;color:var(--text-secondary)">Контроллер подтверждает MANUAL и при каждом новом начале передачи ниже 100 Вт запускает MEM TUNE после выбора антенны. Таблица антенн применяется только при первом определении или смене диапазона; ручной выбор на том же диапазоне сохраняется. Без TCI новая передача определяется после 1,5 с свежей нулевой мощности. Отсутствие данных паузой не считается.</p>
+                <label><input type="checkbox" id="tuningAutoFallback" onchange="updateTuningFields()"> При высоком КСВ включать AUTO до конца передачи</label>
+                <div class="form-group"><label for="tuningSwrThreshold">Порог КСВ (1,1–10,0)</label><input id="tuningSwrThreshold" type="number" min="1.1" max="10" step="0.1" value="2.0"></div>
+                <button type="button" class="btn-save" id="btnSaveTuning" onclick="saveTuningSettings()" disabled>Сохранить параметры CONTROLLED</button>
+                <p id="tuningSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка настроек…</p>
+            </div>
+            <div class="settings-section">
+                <h3>Трансивер · TCI</h3>
+                <label><input type="checkbox" id="radioEnabled"> Получать частоту через TCI</label>
+                <p style="font-size:0.75rem;color:var(--text-secondary)">Включите TCI в ExpertSDR3 и укажите LAN-адрес компьютера. Настраивайте на контроллере, подключённом к LDG. Антенна выбирается по таблице во время RX при свежей нулевой мощности. При обрыве TCI используется RF-телеметрия LDG.</p>
+                <div class="form-group"><label for="radioHost">Адрес TCI-сервера</label><input id="radioHost" type="text" maxlength="63" placeholder="192.168.1.10"></div>
+                <div class="form-row">
+                    <div class="form-group"><label for="radioPort">Порт</label><input id="radioPort" type="number" min="1" max="65535" value="40001"></div>
+                    <div class="form-group"><label for="radioReceiver">Индекс RX (0 = первый)</label><input id="radioReceiver" type="number" min="0" max="15" value="0"></div>
+                </div>
+                <button type="button" class="btn-save" id="btnSaveRadio" onclick="saveRadioSettings()" disabled>Сохранить TCI</button>
+                <p id="radioSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка настроек…</p>
+                <p id="radioDiagnostics" style="font-size:0.75rem;color:var(--text-secondary)"></p>
             </div>
             <button class="btn-save" onclick="saveSettings()">Save settings</button>
             <button class="btn-reset" onclick="resetSettings()">Reset to Defaults</button>
@@ -1024,13 +1049,14 @@
 
         let activeAntenna = 0; // 0=unknown, 1=ANT1, 2=ANT2
         let activeMode = 0;
+        let tunerMode = 0;
 
         function toggleTuningMode() {
-            return sendCommand(activeMode === 1 ? 'manual' : 'auto');
+            return sendCommand(activeMode === 2 ? 'auto' : activeMode === 1 ? 'controlled' : 'manual');
         }
 
         function toggleBypass() {
-            return sendCommand(activeMode === 3 ? 'auto' : 'bypass');
+            return sendCommand(tunerMode === 3 ? (activeMode === 4 ? 'controlled' : 'auto') : 'bypass');
         }
 
         function selectAntenna(ant) {
@@ -1048,9 +1074,22 @@
             b2.className = 'btn ant-btn ' + (antenna === 2 ? 'active' : antenna === 0 && last === 2 ? 'unconfirmed' : 'inactive');
         }
 
+        function updateOperatingMode(data) {
+            if (data.mode !== undefined) {
+                activeMode = Number.isInteger(data.mode) && data.mode >= 0 && data.mode <= 4 ? data.mode : 0;
+                tunerMode = Number.isInteger(data.tuner_mode) && data.tuner_mode >= 0 && data.tuner_mode <= 3
+                    ? data.tuner_mode : activeMode === 4 ? 0 : activeMode;
+                document.getElementById('btnMode').textContent = activeMode === 2 ? 'Set Auto' : activeMode === 1 ? 'Set Controlled' : 'Set Manual';
+                document.getElementById('btnBypass').textContent = tunerMode === 3 ? 'BYPASS OFF' : 'BYPASS ON';
+                const modes = { 0: '--', 1: 'AUTO', 2: 'MANUAL', 3: 'BYPASS', 4: 'CONTROLLED' };
+                document.getElementById('modeValue').textContent = modes[data.mode] || '--';
+            }
+        }
+
         function updateMeter(data) {
             applyMeterScale(data);
             updateAntennaStatus(data);
+            if (data.radio) updateRadioStatus(data.radio, data.antenna_source);
             meterState.fwdPower = Number.isFinite(data.fwd_power) && data.fwd_power >= 0 ? data.fwd_power : null;
             meterState.refPower = Number.isFinite(data.ref_power) && data.ref_power >= 0 ? data.ref_power : null;
             meterState.swr = Number.isFinite(data.swr) && data.swr >= 1 ? data.swr : null;
@@ -1059,13 +1098,7 @@
                 meterState.band = data.band;
                 document.getElementById('bandValue').textContent = 'Band: ' + data.band + (data.band_held ? ' (last)' : '');
             }
-            if (data.mode !== undefined) {
-                activeMode = Number.isInteger(data.mode) && data.mode >= 0 && data.mode <= 3 ? data.mode : 0;
-                document.getElementById('btnMode').textContent = activeMode === 1 ? 'Set Manual' : 'Set Auto';
-                document.getElementById('btnBypass').textContent = activeMode === 3 ? 'BYPASS OFF' : 'BYPASS ON';
-                const modes = { 0: '--', 1: 'AUTO', 2: 'MANUAL', 3: 'BYPASS' };
-                document.getElementById('modeValue').textContent = modes[data.mode] || '--';
-            }
+            updateOperatingMode(data);
             if (data.antenna !== undefined) {
                 updateAntennaButtons(data.antenna, data.antenna_last);
                 if (data.antenna === 0 && (data.antenna_last === 1 || data.antenna_last === 2))
@@ -1133,7 +1166,8 @@
                 statusEl.innerHTML = httpFresh ? '<span class="status-dot"></span> Connected (HTTP)'
                     : '<span class="status-dot offline"></span> Disconnected';
                 // A failing socket must not erase the working HTTP transport.
-                if (!httpFresh) updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0 });
+                if (!httpFresh) updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0,
+                    antenna_source: 'unknown', radio: { state: 'unavailable', rx_tx: 'unknown', tx_frequency_hz: null } });
                 if (!wsReconnectTimer) {
                     wsReconnectTimer = setTimeout(() => {
                         wsReconnectTimer = null;
@@ -1163,8 +1197,9 @@
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
                 if (data.result === 'success') {
+                    if (['manual', 'auto', 'controlled'].includes(cmd)) updateOperatingMode(data);
                     const names = { full_tune: 'Full tune completed', memory_tune: 'Memory tune completed',
-                        auto: 'Auto mode selected', manual: 'Manual mode selected', bypass: 'Bypass enabled',
+                        auto: 'Auto mode selected', manual: 'Manual mode selected', controlled: 'Controlled mode selected', bypass: 'Bypass enabled',
                         antenna_1: 'ANT 1 selected', antenna_2: 'ANT 2 selected' };
                     showToast(names[cmd] || 'Command completed');
                 } else {
@@ -1248,7 +1283,8 @@
                 } catch (err) {
                     if (httpMeterAt !== null && Date.now() - httpMeterAt > 5000) {
                         httpMeterAt = null;
-                        updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0 });
+                        updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0,
+                            antenna_source: 'unknown', radio: { state: 'unavailable', rx_tx: 'unknown', tx_frequency_hz: null } });
                         document.getElementById('connectionStatus').innerHTML = '<span class="status-dot offline"></span> Disconnected';
                     }
                     document.getElementById('mqttStatusText').textContent = 'MQTT: status unavailable';
@@ -1292,10 +1328,122 @@
             '<div class="form-group"><label for="antennaBand' + band + '">' + band + '</label>' +
             '<select id="antennaBand' + band + '"><option value="0">Не переключать</option>' +
             '<option value="1">ANT1</option><option value="2">ANT2</option></select></div>').join('');
+        let radioSettingsLoaded = false, radioSavePending = false;
+        function updateRadioStatus(radio, source = 'ldg') {
+            const names = { disabled: 'TCI выключен', disconnected: 'TCI нет связи',
+                connecting: 'TCI подключение', synchronizing: 'TCI синхронизация', ready: 'TCI подключён', unavailable: 'Контроллер недоступен' };
+            const trx = radio.rx_tx === 'tx' ? 'TX' : radio.rx_tx === 'rx' ? 'RX' : '?';
+            document.getElementById('radioStatus').textContent = (names[radio.state] || 'TCI неизвестен')
+                + (radio.state !== 'disabled' ? ' · ' + trx + (radio.tuning ? ' TUNE' : '') : '')
+                + ' · ' + (source === 'tci' ? 'TCI' : source === 'ldg' ? 'LDG' : '--');
+            document.getElementById('radioFrequency').textContent = Number.isSafeInteger(radio.tx_frequency_hz) && radio.tx_frequency_hz > 0
+                ? (radio.tx_frequency_hz / 1e6).toFixed(6) + ' MHz · ' + (radio.band || '--') + (radio.split ? ' · SPLIT' : '') : '--';
+            document.getElementById('radioDiagnostics').textContent = [radio.device, radio.protocol, radio.error,
+                radio.free_heap ? 'Heap ' + radio.free_heap + ' B; max ' + radio.largest_block + ' B; stack ' + radio.stack_free + ' B' : '']
+                .filter(Boolean).join(' · ');
+        }
+        async function loadRadioSettings() {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const response = await fetch('/api/radio-config', { signal: controller.signal });
+                if (!response.ok) throw new Error('load');
+                const data = await response.json();
+                if (typeof data.enabled !== 'boolean' || typeof data.host !== 'string' ||
+                    !Number.isInteger(data.port) || data.port < 1 || data.port > 65535 ||
+                    !Number.isInteger(data.receiver) || data.receiver < 0 || data.receiver > 15) throw new Error('config');
+                document.getElementById('radioEnabled').checked = data.enabled;
+                document.getElementById('radioHost').value = data.host;
+                document.getElementById('radioPort').value = String(data.port);
+                document.getElementById('radioReceiver').value = String(data.receiver);
+                radioSettingsLoaded = true;
+                document.getElementById('btnSaveRadio').disabled = false;
+                document.getElementById('radioSettingsStatus').textContent = 'Сохранение действует без перезагрузки. Индекс RX должен соответствовать используемому передатчику.';
+            } catch (error) { document.getElementById('radioSettingsStatus').textContent = 'Не удалось загрузить настройки TCI. Обновите страницу.'; }
+            finally { clearTimeout(timeout); }
+        }
+        async function saveRadioSettings() {
+            if (!radioSettingsLoaded || radioSavePending) return;
+            const config = { enabled: document.getElementById('radioEnabled').checked,
+                host: document.getElementById('radioHost').value.trim(),
+                port: Number(document.getElementById('radioPort').value), receiver: Number(document.getElementById('radioReceiver').value) };
+            if ((config.enabled && !config.host) || config.host.length > 63 || !/^[a-zA-Z0-9.-]*$/.test(config.host) ||
+                !Number.isInteger(config.port) || config.port < 1 || config.port > 65535 ||
+                !Number.isInteger(config.receiver) || config.receiver < 0 || config.receiver > 15) {
+                showToast('Проверьте адрес, порт и индекс RX', 'error'); return;
+            }
+            radioSavePending = true;
+            const button = document.getElementById('btnSaveRadio'); button.disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const response = await fetch('/api/radio-config', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config), signal: controller.signal });
+                const data = await response.json();
+                if (!response.ok || data.result !== 'ok') throw new Error(data.error || 'save');
+                showToast('Настройки TCI сохранены');
+            } catch (error) { showToast('Не удалось сохранить TCI: ' + error.message, 'error'); }
+            finally { clearTimeout(timeout); radioSavePending = false; button.disabled = false; }
+        }
+
+        let tuningSettingsLoaded = false;
+        let tuningSavePending = false;
+        function updateTuningFields() {
+            document.getElementById('tuningSwrThreshold').disabled = !document.getElementById('tuningAutoFallback').checked;
+        }
+        function validTuningSettings(value) {
+            return typeof value.auto_fallback === 'boolean' &&
+                Number.isFinite(value.swr_threshold) && value.swr_threshold >= 1.1 && value.swr_threshold <= 10 &&
+                Math.abs(value.swr_threshold * 10 - Math.round(value.swr_threshold * 10)) < 0.00001;
+        }
+        async function loadTuningSettings() {
+            document.getElementById('btnSaveTuning').disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const response = await fetch('/api/tuning-config', { signal: controller.signal });
+                if (!response.ok) throw new Error('load');
+                const data = await response.json();
+                if (!validTuningSettings(data)) throw new Error('settings');
+                document.getElementById('tuningAutoFallback').checked = data.auto_fallback;
+                document.getElementById('tuningSwrThreshold').value = data.swr_threshold.toFixed(1);
+                tuningSettingsLoaded = true;
+                document.getElementById('btnSaveTuning').disabled = false;
+                document.getElementById('tuningSettingsStatus').textContent = 'Применяется без перезагрузки. После временного AUTO восстанавливается MANUAL.';
+                updateTuningFields();
+            } catch (error) {
+                document.getElementById('tuningSettingsStatus').textContent = 'Не удалось загрузить настройки. Обновите страницу.';
+            } finally { clearTimeout(timeout); }
+        }
+        async function saveTuningSettings() {
+            if (!tuningSettingsLoaded || tuningSavePending) return;
+            const value = { auto_fallback: document.getElementById('tuningAutoFallback').checked,
+                swr_threshold: Number(document.getElementById('tuningSwrThreshold').value) };
+            if (!validTuningSettings(value)) { showToast('Порог КСВ: 1,1–10,0 с шагом 0,1', 'error'); return; }
+            tuningSavePending = true;
+            const button = document.getElementById('btnSaveTuning'); button.disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
+            try {
+                const response = await fetch('/api/tuning-config', { method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value), signal: controller.signal });
+                const data = await response.json();
+                if (!response.ok || data.result !== 'ok') throw new Error(data.error || 'save');
+                showToast('Параметры CONTROLLED сохранены');
+            } catch (error) { showToast('Не удалось сохранить параметры CONTROLLED: ' + error.message, 'error'); }
+            finally { clearTimeout(timeout); tuningSavePending = false; button.disabled = false; }
+        }
+
         let antennaSettingsLoaded = false;
         let antennaSavePending = false;
 
         function updateAntennaStatus(data) {
+            const tuning = { native: 'Штатное управление', waiting_manual: 'Подтверждение MANUAL', waiting_rf: 'MANUAL: ожидание новой передачи',
+                waiting_antenna: 'Ожидание выбора антенны', memory_tune: 'MEM TUNE', waiting_swr: 'Проверка КСВ после MEM TUNE',
+                matched: 'MEM TUNE завершён', auto_active: 'AUTO до конца передачи', returning_manual: 'Возврат в MANUAL',
+                high_power: 'Настройка запрещена: мощность ≥100 Вт', no_fresh_data: 'Нет свежего КСВ после MEM TUNE',
+                error: 'Тюнер не подтвердил настройку/режим', manual_override: 'Отменено ручной командой до новой передачи' };
+            if (data.tuning_state !== undefined) document.getElementById('tuningStatus').textContent = tuning[data.tuning_state] || '--';
             const init = { unknown: '--', waiting_meter: 'Ожидание данных', waiting_rf_off: 'Ожидание окончания передачи',
                 checking: 'Проверка', restoring: 'Возврат исходной антенны', ready: 'Готово', error: 'Ошибка проверки' };
             const auto = { disabled: 'Запрет переключения: автоматика выключена', idle: 'Ожидание смены диапазона', pending: 'Выбор антенны',
@@ -1305,6 +1453,8 @@
                 manual_override: 'Отменено ручной командой', manual_selection: 'Пользователь переключил антенну вручную',
                 initial_band: 'Первый диапазон: исходная антенна сохранена', retrying: 'Повторный выбор антенны',
                 waiting_meter: 'Ожидание свежего измерения мощности',
+                waiting_radio: 'Ожидание полного состояния и диапазона TCI',
+                waiting_rx: 'Ожидание RX без TUNE', waiting_band: 'Ожидание стабильного диапазона TCI',
                 tuning: 'Антенна выбрана; выполняется MEM TUNE', tune_failed: 'Антенна выбрана; MEM TUNE не подтверждён',
                 tune_no_rf: 'Антенна выбрана; MEM TUNE пропущен: нет передачи',
                 tune_power_limit: 'Антенна выбрана; MEM TUNE запрещён: мощность ≥100 Вт',
@@ -1320,7 +1470,8 @@
                 if ((data.antenna_auto === 'selected' || data.antenna_auto === 'already_selected') &&
                     antennaBands.includes(data.antenna_auto_band)) {
                     text += ' для ' + data.antenna_auto_band;
-                    if (data.band_held === true) text += '; нет свежих данных тюнера';
+                    if (data.antenna_source === 'tci') text += ' · TCI';
+                    else if (data.band_held === true) text += '; нет свежих данных тюнера';
                     else if (data.band && data.band !== data.antenna_auto_band)
                         text += '; ожидается подтверждение диапазона ' + data.band;
                 }
@@ -1368,8 +1519,11 @@
         }
 
         async function loadSettings() {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5000);
             try {
-                const resp = await fetch('/api/config');
+                const resp = await fetch('/api/config', { signal: controller.signal });
+                if (!resp.ok) throw new Error('load');
                 const data = await resp.json();
                 if (data.mqttBroker) document.getElementById('mqttBroker').value = data.mqttBroker;
                 if (data.mqttPort) document.getElementById('mqttPort').value = data.mqttPort;
@@ -1405,6 +1559,7 @@
                     if (data.remoteHost) document.getElementById('remoteHost').value = data.remoteHost;
                 }
             } catch (err) {}
+            finally { clearTimeout(timeout); }
         }
 
         async function saveSettings() {
@@ -1462,10 +1617,17 @@
 
         drawMeter();
         connectWS();
-        loadSettings();
-        loadAntennaSettings();
-        loadBrightnessSettings();
-        refreshMqttStatus();
+        // Keep setup requests sequential: two persistent WebSockets leave
+        // limited HTTP slots and heap on the ESP32 without PSRAM.
+        async function loadInitialSettings() {
+            await loadSettings();
+            await loadAntennaSettings();
+            await loadRadioSettings();
+            await loadTuningSettings();
+            await loadBrightnessSettings();
+            await refreshMqttStatus();
+        }
+        loadInitialSettings();
     </script>
 </body>
 </html>

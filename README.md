@@ -14,6 +14,9 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
   - Sunton backlight: manual brightness or smooth automatic control using the
     onboard light sensor. See [display settings](docs/display-settings.md).
 - **Web Interface**: Responsive browser UI with WebSocket live updates
+- **TCI**: Read the future TX frequency from ExpertSDR3 or another compatible
+  TCI server and select the band antenna during RX. See [TCI setup and limits](docs/tci.md)
+  ([на русском](docs/tci-ru.md)).
 - **MQTT Integration**: Per-device telemetry, adaptive 1/30-second updates, and Home Assistant auto discovery (six sensors and six command buttons)
 - **Touchscreen Display**: Sunton ESP32-3248S035C or BTT TFT35-SPI with custom cross-needle meter
 - **Three Firmware Targets**:
@@ -227,6 +230,7 @@ All endpoints require HTTP Basic Auth.
 | POST | `/api/command/toggle` | Toggle antenna A/B |
 | POST | `/api/command/antenna_1`, `/api/command/antenna_2` | Select the requested antenna; repeated requests are idempotent |
 | GET, POST | `/api/antenna-config` | Read/replace the persistent band-to-antenna table (authenticated) |
+| GET, POST | `/api/radio-config` | Configure direct TCI reception; applies without restarting |
 | POST | `/api/command/memory_tune` | Memory tune |
 | POST | `/api/command/full_tune` | Full tune |
 | POST | `/api/command/bypass` | Bypass (passthrough) |
@@ -512,6 +516,9 @@ reconnection, Home Assistant discovery, and completed web/MQTT commands request 
 immediate state update. A failed publish does not advance the timer or baseline.
 Thresholds are fixed in firmware. WebSocket and display refresh rates are unchanged.
 
+See [MQTT API 2 and logger bridge](docs/logger-bridge.md) for correlated commands,
+recipient binding, deadlines and separate TCI/OmniRig radio snapshots.
+
 ### Commands and discovery lifecycle
 
 Send commands such as `{"command":"full_tune"}` to the per-device `/command`
@@ -724,6 +731,10 @@ antenna selection has the single guarded recovery attempt described above.
 The wire protocol provides antenna toggle only. When the initial antenna is
 unknown, an absolute selection may require two acknowledged toggles to reach
 the requested port. Repeated requests for a confirmed port do not toggle it.
+
+The mode button cycles MANUAL → AUTO → CONTROLLED → MANUAL. CONTROLLED runs
+MEM TUNE on each transmission and can temporarily enable AUTO for high SWR.
+See [tuning control](docs/tuning-control.md).
 
 ### MQTT (Optional)
 

@@ -10,6 +10,7 @@ extern DisplayUI display;
 #include "security.h"
 #include "config_store.h"
 #include "remote_protocol.h"
+#include "operating_mode.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <WiFi.h>
@@ -50,11 +51,11 @@ static LdgWebServer* s_instance = nullptr;
 struct MeterFeed {
     portMUX_TYPE mux;
     uint32_t meterSeq;
-    char meterJson[384];
+    tuner_state_t state;
 };
 static MeterFeed s_feed = {
     portMUX_INITIALIZER_UNLOCKED,
-    0, ""
+    0, {}
 };
 
 // ---------------------------------------------------------------------------
@@ -254,15 +255,47 @@ static void sendJson(hsv::HTTPResponse* res, int code, const String& body) {
     res->print(body.c_str());
 }
 
-// Web transports retain numeric enums; MQTT uses text labels from the same snapshot.
-static String serializeState(const tuner_state_t& state) {
-    JsonDocument doc;
-    ldg::writeState(doc, state, false);
-    if (s_instance && s_instance->getMeterScale())
-        ldg::writeMeterScale(doc, s_instance->getMeterScale()->snapshot());
-    String out;
-    serializeJson(doc, out);
-    return out;
+// ArduinoJson emits individual bytes too. A non-keep-alive HTTPResponse can
+// forward each byte straight to lwIP, exhausting packet buffers even though
+// the JSON document itself is small. Batch writes with a bounded stack buffer.
+class BufferedJsonResponse {
+public:
+    explicit BufferedJsonResponse(hsv::HTTPResponse& response) : m_response(response) {}
+    size_t write(uint8_t value) { return write(&value, 1); }
+    size_t write(const uint8_t* data, size_t size) {
+        size_t copied = 0;
+        while (copied < size && !m_failed) {
+            if (m_used == sizeof(m_buffer) && !flush()) break;
+            const size_t count = std::min(size - copied, sizeof(m_buffer) - m_used);
+            memcpy(m_buffer + m_used, data + copied, count);
+            copied += count; m_used += count;
+        }
+        return copied;
+    }
+    bool flush() {
+        if (!m_used) return !m_failed;
+        m_failed = m_response.write(m_buffer, m_used) != m_used;
+        m_used = 0;
+        return !m_failed;
+    }
+private:
+    hsv::HTTPResponse& m_response;
+    uint8_t m_buffer[256];
+    size_t m_used = 0;
+    bool m_failed = false;
+};
+
+static void sendJsonDocument(hsv::HTTPResponse* res, const JsonDocument& doc) {
+    if (doc.overflowed()) {
+        sendJson(res, 503, "{\"error\":\"insufficient memory\"}");
+        return;
+    }
+    res->setHeader("Content-Type", "application/json");
+    res->setHeader("Content-Length", std::to_string(measureJson(doc)));
+    // Avoid a second full JSON copy while the document is still allocated.
+    BufferedJsonResponse writer(*res);
+    serializeJson(doc, writer);
+    if (!writer.flush()) res->error();
 }
 
 // ---------------------------------------------------------------------------
@@ -347,9 +380,7 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     const DeviceConfig& cfg = configManager.get();
     mqtt["broker"] = cfg.mqttBroker;
     mqtt["port"] = cfg.mqttPort;
-    String out;
-    serializeJson(doc, out);
-    sendJson(res, 200, out);
+    sendJsonDocument(res, doc);
 }
 
 static void h_meter_scale(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
@@ -481,6 +512,42 @@ static void h_antenna_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res)
     sendJson(res, 200, "{\"result\":\"ok\",\"restart\":false}");
 }
 
+static void h_tuning_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    JsonDocument doc;
+    ldg::writeTuningSettingsJson(doc, configManager.tuningSettings());
+    String out; serializeJson(doc, out); sendJson(res, 200, out);
+}
+
+static void h_tuning_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    JsonDocument doc;
+    auto candidate = configManager.tuningSettings();
+    if (deserializeJson(doc, readRequestBody(req)) || !ldg::parseTuningSettings(doc.as<JsonVariantConst>(), candidate)) {
+        sendJson(res, 400, R"json({"error":"Expected auto_fallback boolean, swr_threshold 1.1..10.0 (step 0.1)"})json"); return;
+    }
+    if (!configManager.updateTuningOptions(candidate)) { sendJson(res, 500, R"({"error":"save failed"})"); return; }
+    sendJson(res, 200, R"({"result":"ok","restart":false})");
+}
+
+static void h_radio_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    JsonDocument doc;
+    ldg::writeRadioSettingsJson(doc, configManager.radioSettings());
+    String out; serializeJson(doc, out); sendJson(res, 200, out);
+}
+
+static void h_radio_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
+    if (!authenticate(req, res)) return;
+    JsonDocument doc;
+    ldg::RadioSettings candidate;
+    if (deserializeJson(doc, readRequestBody(req)) || !ldg::parseRadioSettings(doc.as<JsonVariantConst>(), candidate)) {
+        sendJson(res, 400, "{\"error\":\"Expected enabled, host (hostname/IP, max 63 bytes), port (1..65535), receiver (0..15)\"}"); return;
+    }
+    if (!configManager.updateRadioSettings(candidate)) { sendJson(res, 500, "{\"error\":\"save failed\"}"); return; }
+    sendJson(res, 200, "{\"result\":\"ok\",\"restart\":false}");
+}
+
 static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (!authenticate(req, res)) return;
 
@@ -556,20 +623,27 @@ static void runCommand(hsv::HTTPResponse* res, uint8_t cmd) {
     if (self->getCmdHandler()) {
         ok = self->getCmdHandler()(cmd);
     } else if (self->getTuner()) {
-        switch (cmd) {
+        if (ldg::isModeCommand(cmd)) ok = ldg::selectOperatingMode(configManager, *self->getTuner(), cmd);
+        else switch (cmd) {
             case TUNER_CMD_SELECT_ANT_A: ok = self->getTuner()->selectAntenna(ANT_A); break;
             case TUNER_CMD_SELECT_ANT_B: ok = self->getTuner()->selectAntenna(ANT_B); break;
             case TUNER_CMD_TOGGLE_ANT:  ok = self->getTuner()->toggleAntenna();   break;
             case TUNER_CMD_MEM_TUNE:    ok = self->getTuner()->memoryTune();      break;
             case TUNER_CMD_FULL_TUNE:   ok = self->getTuner()->fullTune();        break;
             case TUNER_CMD_BYPASS:      ok = self->getTuner()->bypass();          break;
-            case TUNER_CMD_AUTO_MODE:   ok = self->getTuner()->setAutoMode();     break;
-            case TUNER_CMD_MANUAL_MODE: ok = self->getTuner()->setManualMode();   break;
         }
     }
     JsonDocument doc;
     doc["command"] = cmd;
     doc["result"]  = ok ? "success" : "failed";
+    if (ok && ldg::isModeCommand(cmd)) {
+        // These commands completed with the corresponding physical ACK.
+        // Return the confirmed target so HTTP-only clients can cycle again
+        // without waiting for the next periodic status request.
+        doc["mode"] = cmd == TUNER_CMD_CONTROLLED_MODE ? MODE_CONTROLLED :
+                      cmd == TUNER_CMD_AUTO_MODE ? MODE_AUTO : MODE_MANUAL;
+        doc["tuner_mode"] = cmd == TUNER_CMD_AUTO_MODE ? MODE_AUTO : MODE_MANUAL;
+    }
     String out;
     serializeJson(doc, out);
     sendJson(res, 200, out);
@@ -590,6 +664,7 @@ static void h_cmd_full_tune   (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { 
 static void h_cmd_bypass      (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (!authenticate(req, res)) return; runCommand(res, TUNER_CMD_BYPASS); }
 static void h_cmd_auto        (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (!authenticate(req, res)) return; runCommand(res, TUNER_CMD_AUTO_MODE); }
 static void h_cmd_manual      (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (!authenticate(req, res)) return; runCommand(res, TUNER_CMD_MANUAL_MODE); }
+static void h_cmd_controlled  (hsv::HTTPRequest* req, hsv::HTTPResponse* res) { if (!authenticate(req, res)) return; runCommand(res, TUNER_CMD_CONTROLLED_MODE); }
 
 static void h_telemetry(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (!authenticate(req, res)) return;
@@ -677,6 +752,10 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     m_server->registerNode(new hsv::ResourceNode("/api/config",         "POST", &h_config_post));
     m_server->registerNode(new hsv::ResourceNode("/api/antenna-config", "GET", &h_antenna_config_get));
     m_server->registerNode(new hsv::ResourceNode("/api/antenna-config", "POST", &h_antenna_config_post));
+    m_server->registerNode(new hsv::ResourceNode("/api/tuning-config", "GET", &h_tuning_config_get));
+    m_server->registerNode(new hsv::ResourceNode("/api/tuning-config", "POST", &h_tuning_config_post));
+    m_server->registerNode(new hsv::ResourceNode("/api/radio-config", "GET", &h_radio_config_get));
+    m_server->registerNode(new hsv::ResourceNode("/api/radio-config", "POST", &h_radio_config_post));
     m_server->registerNode(new hsv::ResourceNode("/api/telemetry",      "POST", &h_telemetry));
     m_server->registerNode(new hsv::ResourceNode("/api/command/antenna_1", "POST", &h_cmd_antenna_1));
     m_server->registerNode(new hsv::ResourceNode("/api/command/antenna_2", "POST", &h_cmd_antenna_2));
@@ -686,6 +765,7 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     m_server->registerNode(new hsv::ResourceNode("/api/command/bypass",      "POST", &h_cmd_bypass));
     m_server->registerNode(new hsv::ResourceNode("/api/command/auto",        "POST", &h_cmd_auto));
     m_server->registerNode(new hsv::ResourceNode("/api/command/manual",      "POST", &h_cmd_manual));
+    m_server->registerNode(new hsv::ResourceNode("/api/command/controlled",  "POST", &h_cmd_controlled));
 
     // WebSocket telemetry channel — persistent, non-blocking, replaces SSE
     // for the live meter feed. The library dispatches WS handlers non-inline,
@@ -720,31 +800,35 @@ void LdgWebServer::loop() {
         m_lastMeterScaleRevision = scaleRevision;
     }
 
-    // Broadcast newly-published meter data to every connected WebSocket
-    // subscriber. seq-based gating means we only send when something actually
-    // changed since the last broadcast. This runs in the webServer task right
-    // after HTTPServer::loop(), so it cannot race with the library's
-    // creation/deletion of MeterWebsocketHandler instances.
+    // Serialize only on the web worker, after the HTTP handler has released
+    // its document. The UART worker publishes a plain value snapshot and
+    // never allocates JSON concurrently with status requests.
     uint32_t currSeq;
-    char buf[sizeof(s_feed.meterJson)];
+    tuner_state_t state;
     portENTER_CRITICAL(&s_feed.mux);
     currSeq = s_feed.meterSeq;
-    if (currSeq != m_lastWsMeterSeq) {
-        strncpy(buf, s_feed.meterJson, sizeof(buf));
-        buf[sizeof(buf) - 1] = '\0';
-    }
+    if (currSeq != m_lastWsMeterSeq) state = s_feed.state;
     portEXIT_CRITICAL(&s_feed.mux);
     if (currSeq != m_lastWsMeterSeq) {
-        MeterWebsocketHandler::broadcastMeter(buf);
+        if (MeterWebsocketHandler::subscribers()) {
+            char buf[1536];
+            bool valid = false;
+            {
+                JsonDocument doc;
+                ldg::writeState(doc, state, false);
+                if (m_meterScale) ldg::writeMeterScale(doc, m_meterScale->snapshot());
+                valid = !doc.overflowed() && measureJson(doc) < sizeof(buf);
+                if (valid) serializeJson(doc, buf, sizeof(buf));
+            } // Release the document before allocating socket output buffers.
+            if (valid) MeterWebsocketHandler::broadcastMeter(buf);
+        }
         m_lastWsMeterSeq = currSeq;
     }
 }
 
 void LdgWebServer::pushMeterEvent(const tuner_state_t& state) {
-    String payload = serializeState(state);
     portENTER_CRITICAL(&s_feed.mux);
-    strncpy(s_feed.meterJson, payload.c_str(), sizeof(s_feed.meterJson));
-    s_feed.meterJson[sizeof(s_feed.meterJson) - 1] = '\0';
+    s_feed.state = state;
     s_feed.meterSeq++;
     portEXIT_CRITICAL(&s_feed.mux);
 }

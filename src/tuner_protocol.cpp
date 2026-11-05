@@ -106,6 +106,31 @@ bool TunerProtocol::sendWake() {
     return true;
 }
 
+bool TunerProtocol::automaticRelayAllowed() {
+    if (!m_automaticRelays) return true;
+    const auto radio = m_radioStateGetter ? m_radioStateGetter() : ldg::RadioState{};
+    const bool radioGuard = m_preventiveSelection || radio.ownsBand();
+    const bool allowed = m_manualRevision.load() == m_relayManualRevision &&
+        (!radioGuard || (radio.safeRx() && (!ldg::knownBand(m_relayBand) ||
+            (ldg::frequencyBand(radio.txFrequencyHz) == m_relayBand && radio.stableMs >= 200)) &&
+            m_hasMeterData && m_antennas.hasFreshMeter(millis()) &&
+            m_meterData.forward_power_raw == 0 && m_meterData.forward_power_watts == 0));
+    if (!allowed) m_relayBlocked = true;
+    return allowed;
+}
+
+void TunerProtocol::observeRadio() {
+    const auto previous = m_antennas.automatic();
+    const auto band = m_antennas.currentBand();
+    const bool source = m_antennas.usesRadio();
+    const auto radio = m_radioStateGetter ? m_radioStateGetter() : ldg::RadioState{};
+    m_tuning.setPtt(radio.connection == ldg::RadioConnection::Ready && radio.rxKnown &&
+                    radio.ageMs <= ldg::RadioState::LivenessMs, radio.transmitting);
+    m_antennas.observeRadio(radio, m_manualRevision.load());
+    if (previous != m_antennas.automatic() || band != m_antennas.currentBand() || source != m_antennas.usesRadio())
+        publishSnapshot();
+}
+
 bool TunerProtocol::sendCommand(uint8_t cmd) {
     if (!m_serial || !m_connected) return false;
 
@@ -117,6 +142,10 @@ bool TunerProtocol::sendCommand(uint8_t cmd) {
         m_ackGuardActive = false;
     }
     if (!sendWake()) return false;
+
+    // Recheck after the UART guard, wake bytes and synchronization, immediately
+    // before EACH physical toggle (including absolute-selection recovery).
+    if (cmd == TUNER_CMD_TOGGLE_ANT && !automaticRelayAllowed()) return false;
 
     if (m_serial->write(cmd) != 1) {
         return false;
@@ -217,16 +246,17 @@ char TunerProtocol::controlResponse(uint8_t cmd) {
     const uint32_t started = millis();
     resetCommandTrace(0);
     char response = TUNER_RESP_ERROR;
+    if (cmd == TUNER_CMD_TOGGLE_ANT && m_automaticRelays) process();
     if (switchToControlMode()) {
         bool ready = true;
         if (m_needsSync && cmd != TUNER_CMD_SYNC) {
             ready = exchangeCommand(TUNER_CMD_SYNC) == TUNER_CMD_SYNC;
-            if (ready) publishSnapshot(true);
+            if (ready) { m_needsSync = false; publishSnapshot(true); }
         }
         if (ready) response = exchangeCommand(cmd);
     }
     drainLateResponse();
-    m_needsSync = response == TUNER_RESP_ERROR;
+    if (!(m_automaticRelays && m_relayBlocked && !m_exchangeWritten)) m_needsSync = response == TUNER_RESP_ERROR;
     const bool commandWritten = m_exchange == cmd && m_exchangeWritten;
     const char stateResponse = response != TUNER_RESP_ERROR ? response :
         m_exchangeUartError ? 0 : char(m_lateResponse);
@@ -276,9 +306,50 @@ void TunerProtocol::configureAntennas(const ldg::AntennaSettings& settings) {
     if (m_antennas.configure(settings)) publishSnapshot();
 }
 
+void TunerProtocol::configureTuning(const ldg::TuningSettings& settings) {
+    if (m_tuning.configure(settings)) {
+        m_restoreAutoAfterRf = false;
+        publishSnapshot();
+    }
+}
+
+bool TunerProtocol::serviceTuning(bool manualPending, bool allowTune) {
+    using Action = ldg::TuningAutomation::Action;
+    if (allowTune && m_tuning.enabled()) process(); // Decode the post-A batch before deciding on T.
+    const auto previous = m_tuning.state();
+    const bool ready = m_antennas.init() == ldg::AntennaInit::Ready &&
+                       !m_antennas.selectionPending() && ldg::knownAntenna(getAntenna());
+    const uint32_t revision = m_manualRevision.load();
+    const auto action = m_tuning.poll(millis(), getMode(), ready, manualPending, allowTune);
+    if (previous != m_tuning.state()) publishSnapshot();
+    if (action == Action::None) return false;
+    // A queued explicit command takes priority over any unstarted policy action.
+    if (revision != m_manualRevision.load()) { m_tuning.manualStarted(); publishSnapshot(); return false; }
+    bool success = false;
+    if (action == Action::MemoryTune) {
+        success = memoryTune(); // Exactly one memory cycle per RF start, no retry loop.
+        m_tuning.memoryComplete(success, millis());
+    } else {
+        for (unsigned i = 0; !success && i < 2; ++i) {
+            if (revision != m_manualRevision.load()) break;
+            if (i && action == Action::Auto && m_tuning.enabled()) {
+                process();
+                if (!m_tuning.allowsRfCommand(millis())) break;
+            }
+            success = action == Action::Manual ? setManualMode() : setAutoMode();
+        }
+        m_tuning.modeComplete(action, success);
+    }
+    process(); // Post-command RF/SWR is a new observation, never the pre-T sample.
+    publishSnapshot();
+    return true;
+}
+
 void TunerProtocol::manualCommandStarted() {
+    m_tuning.manualStarted();
     m_initialModeHandled = true;
     m_restoreAutoAfterRf = false; // A user's next mode choice takes priority.
+    m_probeRestore = ANT_UNKNOWN;
     m_antennas.manualStarted();
     publishSnapshot();
 }
@@ -291,6 +362,8 @@ void TunerProtocol::manualCommandComplete(uint8_t command, bool success) {
 }
 
 void TunerProtocol::serviceAntennas(bool manualPending) {
+    const uint32_t revision = m_manualRevision.load();
+    observeRadio();
     // A written S is not proof that streaming resumed. Recover from a lost
     // meter-start even before another band has been observed. Only actual
     // decoded frames reset the silence timer; neither RX noise nor status
@@ -305,7 +378,8 @@ void TunerProtocol::serviceAntennas(bool manualPending) {
         startMeter();
         process();
     }
-    if (!m_initialModeHandled && !manualPending && m_antennas.enabled() &&
+    if (serviceTuning(manualPending, false)) return;
+    if (!m_tuning.enabled() && !m_initialModeHandled && !manualPending && m_antennas.enabled() &&
         m_antennas.init() == ldg::AntennaInit::Ready) {
         m_initialModeHandled = true;
         // With band automation enabled, establish AUTO after the startup
@@ -319,7 +393,7 @@ void TunerProtocol::serviceAntennas(bool manualPending) {
             return;
         }
     }
-    if (m_restoreAutoAfterRf && !m_antennas.waitingTuner() && !manualPending && m_antennas.hasFreshMeter(millis())) {
+    if (!m_tuning.enabled() && m_restoreAutoAfterRf && !m_antennas.waitingTuner() && !manualPending && m_antennas.hasFreshMeter(millis())) {
         const auto state = getState();
         if (state.meterValid && state.meter.forward_power_raw == 0 &&
             state.meter.forward_power_watts == 0) {
@@ -333,12 +407,25 @@ void TunerProtocol::serviceAntennas(bool manualPending) {
             portEXIT_CRITICAL(&m_snapshotMux);
         }
     }
+    if (ldg::knownAntenna(m_probeRestore)) {
+        const auto radio = m_radioStateGetter ? m_radioStateGetter() : ldg::RadioState{};
+        if (manualPending || !m_antennas.hasFreshMeter(millis()) || m_meterData.forward_power_raw != 0 ||
+            m_meterData.forward_power_watts != 0 || (radio.ownsBand() && !radio.safeRx())) return;
+        m_automaticRelays = true; m_preventiveSelection = radio.ownsBand(); m_relayBlocked = false;
+        m_relayManualRevision = m_manualRevision.load(); m_relayBand = BAND_UNKNOWN;
+        const bool restored = selectAntenna(m_probeRestore);
+        m_automaticRelays = false;
+        if (!m_relayBlocked) { m_probeRestore = ANT_UNKNOWN; m_antennas.probeComplete(restored); }
+        publishSnapshot(); return;
+    }
     const auto previousInit = m_antennas.init();
     const auto previousAuto = m_antennas.automatic();
     const auto request = m_antennas.poll(millis(), m_manualRevision.load(), manualPending,
                                        getAntenna(), getMode() == MODE_UNKNOWN);
     if (previousInit != m_antennas.init() || previousAuto != m_antennas.automatic()) publishSnapshot();
     if (request.action == ldg::AntennaAutomation::Action::Probe) {
+        m_automaticRelays = true; m_preventiveSelection = m_antennas.usesRadio(); m_relayBlocked = false;
+        m_relayManualRevision = m_manualRevision.load(); m_relayBand = BAND_UNKNOWN;
         // One started operation: finish restoring before a queued manual
         // command runs. Missing ACKs never trigger a blind retry.
         bool success = toggleAntenna();
@@ -347,8 +434,13 @@ void TunerProtocol::serviceAntennas(bool manualPending) {
             m_antennas.restoring();
             publishSnapshot();
             success = toggleAntenna() && getAntenna() == original;
+            if (!success && m_relayBlocked) m_probeRestore = original;
         }
-        m_antennas.probeComplete(success);
+        m_automaticRelays = false;
+        if (!ldg::knownAntenna(m_probeRestore)) {
+            if (m_relayBlocked) m_antennas.probeDeferred();
+            else m_antennas.probeComplete(success);
+        }
         publishSnapshot();
     } else if (request.action == ldg::AntennaAutomation::Action::Select) {
         selectBandAntenna(request.antenna, request.recovery);
@@ -358,18 +450,28 @@ void TunerProtocol::serviceAntennas(bool manualPending) {
         else process();
         publishSnapshot();
     }
+    if (revision != m_manualRevision.load()) {
+        m_tuning.manualStarted(); // A command queued during A cancels the unstarted T.
+        publishSnapshot();
+        return;
+    }
+    serviceTuning(manualPending, true);
 }
 
 void TunerProtocol::selectBandAntenna(tuner_ant_t antenna, uint8_t recovery) {
     const uint32_t started = millis();
     const tuner_band_t band = m_antennas.currentBand();
     const uint32_t manualRevision = m_manualRevision.load();
+    const bool preventive = m_antennas.usesRadio();
+    m_automaticRelays = true; m_preventiveSelection = preventive; m_relayBlocked = false;
+    m_relayManualRevision = manualRevision; m_relayBand = band;
     uint32_t framesBeforeSelection = 0;
     ldg::AntennaSelectionDiagnostics trace;
     trace.present = true;
     trace.target = antenna;
     trace.recovery = recovery;
     trace.modeGuard = getMode() == MODE_AUTO || recovery != 0;
+    const bool restoreRequired = trace.modeGuard && !m_tuning.enabled();
     // AT-1000ProII can ignore A during RF in AUTO. M is idempotent; require
     // its ACK before touching the antenna and restore the known original mode.
     // Mode writes are idempotent. One retry may recover a lost mode ACK;
@@ -394,7 +496,7 @@ void TunerProtocol::selectBandAntenna(tuner_ant_t antenna, uint8_t recovery) {
         fresh = state.meterValid && m_meterActive && m_antennas.hasFreshMeter(millis());
         const double power = state.meter.forward_power_watts;
         valid = fresh && std::isfinite(power) && power >= 0;
-        lowPower = valid && power < 100;
+        lowPower = valid && (preventive ? state.meter.forward_power_raw == 0 && power == 0 : power < 100);
         const bool sameBand = state.meter.forward_power_raw == 0 || state.meter.band == band;
         if (lowPower && sameBand) {
             if (attempt) {
@@ -415,21 +517,28 @@ void TunerProtocol::selectBandAntenna(tuner_ant_t antenna, uint8_t recovery) {
     // AUTO may have tuned the old antenna before M/A completed. Restoring C
     // alone does not start a new cycle on AT-1000ProII. Tune the confirmed new
     // port once while still in MANUAL, then restore AUTO even if T fails.
-    if (trace.modeGuard && trace.selectionConfirmed)
+    if (restoreRequired && trace.selectionConfirmed && !preventive)
         retuneBandAntenna(band, manualRevision, framesBeforeSelection, trace);
     // A missing M ACK can mean M took effect. Keep AUTO restoration pending
     // with the saved choice, rather than restarting the old antenna's search.
-    for (unsigned i = 0; trace.modeGuard && !trace.deferred && !trace.autoRestored && i < 2; ++i) {
+    for (unsigned i = 0; restoreRequired && !trace.deferred && !trace.autoRestored && i < 2; ++i) {
         ++trace.restoreAttempts;
         trace.autoRestored = setAutoMode();
     }
-    m_restoreAutoAfterRf = trace.modeGuard && !trace.autoRestored;
+    m_restoreAutoAfterRf = restoreRequired && !trace.autoRestored;
+    m_automaticRelays = false;
+    if (preventive && !trace.selectionConfirmed &&
+        (m_relayBlocked || (prepared && !lowPower)) && m_manualRevision.load() == manualRevision) {
+        m_antennas.deferRadioSelection();
+        trace.deferred = true;
+    }
     if (!trace.deferred) {
-        if (!prepared || (trace.modeGuard && !trace.autoRestored)) m_antennas.selectionComplete(false);
+        if (!prepared || (restoreRequired && !trace.autoRestored)) m_antennas.selectionComplete(false);
         else if (!lowPower) m_antennas.selectionPowerChanged(valid);
         else m_antennas.selectionComplete(trace.selectionConfirmed);
     }
-    if (trace.selectionConfirmed && (!trace.modeGuard || trace.autoRestored)) {
+    if (trace.selectionConfirmed) m_tuning.antennaSelected();
+    if (trace.selectionConfirmed && (!restoreRequired || trace.autoRestored)) {
         using Result = ldg::MemoryTuneResult;
         using Status = ldg::AntennaAuto;
         switch (trace.memoryTune) {
@@ -510,6 +619,15 @@ bool TunerProtocol::fullTune() {
 bool TunerProtocol::bypass() { return controlResponse(TUNER_CMD_BYPASS) == TUNER_RESP_BYPASS; }
 bool TunerProtocol::setAutoMode() { return controlResponse(TUNER_CMD_AUTO_MODE) == TUNER_RESP_AUTO; }
 bool TunerProtocol::setManualMode() { return controlResponse(TUNER_CMD_MANUAL_MODE) == TUNER_RESP_MANUAL; }
+bool TunerProtocol::setControlledMode() {
+    if (!m_tuning.enabled()) return false;
+    m_tuning.controlledSelected();
+    publishSnapshot();
+    const bool success = setManualMode();
+    m_tuning.modeComplete(ldg::TuningAutomation::Action::Manual, success);
+    publishSnapshot();
+    return success;
+}
 bool TunerProtocol::sync() {
     return controlResponse(TUNER_CMD_SYNC) == TUNER_CMD_SYNC;
 }
@@ -538,9 +656,12 @@ void TunerProtocol::publishSnapshot(bool received, bool meterReceived) {
     m_snapshot.mode = m_mode;
     m_snapshot.antenna = m_antenna;
     if (m_antenna != ANT_UNKNOWN) m_snapshot.lastAntenna = m_antenna;
+    m_snapshot.tuningManaged = m_tuning.enabled();
+    m_snapshot.tuningState = m_tuning.state();
     m_snapshot.antennaInit = m_antennas.init();
     m_snapshot.antennaAuto = m_antennas.automatic();
     m_snapshot.antennaAutoBand = m_antennas.currentBand();
+    m_snapshot.antennaFromRadio = m_antennas.usesRadio();
     if (received) { m_seenResponse = true; m_lastResponseMs = millis(); }
     portEXIT_CRITICAL(&m_snapshotMux);
 }
@@ -550,7 +671,9 @@ tuner_state_t TunerProtocol::getState() const {
     tuner_state_t state = m_snapshot;
     const uint32_t meterAge = millis() - m_lastMeterMs;
     portEXIT_CRITICAL(&m_snapshotMux);
+    state.meterAgeMs = state.meterValid ? meterAge : UINT32_MAX;
     state.meterValid = state.meterValid && meterAge <= TELEMETRY_TIMEOUT_MS;
+    if (m_radioStateGetter) state.radio = m_radioStateGetter();
     // Meter silence is not evidence that a relay or AUTO/MANUAL setting changed.
     // Keep the last acknowledged controls; connectivity has its own accessor.
     return state;
@@ -641,6 +764,7 @@ void TunerProtocol::processMeterByte(uint8_t b) {
         ++m_diagnostics.framingErrors;
         portEXIT_CRITICAL(&m_snapshotMux);
         m_antennas.invalidateFrame();
+        m_tuning.invalidateFrame();
         m_meterIdx = 0;
         m_eomCount = 0;
         m_state = State::ERROR;
@@ -685,6 +809,7 @@ void TunerProtocol::publishMeterData() {
     portEXIT_CRITICAL(&m_snapshotMux);
     m_hasMeterData = true;
     m_antennas.observe(m_meterData, millis(), m_manualRevision.load());
+    m_tuning.observe(m_meterData, millis());
     publishSnapshot(true, true);
     if (m_meterCallback) {
         m_meterCallback(&m_meterData);
@@ -720,6 +845,7 @@ void TunerProtocol::process() {
     // RX FIFO and we'll drain them next call.
     TunerLock lock(m_mutex, 0);
     if (m_mutex && !lock) return;
+    observeRadio();
 
     uint8_t tail[32];
     unsigned count = 0;
@@ -732,6 +858,7 @@ void TunerProtocol::process() {
             // acknowledgement from a damaged batch into command success.
             discard = true;
             m_antennas.invalidateFrame();
+            m_tuning.invalidateFrame();
             if (m_waitingForResponse || m_drainingLateResponse) m_exchangeUartError = true;
             m_meterIdx = m_eomCount = 0;
             if (m_state != State::RESPONSE) m_state = State::ERROR;

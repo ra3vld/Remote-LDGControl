@@ -2,6 +2,8 @@
 #define MQTT_PROTOCOL_H
 
 #include "mqtt_state.h"
+#include "radio_json.h"
+#include "bridge_contract.h"
 #include <ArduinoJson.h>
 #include <string>
 #include <cstring>
@@ -9,7 +11,7 @@
 namespace ldg {
 
 static constexpr size_t MQTT_PACKET_SIZE = 1024;
-static constexpr size_t MQTT_ENTITY_COUNT = 12;
+static constexpr size_t MQTT_ENTITY_COUNT = 13;
 static constexpr const char* HA_STATUS_TOPIC = "homeassistant/status";
 
 struct MqttIdentity {
@@ -50,10 +52,12 @@ inline tuner_band_t parseBand(const char* name) {
     return BAND_UNKNOWN;
 }
 
+
 inline const char* modeName(tuner_mode_t mode) {
     switch (mode) {
         case MODE_AUTO: return "auto";
         case MODE_MANUAL: return "manual";
+        case MODE_CONTROLLED: return "controlled";
         case MODE_BYPASS: return "bypass";
         default: return "unknown";
     }
@@ -81,17 +85,26 @@ inline void writeState(JsonDocument& doc, const tuner_state_t& state, bool textE
     }
     doc["band"] = bandName(lastKnownBand(state));
     doc["band_held"] = bandIsHeld(state);
+    doc["tuning_mode"] = state.tuningManaged ? "controller" : "native";
+    doc["tuning_state"] = tuningStateName(state.tuningState);
     doc["antenna_init"] = antennaInitName(state.antennaInit);
     doc["antenna_auto"] = antennaAutoName(state.antennaAuto);
     doc["antenna_auto_band"] = bandName(state.antennaAutoBand);
+    doc["meter_age_ms"] = state.meterAgeMs;
+    doc["antenna_source"] = state.antennaFromRadio ? (state.radio.provider==RadioProvider::OmniRig ? "omnirig" : "tci") : "ldg";
+    if (!textEnums) {
+        writeRadioJson(doc["radio"].to<JsonObject>(), state.radio);
+    }
     doc["antenna_confirmed"] = knownAntenna(state.antenna);
     if (textEnums) {
-        doc["mode"] = modeName(state.mode);
+        doc["mode"] = modeName(operatingMode(state));
+        doc["tuner_mode"] = modeName(state.mode);
         doc["antenna"] = antennaName(state.antenna);
         doc["antenna_last"] = antennaName(lastKnownAntenna(state));
     } else {
         // Preserve the web/SSE numeric enum contract.
-        doc["mode"] = state.mode;
+        doc["mode"] = operatingMode(state);
+        doc["tuner_mode"] = state.mode;
         doc["antenna"] = state.antenna;
         doc["antenna_last"] = lastKnownAntenna(state);
     }
@@ -100,6 +113,14 @@ inline void writeState(JsonDocument& doc, const tuner_state_t& state, bool textE
 
 inline tuner_state_t readWebState(JsonVariantConst doc) {
     tuner_state_t state;
+    state.radio = readRadioJson(doc["radio"]);
+    state.tuningManaged = !strcmp(doc["tuning_mode"] | "native", "controller");
+    const char* tuning = doc["tuning_state"] | "native";
+    for (unsigned i = 0; i <= unsigned(TuningState::ManualOverride); ++i)
+        if (!strcmp(tuning, tuningStateName(static_cast<TuningState>(i)))) state.tuningState = static_cast<TuningState>(i);
+    const char* source=doc["antenna_source"] | "ldg";
+    state.antennaFromRadio = !strcmp(source,"tci") || !strcmp(source,"omnirig");
+    state.meterAgeMs = doc["meter_age_ms"] | UINT32_MAX;
     state.meterValid = doc["fwd_power"].is<double>() || doc["ref_power"].is<double>();
     const double unknown = NAN;
     state.meter.forward_power_watts = doc["fwd_power"].is<double>() ? doc["fwd_power"].as<double>() : unknown;
@@ -111,7 +132,9 @@ inline tuner_state_t readWebState(JsonVariantConst doc) {
     state.meter.band = (doc["band_held"] | false) ? BAND_UNKNOWN : state.lastBand;
     const int mode = doc["mode"].is<int>() ? doc["mode"].as<int>() : MODE_UNKNOWN;
     const int antenna = doc["antenna"].is<int>() ? doc["antenna"].as<int>() : ANT_UNKNOWN;
-    if (mode >= MODE_UNKNOWN && mode <= MODE_BYPASS) state.mode = static_cast<tuner_mode_t>(mode);
+    if (mode == MODE_CONTROLLED) state.tuningManaged = true;
+    const int physical = doc["tuner_mode"].is<int>() ? doc["tuner_mode"].as<int>() : mode;
+    if (physical >= MODE_UNKNOWN && physical <= MODE_BYPASS) state.mode = static_cast<tuner_mode_t>(physical);
     if (antenna >= ANT_UNKNOWN && antenna <= ANT_B) state.antenna = static_cast<tuner_ant_t>(antenna);
     const int previous = doc["antenna_last"] | int(state.antenna);
     if (previous == ANT_A || previous == ANT_B) state.lastAntenna = static_cast<tuner_ant_t>(previous);
@@ -120,7 +143,7 @@ inline tuner_state_t readWebState(JsonVariantConst doc) {
         if (!strcmp(init, antennaInitName(static_cast<AntennaInit>(i)))) state.antennaInit = static_cast<AntennaInit>(i);
     const char* automatic = doc["antenna_auto"] | "disabled";
     state.antennaAutoBand = parseBand(doc["antenna_auto_band"].as<const char*>());
-    for (unsigned i = 0; i <= unsigned(AntennaAuto::WaitingTuner); ++i)
+    for (unsigned i = 0; i <= unsigned(AntennaAuto::WaitingBand); ++i)
         if (!strcmp(automatic, antennaAutoName(static_cast<AntennaAuto>(i)))) state.antennaAuto = static_cast<AntennaAuto>(i);
     return state;
 }
@@ -144,7 +167,8 @@ inline const MqttEntity& mqttEntity(size_t index) {
         {"bypass", "Bypass", "bypass"},
         {"toggle", "Toggle antenna", "toggle"},
         {"auto", "Auto mode", "auto"},
-        {"manual", "Manual mode", "manual"}
+        {"manual", "Manual mode", "manual"},
+        {"controlled", "Controlled mode", "controlled"}
     };
     return entities[index];
 }
@@ -202,6 +226,8 @@ inline bool mqttPacketFits(const std::string& topic, size_t payloadSize) {
 struct MqttCommand {
     std::string name;
     uint8_t byte = 0;
+    bool extended = false;
+    BridgeRequest request;
     const char* error = nullptr;
 };
 
@@ -217,13 +243,18 @@ inline MqttCommand parseCommand(const uint8_t* payload, size_t length) {
         return command;
     }
     command.name = doc["command"].as<const char*>();
+    if (command.name.size()>32) { command.name.clear(); command.error="unknown_command"; return command; }
+    command.extended = !doc["request_id"].isUnbound() || !doc["source_token"].isUnbound() || !doc["expires_uptime_ms"].isUnbound();
+    if (command.extended && !parseBridgeRequest(doc.as<JsonVariantConst>(),command.request)) {
+        command.error="invalid_request"; return command;
+    }
     if (command.name == "antenna_1" || command.name == "antenna_2") {
         command.byte = command.name == "antenna_1" ? TUNER_CMD_SELECT_ANT_A : TUNER_CMD_SELECT_ANT_B;
         return command;
     }
     static const uint8_t commands[] = {
         TUNER_CMD_MEM_TUNE, TUNER_CMD_FULL_TUNE, TUNER_CMD_BYPASS,
-        TUNER_CMD_TOGGLE_ANT, TUNER_CMD_AUTO_MODE, TUNER_CMD_MANUAL_MODE
+        TUNER_CMD_TOGGLE_ANT, TUNER_CMD_AUTO_MODE, TUNER_CMD_MANUAL_MODE, TUNER_CMD_CONTROLLED_MODE
     };
     for (size_t i = 6; i < MQTT_ENTITY_COUNT; ++i) {
         if (command.name == mqttEntity(i).command) {

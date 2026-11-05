@@ -38,7 +38,7 @@ Use an isolated test broker / HA installation for the following checks.
    its measured `wait_ms`, while no response still reports failure after that
    bounded wait. Keep the actual device result separate from the host tests
    with simulated delayed replies.
-6. Restart HA, then the broker. Expect the same device/entity IDs, all 12 discovery
+6. Restart HA, then the broker. Expect the same device/entity IDs, all 13 discovery
    configurations, the retained last-reading state, and command subscriptions
    after reconnect. The `held` attributes must distinguish preserved readings.
 7. Abruptly power off the controller. After the broker detects the lost connection
@@ -53,7 +53,7 @@ Use an isolated test broker / HA installation for the following checks.
    and routing return. Check the three-second timeout for a silent remote stream;
    old remote readings must not be presented as local measurements.
 10. Disable discovery with the broker still configured and reachable. After the
-    restart, this board's 12 retained config records must be gone, while normal
+    restart, this board's 13 retained config records must be gone, while normal
     state and command topics work. Re-enable and expect the same IDs to return.
 11. Save settings with an empty MQTT password field; authentication must continue
     working. Verify `GET /api/config` never returns either password. Remove the

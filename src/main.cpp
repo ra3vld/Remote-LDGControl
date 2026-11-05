@@ -13,13 +13,16 @@
 #include <freertos/queue.h>
 #include <esp_heap_caps.h>
 #include <esp_rom_sys.h>
+#include <esp_random.h>
 #include "voltage_sensor.h"
 #include "remote_protocol.h"
 #include "config_manager.h"
 #include "tuner_protocol.h"
+#include "operating_mode.h"
 #include "mqtt_handler.h"
 #include "web_server.h"
 #include "command_feedback.h"
+#include "tci_client.h"
 
 #ifdef WITH_DISPLAY
 #include "display_ui.h"
@@ -30,8 +33,13 @@ TunerProtocol tuner;
 MqttHandler mqtt;
 LdgWebServer webServer;
 ldg::MeterScale meterScale;
+static TciClient radio;
+static ldg::RadioState getRadioState() { return radio.state(); }
 static std::atomic<bool> s_webReady{false};
 static std::atomic<uint32_t> s_webLoopMs{0};
+static TaskHandle_t s_radioTask = nullptr;
+static TaskHandle_t s_webTask = nullptr;
+static TaskHandle_t s_tunerTask = nullptr;
 
 #ifdef WITH_DISPLAY
 DisplayUI display;
@@ -54,11 +62,14 @@ struct CommandRequest {
     SemaphoreHandle_t completed;
     bool* result;
     uint32_t feedbackToken;
+    const ldg::BridgeRequest* bridge=nullptr;
+    const char** bridgeResult=nullptr;
 };
 static ldg::CommandFeedback s_commandFeedback;
 static QueueHandle_t s_commands = nullptr;
 #ifdef WITH_DISPLAY
 static QueueHandle_t s_remoteCommands = nullptr;
+static TaskHandle_t s_remoteTask = nullptr;
 #endif
 static std::atomic<unsigned> s_pendingCommands{0};
 
@@ -82,6 +93,31 @@ tuner_state_t getActiveState() {
         millis() - s_lastRemoteTelemetry, s_remoteCommandActive);
     portEXIT_CRITICAL(&s_activeMux);
     return state.remote ? state : tuner.getState();
+}
+
+// A boot nonce and a target generation identify the physical command recipient.
+static uint32_t s_bridgeBoot[3]{},s_bridgeGeneration=0;
+static bool s_bridgeRemote=false,s_bridgeIdentified=false;
+static char s_bridgeHost[sizeof(DeviceConfig{}.remoteHost)]{},s_bridgeToken[33]{};
+static portMUX_TYPE s_bridgeMux=portMUX_INITIALIZER_UNLOCKED;
+static ldg::BridgeState getBridgeState() {
+    const auto cfg=configManager.get();
+    const auto state=getActiveState();
+    const bool remote=state.remote;
+    ldg::BridgeState context;
+    context.remote=remote;
+    portENTER_CRITICAL(&s_bridgeMux);
+    if (!s_bridgeIdentified || remote!=s_bridgeRemote || strcmp(cfg.remoteHost,s_bridgeHost)) {
+        s_bridgeIdentified=true; s_bridgeRemote=remote; strcpy(s_bridgeHost,cfg.remoteHost);
+        snprintf(s_bridgeToken,sizeof(s_bridgeToken),"%08lx%08lx%08lx%08lx",
+            (unsigned long)s_bridgeBoot[0],(unsigned long)s_bridgeBoot[1],(unsigned long)s_bridgeBoot[2],(unsigned long)++s_bridgeGeneration);
+    }
+    strcpy(context.sourceToken,s_bridgeToken);
+    portEXIT_CRITICAL(&s_bridgeMux);
+    context.uptimeMs=millis(); context.meterAgeMs=state.meterAgeMs;
+    context.busy=s_pendingCommands.load()!=0;
+    context.connected=remote || tuner.isConnected();
+    return context;
 }
 
 // ============================================================
@@ -164,9 +200,10 @@ void onMeterUpdate(const tuner_meter_t*) {
 // ============================================================
 
 #ifdef WITH_DISPLAY
-static bool remoteRequest(uint8_t command, JsonDocument& response) {
+static bool remoteRequest(uint8_t command, JsonDocument& response, const char* pinnedHost=nullptr) {
     const DeviceConfig cfg = configManager.get();
-    if (!cfg.remoteHost[0] || WiFi.status() != WL_CONNECTED) return false;
+    const char* recipient=pinnedHost ? pinnedHost : cfg.remoteHost;
+    if (!recipient[0] || WiFi.status() != WL_CONNECTED) return false;
     WebClient client;
 #if TLS_ENABLED
     client.setInsecure();
@@ -176,7 +213,7 @@ static bool remoteRequest(uint8_t command, JsonDocument& response) {
     http.setTimeout(ldg::remoteRequestTimeout(command));
     http.useHTTP10(true);
     const char* endpoint = command ? ldg::commandEndpoint(command) : "/api/status";
-    if (!endpoint || !http.begin(client, String(WEB_SCHEME) + cfg.remoteHost + endpoint)) return false;
+    if (!endpoint || !http.begin(client, String(WEB_SCHEME) + recipient + endpoint)) return false;
     http.setAuthorization(cfg.webUsername, cfg.webPassword);
     const int code = command ? http.POST("") : http.GET();
     bool ok = false;
@@ -215,7 +252,7 @@ static void pollRemoteUnit() {
 // Command Execution (for web/MQTT)
 // ============================================================
 
-static bool executeCommandNow(uint8_t cmd, bool remote) {
+static bool executeCommandNow(uint8_t cmd, bool remote, const ldg::BridgeRequest* bridge=nullptr) {
 #ifdef WITH_DISPLAY
     if (remote) {
         if (!activeRemoteConnected()) return false;
@@ -225,7 +262,7 @@ static bool executeCommandNow(uint8_t cmd, bool remote) {
         s_remoteCommandActive = true;
         portEXIT_CRITICAL(&s_activeMux);
         JsonDocument response;
-        const bool result = remoteRequest(cmd, response);
+        const bool result = remoteRequest(cmd, response, bridge ? bridge->targetHost : nullptr);
         pollRemoteUnit();
         portENTER_CRITICAL(&s_activeMux);
         s_remoteCommandActive = false;
@@ -235,6 +272,11 @@ static bool executeCommandNow(uint8_t cmd, bool remote) {
     }
 #endif
     bool result = false;
+    if (ldg::isModeCommand(cmd)) {
+        result = ldg::selectOperatingMode(configManager, tuner, cmd);
+        mqtt.requestStatePublish();
+        return result;
+    }
     switch (cmd) {
         case TUNER_CMD_TOGGLE_ANT:  result = tuner.toggleAntenna(); break;
         case TUNER_CMD_SELECT_ANT_A: result = tuner.selectAntenna(ANT_A); break;
@@ -242,15 +284,19 @@ static bool executeCommandNow(uint8_t cmd, bool remote) {
         case TUNER_CMD_MEM_TUNE:    result = tuner.memoryTune();    break;
         case TUNER_CMD_FULL_TUNE:   result = tuner.fullTune();      break;
         case TUNER_CMD_BYPASS:      result = tuner.bypass();        break;
-        case TUNER_CMD_AUTO_MODE:   result = tuner.setAutoMode();   break;
-        case TUNER_CMD_MANUAL_MODE: result = tuner.setManualMode(); break;
     }
     mqtt.requestStatePublish();
     return result;
 }
 
 // Synchronous callers wait on their own completion, never on the UI task.
-static bool submitCommand(uint8_t command, bool wait) {
+static bool submitCommand(uint8_t command, bool wait, const ldg::BridgeRequest* bridge=nullptr, const char** bridgeResult=nullptr) {
+    if (bridge) {
+        const auto context=getBridgeState();
+        const char* error=ldg::validateBridgeRequest(*bridge,context);
+        if (!error && context.busy) error="busy";
+        if (error) { if (bridgeResult) *bridgeResult=error; return false; }
+    }
     const uint32_t feedbackToken = s_commandFeedback.start(command);
     const bool remote = activeRemoteConnected();
     QueueHandle_t destination = s_commands;
@@ -261,7 +307,7 @@ static bool submitCommand(uint8_t command, bool wait) {
     SemaphoreHandle_t completed = wait ? xSemaphoreCreateBinary() : nullptr;
     if (wait && !completed) { s_commandFeedback.finish(feedbackToken, false); return false; }
     bool result = false;
-    CommandRequest request{command, remote, completed, wait ? &result : nullptr, feedbackToken};
+    CommandRequest request{command, remote, completed, wait ? &result : nullptr, feedbackToken,bridge,bridgeResult};
     if (!remote) tuner.noteManualCommand();
     s_pendingCommands.fetch_add(1);
     if (xQueueSend(destination, &request, 0) != pdTRUE) {
@@ -277,14 +323,27 @@ static bool submitCommand(uint8_t command, bool wait) {
 }
 
 bool executeCommand(uint8_t command) { return submitCommand(command, true); }
+static const char* executeBridgeCommand(const ldg::BridgeRequest& request) {
+    const char* result="failed";
+    auto pinned=request;
+    const auto cfg=configManager.get();
+    static_assert(sizeof(cfg.remoteHost)<=sizeof(pinned.targetHost),"Bridge target host capacity");
+    strcpy(pinned.targetHost,cfg.remoteHost);
+    submitCommand(pinned.command,true,&pinned,&result);
+    return result;
+}
 #ifdef WITH_DISPLAY
 static bool enqueueDisplayCommand(uint8_t command) { return submitCommand(command, false); }
 #endif
 
 static void completeCommand(const CommandRequest& request) {
-    if (!request.remote) tuner.manualCommandStarted();
-    const bool result = executeCommandNow(request.command, request.remote);
-    if (!request.remote) tuner.manualCommandComplete(request.command, result);
+    const char* error=request.bridge ? ldg::validateBridgeRequest(*request.bridge,getBridgeState()) : nullptr;
+    if (!error && request.bridge && (activeRemoteConnected()!=request.remote ||
+        (request.remote && strcmp(request.bridge->targetHost,configManager.get().remoteHost)))) error="target_changed";
+    if (!error && !request.remote && !ldg::isModeCommand(request.command)) tuner.manualCommandStarted();
+    const bool result = !error && executeCommandNow(request.command, request.remote, request.bridge);
+    if (!error && !request.remote) tuner.manualCommandComplete(request.command, result);
+    if (request.bridgeResult) *request.bridgeResult=error ? error : result ? "success" : "failed";
     s_commandFeedback.finish(request.feedbackToken, result);
     if (request.result) *request.result = result;
     s_pendingCommands.fetch_sub(1);
@@ -294,6 +353,7 @@ static void completeCommand(const CommandRequest& request) {
 static void tunerTask(void*) {
     for (;;) {
         tuner.configureAntennas(configManager.antennaSettings());
+        tuner.configureTuning(configManager.tuningSettings());
         tuner.process();
         CommandRequest request;
         if (xQueueReceive(s_commands, &request, 0) == pdTRUE) {
@@ -312,6 +372,14 @@ static void mqttTask(void*) {
     }
 }
 
+static void radioTask(void*) {
+    radio.begin();
+    for (;;) {
+        radio.loop(!activeRemoteConnected());
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
 #ifdef WITH_DISPLAY
 static void remoteTask(void*) {
     for (;;) {
@@ -323,11 +391,33 @@ static void remoteTask(void*) {
 }
 #endif
 
+// Disabled transports must not reserve stacks on boards without PSRAM. Only
+// the Arduino loop creates these workers; once started they handle live
+// configuration changes themselves. Retry allocation failures at most once/s.
+static void startConfiguredNetworkTasks() {
+    static uint32_t lastAttempt = 0;
+    const uint32_t now = millis();
+    if (now - lastAttempt < 1000) return;
+    lastAttempt = now;
+    if (!s_radioTask && configManager.radioSettings().enabled) {
+        if (xTaskCreatePinnedToCore(radioTask, "tci", 6144, nullptr, 1, &s_radioTask, 0) != pdPASS)
+            Serial.println("ERROR: TCI task could not start");
+    }
+#ifdef WITH_DISPLAY
+    if (!s_remoteTask && s_remoteCommands &&
+        (configManager.get().remoteHost[0] || activeRemoteConnected())) {
+        if (xTaskCreatePinnedToCore(remoteTask, "remote", 8192, nullptr, 1, &s_remoteTask, 0) != pdPASS)
+            Serial.println("ERROR: remote task could not start");
+    }
+#endif
+}
+
 // ============================================================
 // Setup
 // ============================================================
 
 void setup() {
+    esp_fill_random(s_bridgeBoot,sizeof(s_bridgeBoot));
     Serial.begin(115200);
     heap_caps_register_failed_alloc_callback([](size_t bytes, uint32_t caps, const char* operation) {
         static std::atomic<uint32_t> lastReport{0};
@@ -360,6 +450,7 @@ void setup() {
     // Load configuration from NVS
     if (!configManager.begin()) Serial.println("ERROR: configuration persistence unavailable");
     const auto savedMeter = configManager.meterSettings();
+    tuner.setRadioStateGetter(getRadioState);
     meterScale.set(savedMeter.watts, savedMeter.logarithmic);
 
     setupFS();
@@ -385,7 +476,7 @@ void setup() {
 #ifdef WITH_DISPLAY
     s_remoteCommands = xQueueCreate(8, sizeof(CommandRequest));
 #endif
-    if (!s_commands || xTaskCreatePinnedToCore(tunerTask, "tuner", 8192, nullptr, 2, nullptr, 1) != pdPASS) {
+    if (!s_commands || xTaskCreatePinnedToCore(tunerTask, "tuner", 8192, nullptr, 2, &s_tunerTask, 1) != pdPASS) {
         Serial.println("ERROR: tuner command task could not start");
         if (s_commands) vQueueDelete(s_commands);
         s_commands = nullptr;
@@ -398,7 +489,7 @@ void setup() {
 
     // Construct MQTT once; its I/O runs independently after network setup.
     static WiFiClient mqttClient;
-    mqtt.begin(mqttClient, executeCommand, getActiveState);
+    mqtt.begin(mqttClient, executeCommand, getActiveState, getBridgeState, executeBridgeCommand);
     configManager.setPortalIdleCallback([]() {
         // UART is serviced independently, including during network setup.
 #ifdef WITH_DISPLAY
@@ -412,13 +503,6 @@ void setup() {
     setupWiFi();
     if (xTaskCreatePinnedToCore(mqttTask, "mqtt", 6144, nullptr, 1, nullptr, 0) != pdPASS)
         Serial.println("ERROR: MQTT task could not start");
-#ifdef WITH_DISPLAY
-    if (!s_remoteCommands || xTaskCreatePinnedToCore(remoteTask, "remote", 8192, nullptr, 1, nullptr, 0) != pdPASS) {
-        Serial.println("ERROR: remote task could not start");
-        if (s_remoteCommands) vQueueDelete(s_remoteCommands);
-        s_remoteCommands = nullptr;
-    }
-#endif
 
 #ifdef WITH_DISPLAY
     display.updateNetworkInfo();
@@ -448,8 +532,10 @@ void setup() {
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
         },
-        "webServer", TLS_ENABLED ? 16384 : 8192, NULL, 1, NULL, 0) != pdPASS)
+        "webServer", TLS_ENABLED ? 16384 : 8192, NULL, 1, &s_webTask, 0) != pdPASS)
         Serial.println("ERROR: web task could not start");
+
+    startConfiguredNetworkTasks();
 
     Serial.println("=== System Ready ===");
 }
@@ -459,6 +545,7 @@ void setup() {
 // ============================================================
 
 void loop() {
+    startConfiguredNetworkTasks();
     // WiFi reconnection — only manage STA when STA is actually configured.
     // In AP-only mode (captive portal still running, never configured) there
     // is no STA to reconnect, and WiFi.status() returns disconnected forever.
@@ -471,6 +558,17 @@ void loop() {
                       unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
                       unsigned(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
                       unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+        Serial.printf("[STACK] loop=%u web=%u tuner=%u tci=%u remote=%u\n",
+                      unsigned(uxTaskGetStackHighWaterMark(nullptr)),
+                      unsigned(s_webTask ? uxTaskGetStackHighWaterMark(s_webTask) : 0),
+                      unsigned(s_tunerTask ? uxTaskGetStackHighWaterMark(s_tunerTask) : 0),
+                      unsigned(s_radioTask ? uxTaskGetStackHighWaterMark(s_radioTask) : 0),
+#ifdef WITH_DISPLAY
+                      unsigned(s_remoteTask ? uxTaskGetStackHighWaterMark(s_remoteTask) : 0)
+#else
+                      0u
+#endif
+        );
         if (!staActive) {
             wifiConnected = false;
         } else if (WiFi.status() != WL_CONNECTED) {

@@ -10,6 +10,7 @@
 #include "tuner_types.h"
 #include "tuner_diagnostics.h"
 #include "antenna_automation.h"
+#include "tuning_automation.h"
 
 // Callback type for meter updates
 typedef void (*meter_callback_t)(const tuner_meter_t* meter);
@@ -30,6 +31,7 @@ public:
     bool bypass();
     bool setAutoMode();
     bool setManualMode();
+    bool setControlledMode();
 
     // Align the receive stream using the full documented synchronization string.
     bool sync();
@@ -50,7 +52,9 @@ public:
     void process();
     // Called only by the UART worker, after processing actual meter frames.
     void configureAntennas(const ldg::AntennaSettings& settings);
+    void configureTuning(const ldg::TuningSettings& settings);
     void serviceAntennas(bool manualPending = false);
+    void setRadioStateGetter(ldg::RadioState (*getter)()) { m_radioStateGetter = getter; }
     // Queue notification is atomic; completion is UART-worker owned.
     void noteManualCommand() { m_manualRevision.fetch_add(1); }
     void manualCommandStarted();
@@ -71,6 +75,9 @@ public:
 private:
     // Internal methods
     bool sendCommand(uint8_t cmd);
+    bool automaticRelayAllowed();
+    void observeRadio();
+    bool serviceTuning(bool manualPending, bool allowTune);
     bool sendWake();
     bool switchToControlMode();
     bool switchToMeterMode();
@@ -147,7 +154,13 @@ private:
     bool m_seenResponse = false;
     ldg::TunerDiagnostics m_diagnostics;
     ldg::AntennaAutomation m_antennas;
+    ldg::TuningAutomation m_tuning;
     std::atomic<uint32_t> m_manualRevision{0};
+    ldg::RadioState (*m_radioStateGetter)() = nullptr;
+    bool m_automaticRelays = false, m_preventiveSelection = false, m_relayBlocked = false;
+    uint32_t m_relayManualRevision = 0;
+    tuner_band_t m_relayBand = BAND_UNKNOWN;
+    tuner_ant_t m_probeRestore = ANT_UNKNOWN;
     uint8_t m_rxTailNext = 0;
     std::atomic<bool> m_rxErrorPending{false};
     static constexpr uint32_t TELEMETRY_TIMEOUT_MS = 3000;

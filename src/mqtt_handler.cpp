@@ -50,11 +50,13 @@ MqttHandler::~MqttHandler() {
 }
 
 bool MqttHandler::begin(WiFiClient& wifiClient, mqtt_command_handler_t cmdHandler,
-                        tuner_state_getter_t stateGetter) {
+                        tuner_state_getter_t stateGetter, ldg::BridgeGetter bridgeGetter,
+                        ldg::BridgeHandler bridgeHandler) {
     if (m_wifiClient) return false;
     m_wifiClient = &wifiClient;
     m_commandHandler = cmdHandler;
     m_stateGetter = stateGetter;
+    m_bridgeGetter=bridgeGetter; m_bridgeHandler=bridgeHandler;
     return configure();
 }
 
@@ -106,7 +108,7 @@ bool MqttHandler::configure() {
         return false;
     }
     m_session = new (std::nothrow) ldg::MqttSession(*this, m_identity, m_commandHandler,
-                                    []() -> uint32_t { return millis(); }, &m_readings);
+                                    []() -> uint32_t { return millis(); }, &m_readings, m_bridgeGetter, m_bridgeHandler, &m_bridgeCache, m_stateGetter);
     if (!m_session) {
         delete m_client;
         m_client = nullptr;

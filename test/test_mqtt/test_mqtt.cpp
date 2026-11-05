@@ -250,7 +250,7 @@ void test_identities_and_all_discovery_payloads() {
             }
         }
     }
-    TEST_ASSERT_EQUAL_UINT(24, ids.size());
+    TEST_ASSERT_EQUAL_UINT(2 * MQTT_ENTITY_COUNT, ids.size());
     const std::string topic = first.base + "/state";
     TEST_ASSERT_TRUE(mqttPacketFits(topic, MQTT_PACKET_SIZE - 7 - topic.size()));
     TEST_ASSERT_FALSE(mqttPacketFits(topic, MQTT_PACKET_SIZE - 6 - topic.size()));
@@ -571,7 +571,7 @@ void test_session_reconnect_ha_birth_and_discovery_cleanup() {
     TEST_ASSERT_EQUAL_STRING("online", broker.retained[id.base + "/status"].c_str());
     const auto state = measured(0, 0, 1);
     settle(session, 0, state);
-    TEST_ASSERT_EQUAL_UINT(14, broker.retained.size());
+    TEST_ASSERT_EQUAL_UINT(MQTT_ENTITY_COUNT + 2, broker.retained.size());
     TEST_ASSERT_EQUAL_STRING((id.base + "/state").c_str(), broker.messages.back().topic.c_str());
     TEST_ASSERT_TRUE(broker.messages.back().retained);
     size_t count = broker.messages.size();
@@ -580,12 +580,12 @@ void test_session_reconnect_ha_birth_and_discovery_cleanup() {
     TEST_ASSERT_EQUAL_UINT(count, broker.messages.size());
     deliver(session, HA_STATUS_TOPIC, "online");
     settle(session, 1, state);
-    TEST_ASSERT_EQUAL_UINT(count + 13, broker.messages.size());
+    TEST_ASSERT_EQUAL_UINT(count + MQTT_ENTITY_COUNT + 1, broker.messages.size());
     // A restarted broker has lost retained configs; reconnect repopulates all.
     broker.retained.clear();
     TEST_ASSERT_TRUE(session.connected(true, "ESP32 remote", "https://192.0.2.2/"));
     settle(session, 2, state);
-    TEST_ASSERT_EQUAL_UINT(14, broker.retained.size());
+    TEST_ASSERT_EQUAL_UINT(MQTT_ENTITY_COUNT + 2, broker.retained.size());
     JsonDocument doc;
     deserializeJson(doc, broker.retained[discoveryTopic(id, 0)]);
     TEST_ASSERT_EQUAL_STRING("https://192.0.2.2/", doc["device"]["configuration_url"]);
@@ -609,10 +609,10 @@ void test_session_two_devices_commands_and_error_responses() {
     TEST_ASSERT_TRUE(b.connected(true, "ESP32", "https://192.0.2.2/"));
     settle(a, 0, measured());
     settle(b, 0, measured());
-    TEST_ASSERT_EQUAL_UINT(28, broker.retained.size());
+    TEST_ASSERT_EQUAL_UINT(2 * (MQTT_ENTITY_COUNT + 2), broker.retained.size());
     executedCommands = 0;
     commandResult = true;
-    const uint8_t bytes[] = {'T', 'F', 'P', 'A', 'C', 'M'};
+    const uint8_t bytes[] = {'T', 'F', 'P', 'A', 'C', 'M', TUNER_CMD_CONTROLLED_MODE};
     for (size_t i = 6; i < MQTT_ENTITY_COUNT; ++i) {
         std::string command = std::string("{\"command\":\"") + mqttEntity(i).command + "\"}";
         deliver(a, first.base + "/command", command);
@@ -627,7 +627,7 @@ void test_session_two_devices_commands_and_error_responses() {
     }
     for (const char* legacy : {"ldg/tuner/command", "ldg/tuner/remote/command"})
         deliver(a, legacy, "{\"command\":\"full_tune\"}");
-    TEST_ASSERT_EQUAL_UINT(6, executedCommands);
+    TEST_ASSERT_EQUAL_UINT(MQTT_ENTITY_COUNT - 6, executedCommands);
     const char* invalid[] = {"{", "{}", "{\"command\":65}", "{\"command\":\"bad\"}"};
     const char* errors[] = {"invalid_json", "missing_command", "missing_command", "unknown_command"};
     for (size_t i = 0; i < 4; ++i) {
@@ -636,7 +636,7 @@ void test_session_two_devices_commands_and_error_responses() {
         deserializeJson(response, broker.messages.back().payload);
         TEST_ASSERT_EQUAL_STRING(errors[i], response["result"]);
     }
-    TEST_ASSERT_EQUAL_UINT(6, executedCommands);
+    TEST_ASSERT_EQUAL_UINT(MQTT_ENTITY_COUNT - 6, executedCommands);
     commandResult = false;
     deliver(a, first.base + "/command", "{\"command\":\"manual\"}");
     JsonDocument response;
@@ -661,7 +661,7 @@ void test_session_failed_publishes_retry_and_keep_newest_state() {
     settle(session, 0, measured());
     auto state = measured(101);
     session.loop(999, state);
-    TEST_ASSERT_EQUAL_UINT(14, broker.messages.size());
+    TEST_ASSERT_EQUAL_UINT(MQTT_ENTITY_COUNT + 2, broker.messages.size());
     broker.failPublish = true;
     session.loop(1000, state);
     state.meter.forward_power_watts = 102;
@@ -677,8 +677,119 @@ void test_session_failed_publishes_retry_and_keep_newest_state() {
     TEST_ASSERT_EQUAL_UINT(count + 1, broker.messages.size());
 }
 
+static BridgeState bridgeState;
+static unsigned bridgeExecutions=0;
+static bool expireBeforeExecution=false;
+static BridgeState bridgeSnapshot() { return bridgeState; }
+static const char* bridgeExecute(const BridgeRequest& request) {
+    auto current=bridgeState;
+    if (expireBeforeExecution) current.uptimeMs=request.expiresMs;
+    if (const char* error=validateBridgeRequest(request,current)) return error;
+    ++bridgeExecutions;
+    return "success";
+}
+static std::string bridgePayload(const char* command="antenna_1",const char* id="01234567-89ab-4cde-8123-456789abcdef",uint32_t expiry=3000) {
+    JsonDocument doc;
+    doc["command"]=command;doc["request_id"]=id;doc["source_token"]="123456789abcdef0123456789abcdef0";
+    doc["expires_uptime_ms"]=expiry;
+    std::string out;serializeJson(doc,out);return out;
+}
+static void prepareBridge() {
+    bridgeState=BridgeState{};
+    strcpy(bridgeState.sourceToken,"123456789abcdef0123456789abcdef0");
+    bridgeState.uptimeMs=1000;bridgeState.connected=true;bridgeExecutions=0;expireBeforeExecution=false;
+}
+void test_bridge_ids_replay_conflicts_and_legacy_commands() {
+    prepareBridge();TestBroker broker;auto id=mqttIdentity("aa:bb:cc:01:02:03");BridgeCache cache;
+    MqttSession session(broker,id,execute,nullptr,nullptr,bridgeSnapshot,bridgeExecute,&cache);
+    session.connected(false,"ESP32","");
+    deliver(session,id.base+"/command",bridgePayload());
+    TEST_ASSERT_EQUAL_UINT(1,bridgeExecutions);
+    JsonDocument response;deserializeJson(response,broker.messages.back().payload);
+    TEST_ASSERT_EQUAL_STRING("success",response["result"]);
+    TEST_ASSERT_EQUAL_STRING("01234567-89ab-4cde-8123-456789abcdef",response["request_id"]);
+    TEST_ASSERT_FALSE(broker.messages.back().retained);
+    deliver(session,id.base+"/command",bridgePayload());TEST_ASSERT_EQUAL_UINT(1,bridgeExecutions);
+    deliver(session,id.base+"/command",bridgePayload("antenna_2"));
+    deserializeJson(response,broker.messages.back().payload);TEST_ASSERT_EQUAL_STRING("duplicate_conflict",response["result"]);
+    TEST_ASSERT_EQUAL_UINT(1,bridgeExecutions);
+    commandResult=true;deliver(session,id.base+"/command","{\"command\":\"auto\"}");
+    TEST_ASSERT_EQUAL(TUNER_CMD_AUTO_MODE,lastCommand);
+    deserializeJson(response,broker.messages.back().payload);TEST_ASSERT_EQUAL_STRING("success",response["result"]);
+    TEST_ASSERT_TRUE(response["request_id"].isUnbound());
+    MqttSession reconfigured(broker,id,execute,nullptr,nullptr,bridgeSnapshot,bridgeExecute,&cache);
+    deliver(reconfigured,id.base+"/command",bridgePayload());TEST_ASSERT_EQUAL_UINT(1,bridgeExecutions);
+}
+void test_bridge_deadline_busy_context_validation_and_uptime_wrap() {
+    prepareBridge();TestBroker broker;auto id=mqttIdentity("aa:bb:cc:01:02:03");BridgeCache cache;
+    MqttSession session(broker,id,execute,nullptr,nullptr,bridgeSnapshot,bridgeExecute,&cache);
+    auto request=[&](const std::string& payload,const char* result) {
+        deliver(session,id.base+"/command",payload);JsonDocument reply;deserializeJson(reply,broker.messages.back().payload);
+        TEST_ASSERT_EQUAL_STRING(result,reply["result"]);
+    };
+    request(bridgePayload("full_tune","11234567-89ab-4cde-8123-456789abcdef",1000),"expired");
+    request(bridgePayload("full_tune","21234567-89ab-4cde-8123-456789abcdef",3001),"expired");
+    bridgeState.busy=true;request(bridgePayload("manual","31234567-89ab-4cde-8123-456789abcdef"),"busy");bridgeState.busy=false;
+    bridgeState.sourceToken[0]='0';request(bridgePayload("auto","41234567-89ab-4cde-8123-456789abcdef"),"target_changed");bridgeState.sourceToken[0]='1';
+    expireBeforeExecution=true;request(bridgePayload("full_tune","51234567-89ab-4cde-8123-456789abcdef"),"expired");expireBeforeExecution=false;
+    TEST_ASSERT_EQUAL_UINT(0,bridgeExecutions);
+    bridgeState.uptimeMs=UINT32_MAX-999;
+    request(bridgePayload("antenna_2","61234567-89ab-4cde-8123-456789abcdef",1000),"success");
+    TEST_ASSERT_EQUAL_UINT(1,bridgeExecutions);
+    request("{\"command\":\"full_tune\",\"source_token\":\"bad\"}","invalid_request");
+}
+void test_bridge_state_radio_packets_and_separate_schedules_fit_1024() {
+    prepareBridge();TestBroker broker;auto id=mqttIdentity("aa:bb:cc:01:02:03");BridgeCache cache;
+    MqttSession session(broker,id,execute,nullptr,nullptr,bridgeSnapshot,bridgeExecute,&cache);
+    TEST_ASSERT_TRUE(session.connected(false,"ESP32",""));
+    auto state=measured(999999999,88888888,99999999);
+    state.radio.provider=RadioProvider::OmniRig;state.radio.connection=RadioConnection::Ready;
+    state.radio.frequencyValid=true;state.radio.rxFrequencyHz=state.radio.txFrequencyHz=1000000000000ULL;
+    state.radio.ageMs=state.radio.stableMs=UINT32_MAX;
+    memset(state.radio.device,'"',sizeof(state.radio.device)-1);
+    memset(state.radio.protocol,'"',sizeof(state.radio.protocol)-1);
+    memset(state.radio.error,'"',sizeof(state.radio.error)-1);
+    state.antennaFromRadio=true;
+    settle(session,0,state);
+    unsigned radios=0,states=0;
+    for (const auto& message:broker.messages) {
+        TEST_ASSERT_TRUE(mqttPacketFits(message.topic,message.payload.size()));
+        JsonDocument doc;deserializeJson(doc,message.payload);
+        if (message.topic==id.base+"/radio/state") { ++radios;TEST_ASSERT_EQUAL_STRING("omnirig",doc["provider"]);TEST_ASSERT_TRUE(doc["tuning"].isNull());TEST_ASSERT_TRUE(doc["xit_offset_hz"].isNull()); }
+        if (message.topic==id.base+"/state") { ++states;TEST_ASSERT_EQUAL_UINT(2,doc["api_version"]);TEST_ASSERT_EQUAL_STRING("omnirig",doc["antenna_source"]);TEST_ASSERT_TRUE(doc["radio"].isUnbound()); }
+    }
+    TEST_ASSERT_EQUAL_UINT(1,radios);TEST_ASSERT_EQUAL_UINT(1,states);
+    size_t count=broker.messages.size();session.loop(999,state);TEST_ASSERT_EQUAL_UINT(count,broker.messages.size());
+    session.loop(1000,state);TEST_ASSERT_EQUAL_UINT(count+1,broker.messages.size());
+    TEST_ASSERT_EQUAL_STRING((id.base+"/radio/state").c_str(),broker.messages.back().topic.c_str());
+    state.radio.provider=RadioProvider::None;state.radio.connection=RadioConnection::Disabled;
+    session.loop(1001,state);
+    TEST_ASSERT_EQUAL_UINT(count+3,broker.messages.size());
+    session.loop(2001,state);TEST_ASSERT_EQUAL_UINT(count+3,broker.messages.size());
+}
+
+void test_bridge_drops_a_snapshot_captured_before_source_switch() {
+    prepareBridge();bridgeState.remote=true;
+    TestBroker broker;auto id=mqttIdentity("aa:bb:cc:01:02:03");BridgeCache cache;
+    MqttSession session(broker,id,execute,nullptr,nullptr,bridgeSnapshot,bridgeExecute,&cache);
+    session.connected(false,"ESP32","");
+    auto state=measured();
+    settle(session,0,state);
+    TEST_ASSERT_TRUE(broker.retained.find(id.base+"/state")==broker.retained.end());
+    state.remote=true;
+    session.loop(1,state);
+    TEST_ASSERT_TRUE(broker.retained.find(id.base+"/state")!=broker.retained.end());
+    JsonDocument doc;deserializeJson(doc,broker.retained[id.base+"/state"]);
+    TEST_ASSERT_EQUAL_STRING("remote",doc["source"]);
+    TEST_ASSERT_EQUAL_STRING(bridgeState.sourceToken,doc["source_token"]);
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_bridge_drops_a_snapshot_captured_before_source_switch);
+    RUN_TEST(test_bridge_ids_replay_conflicts_and_legacy_commands);
+    RUN_TEST(test_bridge_deadline_busy_context_validation_and_uptime_wrap);
+    RUN_TEST(test_bridge_state_radio_packets_and_separate_schedules_fit_1024);
     RUN_TEST(test_rf_state_serialization_does_not_grow_a_heap_string);
     RUN_TEST(test_idle_interval_including_zero);
     RUN_TEST(test_absolute_and_relative_threshold_boundaries);

@@ -2,6 +2,8 @@
 #define TUNER_TYPES_H
 
 #include <stdint.h>
+#include "radio_types.h"
+#include "tuning_types.h"
 
 // Command bytes (single ASCII characters)
 #define TUNER_CMD_WAKE          ' '
@@ -17,6 +19,7 @@
 // Application commands; never written directly to the tuner UART.
 #define TUNER_CMD_SELECT_ANT_A  0x81
 #define TUNER_CMD_SELECT_ANT_B  0x82
+#define TUNER_CMD_CONTROLLED_MODE 0x83
 
 // Response codes
 #define TUNER_RESP_GOOD         'T'
@@ -55,7 +58,8 @@ typedef enum {
     MODE_UNKNOWN = 0,
     MODE_AUTO,
     MODE_MANUAL,
-    MODE_BYPASS
+    MODE_BYPASS,
+    MODE_CONTROLLED // Application mode; never sent as an LDG UART byte.
 } tuner_mode_t;
 
 // Antenna selection
@@ -71,7 +75,8 @@ enum class AntennaAuto : uint8_t {
     Disabled, Idle, Pending, Selected, AlreadySelected, HighPower,
     InvalidPower, Unassigned, Uninitialized, Manual, Error, WaitingRfOff,
     ManualSelection, InitialBand, Retrying, WaitingMeter, Tuning, TuneFailed,
-    TuneNoRf, TuneHighPower, TuneInvalidPower, TuneBandChanged, TuneManual, WaitingTuner
+    TuneNoRf, TuneHighPower, TuneInvalidPower, TuneBandChanged, TuneManual, WaitingTuner,
+    WaitingRadio, WaitingRx, WaitingBand
 };
 inline const char* antennaInitName(AntennaInit state) {
     switch (state) {
@@ -109,6 +114,9 @@ inline const char* antennaAutoName(AntennaAuto state) {
         case AntennaAuto::TuneBandChanged: return "tune_band_changed";
         case AntennaAuto::TuneManual: return "tune_manual_override";
         case AntennaAuto::WaitingTuner: return "waiting_tuner";
+        case AntennaAuto::WaitingRadio: return "waiting_radio";
+        case AntennaAuto::WaitingRx: return "waiting_rx";
+        case AntennaAuto::WaitingBand: return "waiting_band";
         default: return "disabled";
     }
 }
@@ -127,10 +135,15 @@ typedef struct {
 
 // A value copy, safe to pass between transports without borrowing UART state.
 struct tuner_state_t {
+    ldg::RadioState radio;
+    bool antennaFromRadio = false;
+    bool tuningManaged = false;
+    ldg::TuningState tuningState = ldg::TuningState::Native;
     tuner_meter_t meter{};
-    tuner_mode_t mode = MODE_UNKNOWN;
+    tuner_mode_t mode = MODE_UNKNOWN; // Last acknowledged physical LDG mode.
     tuner_ant_t antenna = ANT_UNKNOWN;
     tuner_ant_t lastAntenna = ANT_UNKNOWN;
+    uint32_t meterAgeMs = UINT32_MAX;
     bool meterValid = false;
     bool remote = false;
     // Last observed band belongs to this source and survives RF silence.
@@ -141,6 +154,16 @@ struct tuner_state_t {
 };
 
 namespace ldg {
+inline tuner_mode_t operatingMode(const tuner_state_t& state) {
+    return state.tuningManaged ? MODE_CONTROLLED : state.mode;
+}
+inline uint8_t nextModeCommand(tuner_mode_t mode) {
+    return mode == MODE_MANUAL ? TUNER_CMD_AUTO_MODE :
+           mode == MODE_AUTO ? TUNER_CMD_CONTROLLED_MODE : TUNER_CMD_MANUAL_MODE;
+}
+inline bool isModeCommand(uint8_t command) {
+    return command == TUNER_CMD_MANUAL_MODE || command == TUNER_CMD_AUTO_MODE || command == TUNER_CMD_CONTROLLED_MODE;
+}
 inline bool knownBand(tuner_band_t band) { return band > BAND_UNKNOWN && band < BAND_COUNT; }
 inline bool knownAntenna(tuner_ant_t antenna) { return antenna == ANT_A || antenna == ANT_B; }
 inline tuner_ant_t lastKnownAntenna(const tuner_state_t& state) {

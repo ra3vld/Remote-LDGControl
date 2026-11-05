@@ -3,11 +3,14 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <freertos/semphr.h>
 #include "config.h"
 #include "device_config.h"
 #include "antenna_settings.h"
 #include "meter_scale.h"
 #include "brightness_control.h"
+#include "radio_settings.h"
+#include "tuning_settings.h"
 
 
 class ConfigManager {
@@ -19,6 +22,11 @@ public:
     bool update(const DeviceConfig& config);
     ldg::AntennaSettings antennaSettings() const;
     bool updateAntennaSettings(const ldg::AntennaSettings& settings);
+    ldg::TuningSettings tuningSettings() const;
+    bool updateTuningMode(bool controlled);
+    bool updateTuningOptions(const ldg::TuningSettings& settings);
+    ldg::RadioSettings radioSettings() const;
+    bool updateRadioSettings(const ldg::RadioSettings& settings);
     ldg::MeterSettings meterSettings() const;
     bool updateMeterSettings(const ldg::MeterSettings& settings);
     ldg::BrightnessSettings brightnessSettings() const;
@@ -44,6 +52,10 @@ private:
     Preferences m_prefs;
     DeviceConfig m_config;
     ldg::AntennaSettings m_antennaSettings;
+    ldg::RadioSettings m_radioSettings;
+    ldg::TuningSettings m_tuningSettings;
+    SemaphoreHandle_t m_tuningWriteMutex = nullptr;
+    bool saveTuningChange(const ldg::TuningSettings& settings, bool modeOnly);
     ldg::MeterSettings m_meterSettings;
     ldg::BrightnessSettings m_brightnessSettings;
     mutable portMUX_TYPE m_configMux = portMUX_INITIALIZER_UNLOCKED;

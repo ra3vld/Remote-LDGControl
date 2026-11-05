@@ -42,6 +42,7 @@ inline const char* commandLabel(uint8_t command) {
         case TUNER_CMD_BYPASS: return "BYPASS";
         case TUNER_CMD_AUTO_MODE: return "AUTO";
         case TUNER_CMD_MANUAL_MODE: return "MANUAL";
+        case TUNER_CMD_CONTROLLED_MODE: return "CONTROLLED";
         default: return "COMMAND";
     }
 }

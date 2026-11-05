@@ -21,8 +21,10 @@ inline bool numericChanged(double previous, double current, double absolute,
 }
 
 inline bool significantChange(const tuner_state_t& previous, const tuner_state_t& current) {
-    if (previous.remote != current.remote || previous.mode != current.mode ||
+    if (previous.antennaFromRadio != current.antennaFromRadio || previous.radio.provider != current.radio.provider ||
+        previous.remote != current.remote || previous.mode != current.mode ||
         previous.antenna != current.antenna || previous.meterValid != current.meterValid ||
+        previous.tuningManaged != current.tuningManaged || previous.tuningState != current.tuningState ||
         previous.antennaInit != current.antennaInit || previous.antennaAuto != current.antennaAuto ||
         lastKnownAntenna(previous) != lastKnownAntenna(current) ||
         lastKnownBand(previous) != lastKnownBand(current) || bandIsHeld(previous) != bandIsHeld(current))
@@ -92,7 +94,14 @@ public:
     tuner_state_t select(const tuner_state_t& local, uint32_t telemetryAge, bool commandActive) const {
         if (!remoteConnected(telemetryAge, commandActive)) return local;
         tuner_state_t state = m_remote;
+        state.meterAgeMs = state.meterAgeMs > UINT32_MAX-telemetryAge ? UINT32_MAX : state.meterAgeMs+telemetryAge;
         if (telemetryAge > 3000) state.meterValid = false;
+        const uint32_t age = state.radio.ageMs;
+        state.radio.ageMs = age > UINT32_MAX - telemetryAge ? UINT32_MAX : age + telemetryAge;
+        if (state.radio.ownsBand() && state.radio.ageMs > RadioState::LivenessMs) {
+            state.radio.connection = RadioConnection::Disconnected;
+            state.radio.frequencyValid = false;
+        }
         return state;
     }
 

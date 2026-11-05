@@ -1,0 +1,26 @@
+--- a/src/WebSockets.h
++++ b/src/WebSockets.h
+@@ -63,7 +63,9 @@
+ 
+ #if defined(ESP8266) || defined(ESP32)
+ 
++#ifndef WEBSOCKETS_MAX_DATA_SIZE
+ #define WEBSOCKETS_MAX_DATA_SIZE (15 * 1024)
++#endif
+ #define WEBSOCKETS_USE_BIG_MEM
+ #define GET_FREE_HEAP ESP.getFreeHeap()
+ // moves all Header strings to Flash (~300 Byte)
+@@ -234,10 +236,12 @@
+ #elif (WEBSOCKETS_NETWORK_TYPE == NETWORK_ESP32)
+ 
+ #include <WiFi.h>
++#ifndef WEBSOCKETS_DISABLE_TLS
+ #include <WiFiClientSecure.h>
+ #define SSL_AXTLS
+-#define WEBSOCKETS_NETWORK_CLASS WiFiClient
+ #define WEBSOCKETS_NETWORK_SSL_CLASS WiFiClientSecure
++#endif
++#define WEBSOCKETS_NETWORK_CLASS WiFiClient
+ #define WEBSOCKETS_NETWORK_SERVER_CLASS WiFiServer
+ 
+ #elif (WEBSOCKETS_NETWORK_TYPE == NETWORK_ESP32_ETH)

@@ -26,6 +26,7 @@ inline const char* commandEndpoint(uint8_t command) {
         case TUNER_CMD_BYPASS: return "/api/command/bypass";
         case TUNER_CMD_AUTO_MODE: return "/api/command/auto";
         case TUNER_CMD_MANUAL_MODE: return "/api/command/manual";
+        case TUNER_CMD_CONTROLLED_MODE: return "/api/command/controlled";
         default: return nullptr;
     }
 }
