@@ -6,6 +6,7 @@
 #include "radio_settings.h"
 #include "antenna_automation.h"
 #include "mqtt_protocol.h"
+#include "tci_expertsdr3_fixture.h"
 
 void setUp() {}
 void tearDown() {}
@@ -49,6 +50,44 @@ void test_initial_state_is_complete_model_independent_and_tracks_all_tx_sources(
     TEST_ASSERT_EQUAL_STRING("AnotherVendor", protocol.snapshot(330).device);
     initialize(protocol, 400, 1);
     TEST_ASSERT_EQUAL_UINT64(21074000, protocol.snapshot(600).txFrequencyHz);
+}
+
+void test_expertsdr3_bootstrap_ignores_last_tx_and_requires_ready_after_start() {
+    ldg::TciProtocol protocol;
+    protocol.connect(0, 0);
+    for (const char* message : expertSdr3Bootstrap) {
+        if (!strcmp(message, "ready;")) {
+            TEST_ASSERT_FALSE(protocol.initialized());
+            TEST_ASSERT_FALSE(protocol.snapshot(200).safeRx());
+        }
+        TEST_ASSERT_TRUE(protocol.feed(message, 250));
+    }
+    const auto state = protocol.snapshot(450);
+    TEST_ASSERT_TRUE(state.safeRx());
+    TEST_ASSERT_EQUAL_UINT64(7108060, state.txFrequencyHz);
+    TEST_ASSERT_EQUAL_STRING("SunSDR2DX", state.device);
+    TEST_ASSERT_EQUAL_STRING("ExpertSDR3,2.1", state.protocol);
+    TEST_ASSERT_TRUE(protocol.feed("xit_offset:0,0.0;", 500));
+    TEST_ASSERT_TRUE(protocol.snapshot(500).safeRx());
+    TEST_ASSERT_TRUE(protocol.feed("xit_enable:0,true;xit_offset:0,-60.000;", 510));
+    TEST_ASSERT_EQUAL_UINT64(7108000, protocol.snapshot(510).txFrequencyHz);
+    TEST_ASSERT_TRUE(protocol.feed("xit_offset:0,+1000000000.0;", 520));
+    TEST_ASSERT_EQUAL_INT32(1000000000, protocol.snapshot(520).xitOffset);
+    for (const char* invalid : {"0.", ".0", "0.1", "1.00x", "1e2", "nan", "1000000001.0"}) {
+        initialize(protocol);
+        const std::string command = std::string("xit_offset:0,") + invalid + ";";
+        TEST_ASSERT_FALSE(protocol.feed(command.c_str(), 600));
+        TEST_ASSERT_FALSE(protocol.snapshot(600).safeRx());
+    }
+}
+
+void test_radio_config_json_owns_the_snapshot_host_string() {
+    ldg::RadioSettings value;
+    strcpy(value.host, "expert-sdr.local"); value.enabled = true;
+    JsonDocument doc;
+    ldg::writeRadioSettingsJson(doc, value);
+    strcpy(value.host, "overwritten");
+    TEST_ASSERT_EQUAL_STRING("expert-sdr.local", doc["host"].as<const char*>());
 }
 
 void test_split_xit_fragmentation_and_obsolete_reported_tx_frequency() {
@@ -237,6 +276,8 @@ void test_frequency_table_inclusive_edges_and_unsupported_bands() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_expertsdr3_bootstrap_ignores_last_tx_and_requires_ready_after_start);
+    RUN_TEST(test_radio_config_json_owns_the_snapshot_host_string);
     RUN_TEST(test_initial_state_is_complete_model_independent_and_tracks_all_tx_sources);
     RUN_TEST(test_split_xit_fragmentation_and_obsolete_reported_tx_frequency);
     RUN_TEST(test_incomplete_malformed_oversized_and_reconnected_state_never_authorize_switches);

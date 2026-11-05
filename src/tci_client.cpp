@@ -58,6 +58,7 @@ ldg::RadioState TciClient::state() const {
 void TciClient::event(WStype_t type, uint8_t* payload, size_t length) {
     if (type == WStype_CONNECTED) {
         m_expired.store(false);
+        m_resetRequested = m_synchronized = false;
         m_connectedAt = millis(); m_lastQueries = m_connectedAt;
         m_textFragment = false;
         m_protocol.connect(m_applied.receiver, millis());
@@ -66,15 +67,22 @@ void TciClient::event(WStype_t type, uint8_t* payload, size_t length) {
         m_textFragment = false;
         m_protocol.disconnect(m_applied.enabled, "TCI disconnected; using LDG telemetry");
     } else if (m_expired.load() || m_protocol.snapshot(millis()).connection == ldg::RadioConnection::Disconnected) {
-        m_resetRequested = true; // A late pong cannot revive an expired session.
+        requestReset("TCI heartbeat timeout; reconnecting"); // Late pongs cannot revive an expired session.
     } else if (type == WStype_PONG || type == WStype_PING) m_protocol.heartbeat(millis());
     else if (type == WStype_TEXT || type == WStype_FRAGMENT_TEXT_START ||
              ((type == WStype_FRAGMENT || type == WStype_FRAGMENT_FIN) && m_textFragment)) {
         if (type == WStype_FRAGMENT_TEXT_START) m_textFragment = true;
-        if (!m_protocol.feed(payload, length, millis())) m_resetRequested = true;
+        if (!m_protocol.feed(payload, length, millis())) requestReset(m_protocol.snapshot(millis()).error);
         if (type == WStype_FRAGMENT_FIN) m_textFragment = false;
     } else if (type == WStype_FRAGMENT_BIN_START) m_textFragment = false;
     // Audio/IQ are never subscribed to and binary payloads are never parsed as CAT.
+}
+
+void TciClient::requestReset(const char* reason) {
+    if (m_resetRequested) return;
+    strncpy(m_resetReason, reason, sizeof(m_resetReason) - 1);
+    m_resetReason[sizeof(m_resetReason) - 1] = 0;
+    m_resetRequested = true;
 }
 
 void TciClient::queryState() {
@@ -99,6 +107,7 @@ void TciClient::loop(bool localOwner) {
         portEXIT_CRITICAL(&m_mux);
         m_localOwner = localOwner;
         m_started = false;
+        m_resetRequested = m_synchronized = false;
         m_protocol.disconnect(configured.enabled, localOwner ? "" : "Configure TCI on the tuner unit");
     }
     if (!configured.enabled || !localOwner || WiFi.status() != WL_CONNECTED) {
@@ -121,17 +130,20 @@ void TciClient::loop(bool localOwner) {
     m_socket.loop();
     const auto state = m_protocol.snapshot(millis());
     if (m_socket.isConnected()) {
-        if (state.connection == ldg::RadioConnection::Ready) m_connectedAt = millis();
+        if (state.connection == ldg::RadioConnection::Ready) m_synchronized = true;
         if (m_protocol.initialized() && state.connection != ldg::RadioConnection::Ready &&
             millis() - m_lastQueries >= 1000) queryState();
         // An apparently open socket with incomplete state cannot live forever.
-        if ((state.connection != ldg::RadioConnection::Ready && millis() - m_connectedAt > 10000) ||
-            state.connection == ldg::RadioConnection::Disconnected) m_resetRequested = true;
+        if (!m_synchronized && millis() - m_connectedAt > 10000)
+            requestReset("TCI initial state sync timeout; reconnecting");
+        if (state.connection == ldg::RadioConnection::Disconnected)
+            requestReset("TCI heartbeat timeout; reconnecting");
     }
     if (m_resetRequested) {
         m_resetRequested = false;
         m_socket.disconnect();
-        m_protocol.disconnect(true, "TCI state/heartbeat timeout; reconnecting");
+        Serial.printf("[TCI] %s\n", m_resetReason);
+        m_protocol.disconnect(true, m_resetReason);
     }
     publish();
 }

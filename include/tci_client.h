@@ -17,6 +17,8 @@ private:
     ldg::RadioSettings m_applied;
     bool m_started = false, m_localOwner = true, m_textFragment = false;
     bool m_resetRequested = false;
+    bool m_synchronized = false;
+    char m_resetReason[64]{};
     mutable std::atomic<bool> m_expired{false};
     uint32_t m_connectedAt = 0, m_lastQueries = 0, m_metricsAt = 0;
     mutable portMUX_TYPE m_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -25,4 +27,5 @@ private:
     void event(WStype_t type, uint8_t* payload, size_t length);
     void publish();
     void queryState();
+    void requestReset(const char* reason);
 };

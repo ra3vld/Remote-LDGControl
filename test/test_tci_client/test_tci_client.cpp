@@ -2,6 +2,7 @@
 #include "config_manager.h"
 #include "tci_client.h"
 #include <WiFi.h>
+#include "tci_expertsdr3_fixture.h"
 #include "../../src/tci_client.cpp"
 
 uint32_t testMillis = 0;
@@ -75,8 +76,54 @@ void test_remote_owner_and_disabled_configuration_stop_the_local_client() {
     configManager.radio.enabled=false; client.loop();
     TEST_ASSERT_EQUAL_INT(int(ldg::RadioConnection::Disabled),int(client.state().connection));
 }
+void test_expertsdr3_capture_stays_connected_and_ready_with_pongs_for_two_minutes() {
+    TciClient client; client.begin(); client.loop(); auto& socket = *WebSocketsClient::latest;
+    socket.emit(WStype_CONNECTED, "");
+    for (const char* message : expertSdr3Bootstrap) socket.emit(WStype_TEXT, message);
+    client.loop();
+    TEST_ASSERT_TRUE(client.state().safeRx());
+    const unsigned disconnects = socket.disconnects;
+    for (unsigned i = 1; i <= 120; ++i) {
+        testMillis = i * 1000;
+        socket.emit(WStype_PONG, "");
+        if (i % 11 == 0) socket.emit(WStype_TEXT, "xit_offset:0,0.0;");
+        client.loop();
+        TEST_ASSERT_TRUE(socket.connected);
+        TEST_ASSERT_TRUE(client.state().safeRx());
+        TEST_ASSERT_EQUAL_UINT64(7108060, client.state().txFrequencyHz);
+    }
+    TEST_ASSERT_EQUAL_UINT(disconnects, socket.disconnects);
+    // A late conflicting notification revokes selection, but an alive socket
+    // is retained with its actual waiting reason instead of reconnecting.
+    socket.emit(WStype_TEXT, "tx_frequency:1900000;"); client.loop();
+    for (unsigned i = 121; i <= 135; ++i) {
+        testMillis = i * 1000; socket.emit(WStype_PONG, ""); client.loop();
+        TEST_ASSERT_TRUE(socket.connected);
+        TEST_ASSERT_FALSE(client.state().safeRx());
+        TEST_ASSERT_EQUAL_STRING("TX frequency conflicts with selected RX", client.state().error);
+    }
+    // Heartbeat expiry still disconnects and requires a fresh synchronization.
+    testMillis += 3001; client.loop();
+    TEST_ASSERT_FALSE(socket.connected);
+    TEST_ASSERT_FALSE(client.state().frequencyValid);
+    TEST_ASSERT_NOT_NULL(strstr(client.state().error, "heartbeat timeout"));
+}
+
+void test_malformed_state_and_missing_initial_sync_have_distinct_reset_reasons() {
+    TciClient client; ready(client); auto& socket = *WebSocketsClient::latest;
+    socket.emit(WStype_TEXT, "xit_offset:0,not-a-number;"); client.loop();
+    TEST_ASSERT_FALSE(socket.connected);
+    TEST_ASSERT_EQUAL_STRING("Malformed TCI state; resynchronizing", client.state().error);
+    socket.emit(WStype_CONNECTED, ""); socket.emit(WStype_TEXT, "trx_count:1;ready;");
+    for (unsigned i = 1; i <= 11; ++i) {testMillis = i * 1000; socket.emit(WStype_PONG, ""); client.loop();}
+    TEST_ASSERT_FALSE(socket.connected);
+    TEST_ASSERT_EQUAL_STRING("TCI initial state sync timeout; reconnecting", client.state().error);
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_expertsdr3_capture_stays_connected_and_ready_with_pongs_for_two_minutes);
+    RUN_TEST(test_malformed_state_and_missing_initial_sync_have_distinct_reset_reasons);
     RUN_TEST(test_real_client_lifecycle_queries_only_reads_and_accepts_fragmented_cat_but_not_binary);
     RUN_TEST(test_settings_change_and_stalled_network_revoke_authority_without_waiting_for_worker);
     RUN_TEST(test_heartbeat_keeps_unchanged_frequency_live_and_bad_state_forces_fresh_sync);

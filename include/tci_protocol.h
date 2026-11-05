@@ -23,7 +23,7 @@ public:
     }
     void connecting() { m_state.connection = RadioConnection::Connecting; }
     void heartbeat(uint32_t now) { m_aliveAt = now; }
-    bool initialized() const { return m_ready && m_state.receiverCount; }
+    bool initialized() const { return m_initialized && m_state.receiverCount; }
     uint8_t receiverCount() const { return m_state.receiverCount; }
 
     bool feed(const uint8_t* data, size_t size, uint32_t now) {
@@ -62,7 +62,7 @@ private:
     RadioState m_state{};
     char m_command[1025]{};
     size_t m_used = 0;
-    bool m_overflow = false, m_ready = false, m_reportedValid = false;
+    bool m_overflow = false, m_ready = false, m_initialized = false, m_reportedValid = false;
     unsigned m_seen = 0;
     uint32_t m_trxKnown = 0, m_trx = 0, m_tuneKnown = 0, m_tune = 0;
     uint64_t m_vfo[2]{}, m_reported = 0;
@@ -85,13 +85,23 @@ private:
         while (length && (p[length-1] == ' ' || p[length-1] == '\t' || p[length-1] == '\r' || p[length-1] == '\n')) p[--length] = 0;
         return p;
     }
-    static bool number(const char* p, uint64_t& value, uint64_t limit) {
+    static bool number(const char* p, uint64_t& value, uint64_t limit, bool decimalZeros = false) {
         value = 0;
         if (!*p) return false;
+        if (*p < '0' || *p > '9') return false;
         do {
             if (*p < '0' || *p > '9' || value > limit / 10) return false;
             value = value * 10 + unsigned(*p++ - '0');
             if (value > limit) return false;
+            // ExpertSDR3 answers XIT_OFFSET reads with e.g. "0.0". Accept
+            // exact integer Hz only: silently rounding a fractional offset
+            // could choose the wrong band at its boundary.
+            if (*p == '.' && decimalZeros) {
+                ++p;
+                if (!*p) return false;
+                do { if (*p++ != '0') return false; } while (*p);
+                return true;
+            }
         } while (*p);
         return true;
     }
@@ -122,7 +132,7 @@ private:
             frequencyBand(m_reported) != frequencyBand(uint64_t(derived));
         if (frequency && m_reportedValid && !conflict) m_state.txFrequencyHz = m_reported;
         m_state.frequencyValid = frequency && !conflict;
-        const bool complete = m_ready && all && m_state.receiver < m_state.receiverCount &&
+        const bool complete = m_initialized && m_ready && all && m_state.receiver < m_state.receiverCount &&
             m_state.frequencyValid && m_state.rxKnown && m_state.tuneKnown;
         m_state.connection = complete ? RadioConnection::Ready : RadioConnection::Synchronizing;
         copy(m_state.error, conflict ? "TX frequency conflicts with selected RX" : complete ? "" : "Waiting for complete TCI state");
@@ -153,7 +163,7 @@ private:
             if (!*args[count-1]) return false;
         }
         uint64_t index = 0, value = 0, channel = 0; bool flag = false;
-        if (!strcmp(name,"ready")) { if (count) return false; m_ready = true; }
+        if (!strcmp(name,"ready")) { if (count) return false; m_ready = m_initialized = true; }
         else if (!strcmp(name,"stop")) { if (count) return false; m_ready = false; m_seen = 0; m_trxKnown = m_tuneKnown = 0; m_reportedValid = false; }
         else if (!strcmp(name,"start")) { if (count) return false; m_ready = true; }
         else if (!strcmp(name,"device")) { if (count != 1) return false; copy(m_state.device, args[0]); }
@@ -167,7 +177,11 @@ private:
         }
         else if (!strcmp(name,"tx_frequency")) {
             if (count != 1 || !number(args[0],value,1000000000000ULL) || !value) return false;
-            m_reported = value; m_reportedValid = true;
+            m_reported = value;
+            // The bootstrap TX_FREQUENCY can contain the last transmission's
+            // frequency even during RX on another band. Only notifications
+            // after READY have a known relationship to this live session.
+            m_reportedValid = m_initialized;
         } else {
             if (count < 2 || !number(args[0],index,MaxReceivers-1) ||
                 (m_state.receiverCount && index >= m_state.receiverCount)) return false;
@@ -184,7 +198,7 @@ private:
             } else if (!strcmp(name,"xit_offset")) {
                 const char* p = args[1]; const bool negative = *p == '-';
                 if (*p == '-' || *p == '+') ++p;
-                if (count != 2 || !number(p,value,1000000000)) return false;
+                if (count != 2 || !number(p,value,1000000000,true)) return false;
                 if (selected) {
                     const int32_t offset = negative ? -int32_t(value) : int32_t(value);
                     if (!(m_seen & Offset) || m_state.xitOffset != offset) m_reportedValid = false;

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <cstring>
+#include <string>
 #include <ArduinoJson.h>
 
 namespace ldg {
@@ -52,7 +53,10 @@ inline bool parseRadioSettings(JsonVariantConst doc, RadioSettings& value) {
     value = candidate; return true;
 }
 inline void writeRadioSettingsJson(JsonDocument& doc, const RadioSettings& value) {
-    doc["enabled"] = bool(value.enabled); doc["host"] = value.host;
+    doc["enabled"] = bool(value.enabled);
+    // The caller can pass the value snapshot returned by radioSettings().
+    // Own this string in the document before that temporary is destroyed.
+    doc["host"] = std::string(value.host);
     doc["port"] = value.port; doc["receiver"] = value.receiver;
 }
 }

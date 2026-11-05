@@ -88,11 +88,12 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     lv_init();
 
     static lv_disp_draw_buf_t draw_buf;
-    // SPI flushing is synchronous, so a second buffer cannot overlap transfer
-    // with rendering. One 10-line buffer uses the same RAM as two 5-line
-    // buffers and halves the number of custom draw callbacks per refresh.
-    static lv_color_t buf[DISPLAY_WIDTH * 10];
-    lv_disp_draw_buf_init(&draw_buf, buf, nullptr, DISPLAY_WIDTH * 10);
+    // Synchronous SPI needs one draw buffer. Five rows plus an equally sized
+    // delta scratch buffer leave 9600 bytes more RAM for TCI and concurrent HTTP
+    // on the 480 px board. LVGL bounds every flush to this pixel capacity.
+    constexpr size_t drawBufferPixels = DISPLAY_WIDTH * 5;
+    static lv_color_t buf[drawBufferPixels];
+    lv_disp_draw_buf_init(&draw_buf, buf, nullptr, drawBufferPixels);
 
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
@@ -102,7 +103,7 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     disp_drv.monitor_cb = displayMonitor;
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
-    m_deltaScratch = static_cast<lv_color_t*>(std::malloc(DISPLAY_WIDTH * 10 * sizeof(lv_color_t)));
+    m_deltaScratch = static_cast<lv_color_t*>(std::malloc(drawBufferPixels * sizeof(lv_color_t)));
 
     setupTouch();
 

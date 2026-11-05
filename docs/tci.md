@@ -31,7 +31,9 @@ feature, then reload the browser. No settings erase or partition change is neede
 ## Selection rules
 
 - The selected receiver's future TX frequency is VFO A, or VFO B in split,
-  plus enabled XIT. An updated `TX_FREQUENCY` notification takes precedence
+  plus enabled XIT. `TX_FREQUENCY` in the bootstrap before `READY` is ignored:
+  ExpertSDR3 can send the previous transmission's frequency while receiving
+  on another band. An updated notification after `READY` takes precedence
   within the derived band. A conflicting band suspends selection: that global
   notification may describe another software receiver. Changes to VFO, split
   or XIT invalidate an older notification. RIT does not change the TX band.
@@ -51,6 +53,9 @@ feature, then reload the browser. No settings erase or partition change is neede
   Wi-Fi/TCI or a heartbeat older than 3 seconds cancels its pending intent and
   returns to the existing RF-based LDG automation (including its <100 W rule).
   Reconnection clears radio state and requires a new synchronization.
+  A live connection with conflicting state stays connected and reports the
+  waiting reason; it does not authorize antenna selection. Errors distinguish
+  initial synchronization timeout, malformed state, and heartbeat timeout.
 
 TCI is an observer; it never changes frequency, split, XIT, TUNE or PTT.
 It cannot guarantee preparation if transmission starts immediately after a
