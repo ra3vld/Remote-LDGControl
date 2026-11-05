@@ -1,6 +1,10 @@
 #include "mqtt_handler.h"
 #include "config_manager.h"
 #include <new>
+#include <esp_mac.h>
+#ifdef ARDUINO_ARCH_ESP32
+#include <esp_heap_caps.h>
+#endif
 
 ldg::MqttStatus MqttHandler::getStatus() const {
     portENTER_CRITICAL(&m_statusMux);
@@ -67,7 +71,16 @@ bool MqttHandler::configure() {
         Serial.printf("[MQTT] %s\n", ldg::mqttConnectionMessage(ldg::MqttConnection::Disabled));
         return false;
     }
-    m_identity = ldg::mqttIdentity(WiFi.macAddress().c_str());
+    // WiFi.macAddress() is all zeroes before STA starts on Arduino 3.
+    // Read the station identity independently of network initialization.
+    uint8_t stationMac[6]{};
+    char stationMacText[13]{};
+    if (esp_read_mac(stationMac, ESP_MAC_WIFI_STA) == ESP_OK) {
+        snprintf(stationMacText, sizeof(stationMacText), "%02x%02x%02x%02x%02x%02x",
+                 stationMac[0], stationMac[1], stationMac[2],
+                 stationMac[3], stationMac[4], stationMac[5]);
+    }
+    m_identity = ldg::mqttIdentity(stationMacText);
     if (m_identity.base.empty()) {
         setConnectionState(ldg::MqttConnection::Error);
         reportError(ldg::MqttError::Identity);
@@ -167,10 +180,15 @@ void MqttHandler::disconnect() {
 }
 
 void MqttHandler::loop() {
-    if (m_reconfigureRequested.exchange(false) && m_wifiClient) configure();
     // Observe RF even while the broker is offline. The history also survives
     // client/session reconstruction requested by the reconnect button.
     if (m_stateGetter) m_readings.observe(m_stateGetter());
+#ifdef ARDUINO_ARCH_ESP32
+    // ESP.getFreeHeap() includes word-only IRAM, unavailable to JSON/strings.
+    // Preserve readings above, but defer allocations during a network burst.
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 8192) return;
+#endif
+    if (m_reconfigureRequested.exchange(false) && m_wifiClient) configure();
     if (!m_client) return;
     if (WiFi.status() != WL_CONNECTED) {
         if (isConnected()) {

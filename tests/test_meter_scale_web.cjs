@@ -43,7 +43,8 @@ function board() {
             if (url === '/api/ws-token') return { ok: true, json: async () => ({ token: 'test' }) };
             if (url === '/api/config') return { ok: true, json: async () => ({}) };
             if (url === '/api/status') {
-                const data = { ...this.snapshot(), display: { ...this.brightness }, mqtt: { state: 'disabled', enabled: false,
+                if (this.failStatus) throw new Error('status offline');
+                const data = { ...this.snapshot(), ...this.telemetry, display: { ...this.brightness }, mqtt: { state: 'disabled', enabled: false,
                     message: 'Disabled', attempts: 0 } };
                 if (this.holdStatus) await this.holdStatus.promise;
                 return { ok: true, json: async () => data };
@@ -94,10 +95,11 @@ async function page(server, initialSnapshot = true) {
     }
     let timerId = 0;
     let now = 0;
+    class ClockDate extends Date { static now() { return 100000 + now; } }
     const timers = new Map();
     const context = vm.createContext({
         document: { hidden: false, createElement: () => element(Symbol()), getElementById: element, querySelectorAll: () => [], querySelector: element },
-        location: { protocol: 'http:', host: 'board.test' }, WebSocket: Socket, AbortController,
+        location: { protocol: 'http:', host: 'board.test' }, WebSocket: Socket, AbortController, Date: ClockDate,
         fetch: server.fetch.bind(server),
         setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: now + delay }); return id; },
         clearTimeout(id) { timers.delete(id); }, console

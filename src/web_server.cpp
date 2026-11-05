@@ -14,6 +14,12 @@ extern DisplayUI display;
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <esp_system.h>
+#include <esp_idf_version.h>
+#if ESP_IDF_VERSION_MAJOR >= 5
+#include <esp_app_desc.h>
+#else
+#include <esp_ota_ops.h>
+#endif
 #include <HTTPServer.hpp>
 #if TLS_ENABLED
 #include <HTTPSServer.hpp>
@@ -83,6 +89,8 @@ public:
 
     // Factory for hsv::WebsocketNode.
     static hsv::WebsocketHandler* create() { return new MeterWebsocketHandler(); }
+    static size_t subscribers() { return s_subs.size(); }
+    static bool canSubscribe() { return subscribers() < 2; }
 
     // Push a meter JSON to every active subscriber. Single-threaded by design
     // — called from the webServer task only, never concurrent with
@@ -175,6 +183,15 @@ static void wsAuthMiddleware(hsv::HTTPRequest* req, hsv::HTTPResponse* res,
             res->print("WS token missing or invalid");
             return;  // don't call next() → no WS handshake
         }
+        // Four transport slots are shared by telemetry and HTTP commands.
+        // Keep two available for HTTP; extra pages use the status fallback.
+        if (!MeterWebsocketHandler::canSubscribe()) {
+            res->setStatusCode(503);
+            res->setHeader("Retry-After", "3");
+            res->setHeader("Content-Type", "text/plain");
+            res->print("Use HTTP status polling");
+            return;
+        }
         Serial.println("WS-MW: token ok → next()");
     }
     next();
@@ -221,6 +238,16 @@ static std::string readRequestBody(hsv::HTTPRequest* req) {
     return body;
 }
 
+static void runtimeConnectionMiddleware(hsv::HTTPRequest* req, hsv::HTTPResponse* res,
+                                        std::function<void()> next) {
+    const auto path = req->getRequestString();
+    const bool websocket = path == "/api/ws" || path.compare(0, 8, "/api/ws?") == 0;
+    // Two WebSockets share four slots with commands/status. Idle HTTP
+    // keep-alive sockets must not hold the remaining slots for 20 seconds.
+    if (!websocket) res->setHeader("Connection", "close");
+    next();
+}
+
 static void sendJson(hsv::HTTPResponse* res, int code, const String& body) {
     res->setStatusCode(code);
     res->setHeader("Content-Type", "application/json");
@@ -249,6 +276,8 @@ static void h_root(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (LittleFS.exists("/index.html")) {
         fs::File f = LittleFS.open("/index.html", "r");
         if (f) {
+            res->setHeader("Content-Length", std::to_string(f.size()));
+            res->setHeader("Cache-Control", "no-store");
             uint8_t buf[512];
             int n;
             while ((n = f.read(buf, sizeof(buf))) > 0) {
@@ -286,6 +315,23 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     doc["uptime_ms"] = millis();
     doc["reset_reason"] = int(esp_reset_reason());
     doc["firmware_build"] = __DATE__ " " __TIME__;
+    // A source file's __TIME__ can survive an incremental rebuild. Identify
+    // the linked image too, so diagnostics can verify exactly what was flashed.
+    char firmwareId[65]{};
+#if ESP_IDF_VERSION_MAJOR >= 5
+    const auto* description = esp_app_get_description();
+#else
+    const auto* description = esp_ota_get_app_description();
+#endif
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(description->app_elf_sha256); ++i) {
+        firmwareId[2 * i] = hex[description->app_elf_sha256[i] >> 4];
+        firmwareId[2 * i + 1] = hex[description->app_elf_sha256[i] & 15];
+    }
+    doc["firmware_id"] = firmwareId;
+    doc["sdk_version"] = ESP.getSdkVersion();
+    doc["web"]["ws_clients"] = MeterWebsocketHandler::subscribers();
+    doc["web"]["ws_limit"] = 2;
     displayBacklight.writeStatus(doc["display"].to<JsonObject>());
 #ifdef WITH_DISPLAY
     display.writeDiagnostics(doc["lcd"].to<JsonObject>());
@@ -648,6 +694,7 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     // the page fetches one and opens the WS at /api/ws?t=<token>. Browsers
     // don't reliably send Basic Auth on WS upgrades, hence the token dance.
     m_server->registerNode(new hsv::ResourceNode("/api/ws-token",            "GET",  &h_ws_token));
+    m_server->addMiddleware(&runtimeConnectionMiddleware);
     m_server->addMiddleware(&wsAuthMiddleware);
     m_server->registerNode(new hsv::WebsocketNode("/api/ws", &MeterWebsocketHandler::create));
 

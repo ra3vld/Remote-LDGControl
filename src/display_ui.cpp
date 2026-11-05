@@ -1,6 +1,9 @@
 #ifdef WITH_DISPLAY
 
 #include "display_ui.h"
+#ifdef ARDUINO_ARCH_ESP32
+#include <esp_heap_caps.h>
+#endif
 #include "config_manager.h"
 #include <WiFi.h>
 #include <Wire.h>
@@ -333,8 +336,10 @@ void DisplayUI::updateMeterScale() {
 void DisplayUI::updateState(const tuner_state_t& state) {
     const auto lastAntenna = ldg::lastKnownAntenna(state);
     const bool unconfirmed = state.antenna == ANT_UNKNOWN && ldg::knownAntenna(lastAntenna);
-    if (m_antennaInit != state.antennaInit || m_activeAnt != state.antenna || m_lastAnt != lastAntenna) {
+    if (m_antennaInit != state.antennaInit || m_antennaAuto != state.antennaAuto ||
+        m_activeAnt != state.antenna || m_lastAnt != lastAntenna) {
         m_antennaInit = state.antennaInit;
+        m_antennaAuto = state.antennaAuto;
         const char* text = "";
         switch (state.antennaInit) {
             case ldg::AntennaInit::Waiting: text = "ANT: waiting for live power"; break;
@@ -345,7 +350,32 @@ void DisplayUI::updateState(const tuner_state_t& state) {
             case ldg::AntennaInit::Error: text = "ANT: check failed - select manually"; break;
             default: break;
         }
-        if (unconfirmed) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: last %u (unconfirmed)", unsigned(lastAntenna));
+        const char* reason = nullptr;
+        if (state.antennaInit == ldg::AntennaInit::Ready) switch (state.antennaAuto) {
+            case ldg::AntennaAuto::HighPower: reason = "blocked: power >=100W"; break;
+            case ldg::AntennaAuto::InvalidPower: reason = "blocked: no fresh power"; break;
+            case ldg::AntennaAuto::Unassigned: reason = "table: do not switch"; break;
+            case ldg::AntennaAuto::ManualSelection: reason = "user selected manually"; break;
+            case ldg::AntennaAuto::Manual: reason = "cancelled by user"; break;
+            case ldg::AntennaAuto::WaitingRfOff: reason = "unknown mode: wait RF off"; break;
+            case ldg::AntennaAuto::Retrying: reason = "retrying selection"; break;
+            case ldg::AntennaAuto::WaitingMeter: reason = "waiting for fresh power"; break;
+            case ldg::AntennaAuto::InitialBand: reason = "initial band preserved"; break;
+            case ldg::AntennaAuto::AlreadySelected: reason = "already selected"; break;
+            case ldg::AntennaAuto::Error: reason = "selection not confirmed"; break;
+            case ldg::AntennaAuto::Tuning: reason = "selected; memory tuning"; break;
+            case ldg::AntennaAuto::TuneFailed: reason = "selected; MEM TUNE failed"; break;
+            case ldg::AntennaAuto::TuneNoRf: reason = "selected; no RF for tuning"; break;
+            case ldg::AntennaAuto::TuneHighPower: reason = "selected; tune blocked >=100W"; break;
+            case ldg::AntennaAuto::TuneInvalidPower: reason = "selected; no fresh tune power"; break;
+            case ldg::AntennaAuto::TuneBandChanged: reason = "selected; tune band changed"; break;
+            case ldg::AntennaAuto::TuneManual: reason = "selected; tune cancelled by user"; break;
+            case ldg::AntennaAuto::WaitingTuner: reason = "waiting tuner; choice saved"; break;
+            default: break;
+        }
+        if (unconfirmed && reason) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: last %u ?; %s", unsigned(lastAntenna), reason);
+        else if (unconfirmed) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: last %u (unconfirmed)", unsigned(lastAntenna));
+        else if (reason) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: Ready; %s", reason);
         else lv_label_set_text(m_antennaInitLabel, text);
         lv_obj_set_style_text_color(m_antennaInitLabel,
             lv_color_hex(unconfirmed ? 0xfbbf24 : state.antennaInit == ldg::AntennaInit::Error ? 0xff5555 : 0x888888), LV_PART_MAIN);
@@ -911,11 +941,14 @@ void DisplayUI::displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_colo
 
 void DisplayUI::displayMonitor(lv_disp_drv_t*, uint32_t timeMs, uint32_t pixels) {
     auto* self = s_instance;
+    lv_mem_monitor_t memory;
+    lv_mem_monitor(&memory); // LVGL owner task; HTTP only reads the copy.
     portENTER_CRITICAL(&self->m_diagnosticsMux);
     auto& d = self->m_diagnostics;
     ++d.frames; d.frameMs = timeMs; d.maxFrameMs = std::max(d.maxFrameMs, timeMs);
     d.pixels = pixels; d.flushUs = self->m_frameFlushUs; d.drawUs = self->m_frameDrawUs;
     d.sentPixels = self->m_frameSentPixels;
+    d.lvglMaxUsed = memory.max_used; d.lvglFree = memory.free_size;
     portEXIT_CRITICAL(&self->m_diagnosticsMux);
     self->m_frameFlushUs = self->m_frameDrawUs = self->m_frameSentPixels = 0;
     self->m_previousValid = self->m_face.valid();
@@ -935,11 +968,13 @@ void DisplayUI::writeDiagnostics(JsonObject doc) const {
     doc["pixels"] = d.pixels; doc["flush_us"] = d.flushUs; doc["draw_us"] = d.drawUs;
     doc["face_bytes"] = d.faceBytes; doc["face_build_us"] = d.faceBuildUs;
     doc["sent_pixels"] = d.sentPixels; doc["delta_flushes"] = d.deltaFlushes;
+    doc["lvgl_max_used"] = d.lvglMaxUsed; doc["lvgl_free"] = d.lvglFree;
     doc["face_builds"] = d.faceBuilds; doc["cache_hits"] = d.faceHits; doc["vector_draws"] = d.vectorDraws;
 #ifdef ARDUINO_ARCH_ESP32
     doc["spi_write_hz"] = SPI_FREQUENCY;
-    doc["free_heap"] = ESP.getFreeHeap();
-    doc["largest_block"] = ESP.getMaxAllocHeap();
+    doc["free_heap"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    doc["largest_block"] = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    doc["min_free_heap"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 #endif
 }
 

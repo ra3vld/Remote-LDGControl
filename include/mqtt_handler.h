@@ -31,6 +31,7 @@ private:
     bool publish(const char* topic, const char* payload, bool retained) override;
     bool subscribe(const char* topic) override;
     void packetTooLarge(const char* topic) override;
+    void memoryUnavailable() override { reportError(ldg::MqttError::Memory); }
     void setConnectionState(ldg::MqttConnection state);
     void reportError(ldg::MqttError error, int code = 0, const char* topic = nullptr);
     void recoverOperation(ldg::MqttError operation, const char* topic);

@@ -1,0 +1,11 @@
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -540,2 +540,8 @@
+             Serial.println("LIB: post drainBuffer");
++            // Middleware can reject an upgrade. Never turn its HTTP error
++            // into a persistent WebSocket which occupies a server slot.
++            if (res.getStatusCode() != 101 || isClosed()) {
++              if (!isClosed()) _connectionState = STATE_BODY_FINISHED;
++              break;
++            }
+             _wsHandler = ((WebsocketNode*)resolvedResource.getMatchingNode())->newHandler();

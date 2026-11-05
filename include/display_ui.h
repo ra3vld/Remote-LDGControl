@@ -56,6 +56,7 @@ private:
     lv_obj_t* m_ipLabel;
     lv_obj_t* m_antennaInitLabel = nullptr;
     ldg::AntennaInit m_antennaInit = ldg::AntennaInit::Unknown;
+    ldg::AntennaAuto m_antennaAuto = ldg::AntennaAuto::Disabled;
 
     // Buttons
     lv_obj_t* m_btnMemTune;
@@ -106,6 +107,7 @@ private:
         uint32_t flushUs = 0, drawUs = 0, faceBuildUs = 0, faceBytes = 0;
         uint32_t faceBuilds = 0, faceHits = 0, vectorDraws = 0;
         uint32_t sentPixels = 0, deltaFlushes = 0;
+        uint32_t lvglMaxUsed = 0, lvglFree = 0;
     };
     Diagnostics m_diagnostics;
     uint32_t m_frameFlushUs = 0, m_frameDrawUs = 0;

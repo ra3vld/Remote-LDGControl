@@ -245,6 +245,19 @@ brightness settings/calibration. See [display settings](docs/display-settings.md
 for the complete API and persistence rules.
 `node tests/test_settings_web.cjs` checks runtime saves, MQTT reconnect,
 single status polling and uptime diagnostics.
+If WebSocket meter messages stop, the status poll also updates the meter and
+confirmed controls. A late HTTP response cannot overwrite a newer WebSocket
+snapshot. Repeated socket reconnects preserve fresh HTTP readings; stale readings
+are cleared if both transports fail. `node tests/test_live_status_web.cjs` covers
+this fallback.
+The managed HTTP dependency keeps request headers and WebSocket handlers alive
+until their active request/callback returns; closing a socket during I/O must not
+reboot the controller. Socket writes have a deadline, truncated/oversized incoming
+frames are rejected, and rejected upgrades never create a WebSocket handler.
+At most two of the four server connections carry WebSockets; additional pages
+use HTTP polling, leaving capacity for status and commands.
+`python -m unittest discover -s tests -p 'test_*.py'` includes that lifetime
+regression, using the patched production close paths.
 
 ANT 1/ANT 2 select the named port; they are not two copies of the hardware
 toggle. Repeated confirmed selections do not switch relays. The mode button
@@ -252,16 +265,77 @@ offers Set Manual while AUTO is confirmed and Set Auto otherwise. The LCD
 shows waiting/OK/not confirmed for commands; waiting persists until completion.
 The bypass button enables bypass (`P`); no bypass-off command is documented.
 
+Band selection in confirmed AUTO temporarily selects MANUAL, checks fresh power
+again, selects the antenna, performs one memory tune and restores AUTO. Memory
+tuning requires the new antenna's acknowledgement and a fresh post-selection
+packet with RF present, power below 100 W and the same band. No tune starts if a
+manual command has arrived. Tuning is not added to manual antenna buttons,
+startup probing, an already selected antenna, or MANUAL/BYPASS operation.
+The controller waits for the tuning result before restoring AUTO, including
+after a failed/expired tune; it never repeats the tuning cycle automatically.
+The screens distinguish tuning from its failure/skip reason, while
+`uart.antenna_selection.memory_tune` and `memory_tune_ack` retain the result
+separately from the subsequent AUTO command. If selection fails, one recovery
+attempt rechecks fresh power/band and synchronizes before selecting the named
+port. A lost ACK may hide a completed switch, so recovery uses returned port
+ACKs to reach the requested antenna rather than blindly repeating a toggle. `uart.antenna_selection` records the selection and mode recovery
+separately from the last wire command. The protocol has no mode query. With band
+automation enabled, the controller confirms AUTO once after the startup antenna
+check. An explicit manual command suppresses this startup mode write. If the
+mode remains unknown after a failed command, selection waits for fresh zero-power
+telemetry. Manual commands cancel that waiting selection.
+If power telemetry pauses before selection, the controller restarts metering
+once and waits up to 1500 ms for an actual fresh packet. The same bounded wait
+follows the MANUAL guard and precedes a recovery attempt. Held display readings
+never authorize relay switching; high power or a manual command cancels a
+pending choice. Both screens distinguish waiting for telemetry from a timeout.
+The MANUAL guard and AUTO restoration each allow one synchronized retry.
+If MANUAL is still unconfirmed, no antenna command is sent. The choice is saved
+as `waiting_tuner`; AUTO is not restarted on the old antenna. One deferred
+recovery is allowed after 20 seconds from the first guard attempt, or sooner
+after a fresh actual zero-power packet. This does not require the old tune to
+succeed. If that recovery is also blocked, one final recovery waits for fresh
+zero power. Missing telemetry preserves the waiting choice; a manual command,
+power reaching 100 W, a settings change, or a newly confirmed band cancels or
+replaces it. `uart.antenna_selection` reports `deferred` and `recovery` separately
+from the wire ACK. No documented serial command aborts an active LDG tune.
+If both AUTO restore attempts fail, a fresh zero-power packet permits one
+additional restoration attempt; a manual command cancels it. Mode attempts are
+recorded separately in `uart.antenna_selection`.
+The UART worker also checks meter liveness independently of antenna decisions.
+After 1000 ms without a valid frame, it retries the meter-start request with a
+1000 ms retry interval. This does not repeat antenna probing or relay commands;
+explicit meter stop and queued manual commands take priority. `uart.meter_restarts`
+counts these attempts. `antenna_auto_band` identifies the band of the automatic
+decision; the web status marks an old selection when telemetry is stale.
+`/api/status` also reports `firmware_id` (the linked ELF SHA-256) and
+`sdk_version`, since an incremental build can retain an older timestamp from
+an unchanged source file. Serial logs include Wi-Fi disconnection reasons and
+the age of the web task's last completed loop.
+On boards without PSRAM, HTTP admits clients only with at least 16 KiB of free
+heap and an 8 KiB contiguous block. Low memory rejects a new client;
+failure to allocate the optional response cache falls back to streaming.
+HTTP writes pause below 12 KiB of free heap within their existing timeout.
+The display uses a 32 KiB LVGL pool; `lcd.lvgl_max_used` reports its peak use.
+Memory limits and diagnostics count byte-addressable internal RAM, excluding
+word-only IRAM reported by `ESP.getFreeHeap()`. MQTT defers allocations below
+8 KiB and serializes packets into a reusable buffer without growing a string.
+
 ### WebSocket telemetry
 
 The browser obtains a single-use token from authenticated `GET /api/ws-token`,
 then opens `/api/ws?t=<token>` for JSON meter snapshots. The `/api/events` SSE
 route is not used. HTTP Basic Auth protects the page, status, token and command
 endpoints.
+Two WebSocket clients share four transport slots with HTTP. Extra pages use
+HTTP polling. Ordinary HTTP responses close their connection immediately,
+so idle keep-alive sessions cannot block status requests or commands.
 
 ## MQTT and Home Assistant
 
 MQTT is optional: leave **Settings → MQTT → Broker** empty to disable it.
+Device topics use the station MAC read before Wi-Fi initialization, including
+on Arduino 3; an all-zero address is rejected.
 
 The header shows live MQTT status; click it to open **Settings → MQTT** for the
 active broker, connection attempts, retry delay, and errors with PubSubClient
@@ -539,10 +613,15 @@ tuner; a display proxy does not forward its local table to another controller.
 
 Three consecutive valid RF frames confirm a band. An invalid frame, unknown
 band, RF silence, or a gap over 500 ms breaks confirmation. The first confirmed
-band is a baseline and preserves the initial port. Each subsequent change gets
-one selection opportunity, and is consumed even when skipped: any sample at
+band also selects its assigned antenna, with the same power and manual-command
+guards as subsequent changes. If startup checking has not finished, this choice
+waits for successful checking; startup toggles still require fresh actual zero
+power. A confirmed manual antenna choice before the first band is respected.
+Each band gets one selection operation, including at most one synchronized recovery attempt,
+and is consumed even when skipped: any sample at
 100 W or above during confirmation, invalid power, an unassigned band, or a
-failed command prevents a delayed/repeated selection on that band. Power is
+failed antenna command prevents another selection later on that band. Busy
+MANUAL negotiation uses the bounded deferred recovery described above. Power is
 checked again immediately before starting the selection. Only actual local
 UART frames drive decisions; retained MQTT data and held band labels do not.
 
@@ -639,7 +718,8 @@ UART parsing, local commands, remote networking, MQTT, web serving and LVGL
 have separate owners. Display buttons enqueue commands without waiting for
 UART or DNS. All interfaces select the same active tuner. A queued remote
 command fails if its source disappears; it is never redirected to the local
-tuner. Lost command responses are not retried automatically.
+tuner. General command responses are not retried automatically; named automatic
+antenna selection has the single guarded recovery attempt described above.
 
 The wire protocol provides antenna toggle only. When the initial antenna is
 unknown, an absolute selection may require two acknowledged toggles to reach

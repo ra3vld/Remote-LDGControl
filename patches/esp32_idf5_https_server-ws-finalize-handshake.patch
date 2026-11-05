@@ -1,9 +1,10 @@
 --- a/src/HTTPConnection.cpp	2026-06-11 08:17:02.874563961 -0500
 +++ b/src/HTTPConnection.cpp	2026-06-11 11:01:16.451176730 -0500
-@@ -520,8 +520,25 @@
+@@ -520,3 +520,20 @@
  
            // Finally, after the handshake is done, we create the WebsocketHandler and change the internal state.
-           if(websocketRequested) {
+-          if(websocketRequested) {
++          if (websocketRequested) {
 +            Serial.println("LIB: websocketRequested branch entered");
 +            // LOCAL PATCH (Remote-LDGControl): the existing handleWebsocketHandshake
 +            // sets the 101 status + Upgrade headers on res but never writes
@@ -21,9 +22,3 @@
 +                          res.getStatusCode(), (int)res.isHeaderWritten());
 +            res.drainBuffer(true);
 +            Serial.println("LIB: post drainBuffer");
-             _wsHandler = ((WebsocketNode*)resolvedResource.getMatchingNode())->newHandler();
--            _wsHandler->initialize(this);  // make websocket with this connection 
-+            _wsHandler->initialize(this);  // make websocket with this connection
-             _connectionState = STATE_WEBSOCKET;
-           } else {
-             // Handling the request is done

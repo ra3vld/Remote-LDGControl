@@ -4,11 +4,57 @@
 #include <set>
 #include <vector>
 #include <limits>
+#include <new>
+#include <cstdlib>
+
+// Reproduce the exact allocation size from the ESP32 RF panic. ArduinoJson
+// allocates its document with malloc; growing std::string requests new(31).
+static bool rejectStringGrowth = false;
+void* operator new(std::size_t size) {
+    if (rejectStringGrowth && size == 31) throw std::bad_alloc();
+    if (void* result = std::malloc(size)) return result;
+    throw std::bad_alloc();
+}
+void operator delete(void* memory) noexcept { std::free(memory); }
 
 using namespace ldg;
 
 void setUp() {}
 void tearDown() {}
+
+void test_rf_state_serialization_does_not_grow_a_heap_string() {
+    struct FixedTransport : MqttTransport {
+        char last[MQTT_PACKET_SIZE]{};
+        unsigned writes = 0;
+        bool publish(const char*, const char* payload, bool) override {
+            ++writes;
+            snprintf(last, sizeof(last), "%s", payload);
+            return true;
+        }
+        bool subscribe(const char*) override { return true; }
+    } transport;
+    MqttSession session(transport, mqttIdentity("aa:bb:cc:01:02:03"), nullptr);
+    TEST_ASSERT_TRUE(session.connected(false, "ESP32", "http://192.0.2.1/"));
+    tuner_state_t state;
+    state.meterValid = true;
+    state.meter.forward_power_watts = 0;
+    for (unsigned i = 0; i < MQTT_ENTITY_COUNT; ++i) session.loop(0, state);
+    const auto before = transport.writes;
+    state.meter.forward_power_watts = 40.108841595;
+    state.meter.reflected_power_watts = 0.5;
+    state.meter.swr = 1.25;
+    session.requestImmediate();
+    bool allocationFailed = false;
+    rejectStringGrowth = true;
+    try { session.loop(1000, state); }
+    catch (const std::bad_alloc&) { allocationFailed = true; }
+    rejectStringGrowth = false;
+    TEST_ASSERT_FALSE(allocationFailed);
+    TEST_ASSERT_EQUAL_UINT(before + 1, transport.writes);
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, transport.last));
+    TEST_ASSERT_DOUBLE_WITHIN(0.000001, 40.108841595, doc["fwd_power"].as<double>());
+}
 
 static tuner_state_t measured(double forward = 100, double reflected = 1, double swr = 1.5) {
     tuner_state_t state;
@@ -633,6 +679,7 @@ void test_session_failed_publishes_retry_and_keep_newest_state() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_rf_state_serialization_does_not_grow_a_heap_string);
     RUN_TEST(test_idle_interval_including_zero);
     RUN_TEST(test_absolute_and_relative_threshold_boundaries);
     RUN_TEST(test_active_interval_accumulation_and_latest_snapshot);

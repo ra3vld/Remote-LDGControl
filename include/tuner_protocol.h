@@ -83,6 +83,9 @@ private:
     void processResponseByte(uint8_t b);
     void processMeterByte(uint8_t b);
     void publishMeterData();
+    void selectBandAntenna(tuner_ant_t antenna, uint8_t recovery = 0);
+    void retuneBandAntenna(tuner_band_t band, uint32_t manualRevision, uint32_t previousFrames,
+                          ldg::AntennaSelectionDiagnostics& trace);
     tuner_band_t decodeBand(uint16_t indicator);
 
     HardwareSerial* m_serial;
@@ -104,9 +107,14 @@ private:
     State m_state;
 
     tuner_mode_t m_mode;
+    bool m_restoreAutoAfterRf = false;
+    bool m_initialModeHandled = false;
     tuner_ant_t m_antenna;
     bool m_connected;
     bool m_meterActive;
+    bool m_meterRequested = false;
+    uint32_t m_lastMeterStartMs = 0;
+    static constexpr uint32_t METER_RESTART_INTERVAL_MS = 1000;
 
     // Response handling
     volatile char m_pendingResponse;

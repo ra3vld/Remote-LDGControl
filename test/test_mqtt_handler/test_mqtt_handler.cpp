@@ -25,6 +25,16 @@ static tuner_state_t state() { return {}; }
 static tuner_state_t observedState;
 static tuner_state_t observed() { return observedState; }
 
+void test_identity_is_available_before_wifi_starts() {
+    WiFiClient wifi;
+    WiFi.mac = "00:00:00:00:00:00";
+    WiFi.wifiStatus = 0;
+    MqttHandler mqtt;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi, nullptr, state));
+    TEST_ASSERT_NOT_EQUAL(std::string::npos, Serial.output.find("ldg/tuner/aabbcc010203"));
+    TEST_ASSERT_TRUE(ldg::mqttIdentity("00:00:00:00:00:00").base.empty());
+}
+
 void test_readings_observed_offline_survive_reconnect_and_session_reconfiguration() {
     WiFiClient wifi;
     MqttHandler mqtt;
@@ -60,7 +70,7 @@ void test_disabled_and_initialization_error_are_distinct() {
     TEST_ASSERT_FALSE(disabled.begin(wifi, nullptr, state));
     TEST_ASSERT_TRUE(disabled.getStatus().state == ldg::MqttConnection::Disabled);
     configManager.config = DeviceConfig{};
-    WiFi.mac = "invalid";
+    WiFi.readMacOk = false;
     MqttHandler invalid;
     TEST_ASSERT_FALSE(invalid.begin(wifi, nullptr, state));
     TEST_ASSERT_TRUE(invalid.getStatus().state == ldg::MqttConnection::Error);
@@ -234,6 +244,7 @@ void test_mqtt_initially_disabled_can_be_enabled_without_reboot() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_identity_is_available_before_wifi_starts);
     RUN_TEST(test_disabled_and_initialization_error_are_distinct);
     RUN_TEST(test_readings_observed_offline_survive_reconnect_and_session_reconfiguration);
     RUN_TEST(test_broker_failures_retry_and_recovery_preserves_error);

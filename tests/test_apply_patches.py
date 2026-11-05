@@ -66,6 +66,17 @@ class ApplyPatchesTests(unittest.TestCase):
         self.apply()
         self.assertEqual(self.target.read_bytes(), b"unrelated\nbegin\nnew\nadded\nend\n")
 
+    def test_real_websocket_finalize_patch_is_idempotent(self):
+        diff = SCRIPT.parent.parent / "patches" / "esp32_idf5_https_server-ws-finalize-handshake.patch"
+        target = self.lib / "src" / "HTTPConnection.cpp"
+        target.write_bytes(b"\n          // Finally, after the handshake is done, we create the WebsocketHandler and change the internal state.\n          if(websocketRequested) {\n            factory();\n")
+        hook.apply_patch(diff, self.lib)
+        expected = target.read_bytes()
+        for _ in range(3):
+            hook.apply_patch(diff, self.lib)
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual(expected.count(b"res.drainBuffer(true);"), 1)
+
     def test_incompatible_dependency_fails_without_writing(self):
         content = b"begin\nupstream changed\nend\n"
         self.target.write_bytes(content)

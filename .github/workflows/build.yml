@@ -31,6 +31,7 @@ jobs:
           node tests/test_control_web.cjs
           node tests/test_settings_web.cjs
           node tests/test_display_settings_web.cjs
+          node tests/test_live_status_web.cjs
 
       - name: Build all environments
         run: |

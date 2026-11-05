@@ -1,0 +1,22 @@
+--- a/src/WebsocketHandler.cpp
++++ b/src/WebsocketHandler.cpp
+@@ -104,13 +104,13 @@
+   } else if (frame.len == 126) {
+     uint16_t tempLen;
+-    _con->readBuffer((uint8_t*)&tempLen, sizeof(tempLen));
++    if (_con->readBuffer((uint8_t*)&tempLen, sizeof(tempLen)) != sizeof(tempLen)) return -1;
+     payloadLen = ntohs(tempLen);
+   } else if (frame.len == 127) {
+-    uint64_t tempLen;
+-    _con->readBuffer((uint8_t*)&tempLen, sizeof(tempLen));
+-    payloadLen = ntohl((uint32_t)tempLen);
+-  }
++    // 64-bit lengths exceed this telemetry endpoint's bounded input size.
++    return -1;
++  }
++  if (payloadLen > HTTPS_CONNECTION_DATA_CHUNK_SIZE) return -1;
+   if (frame.mask == 1) {
+-    _con->readBuffer(mask, sizeof(mask));
++    if (_con->readBuffer(mask, sizeof(mask)) != sizeof(mask)) return -1;
+   }
+ 

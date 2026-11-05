@@ -153,12 +153,13 @@
         .status-row {
             display: flex;
             justify-content: space-between;
+            gap: 0.6rem;
             margin-bottom: 0.2rem;
         }
 
         .status-row:last-child { margin-bottom: 0; }
         .status-row span:first-child { color: var(--text-secondary); }
-        .status-row span:last-child { color: var(--text-primary); font-weight: 500; }
+        .status-row span:last-child { color: var(--text-primary); font-weight: 500; min-width: 0; text-align: right; overflow-wrap: anywhere; }
 
         .button-stack { display: flex; flex-direction: column; gap: 0.35rem; }
 
@@ -1077,6 +1078,9 @@
         // SSE connection
         let ws = null;
         let wsReconnectTimer = null;
+        let wsMeterGeneration = 0;
+        let wsLastMeterAt = null;
+        let httpMeterAt = null;
 
         async function connectWS() {
             const statusEl = document.getElementById('connectionStatus');
@@ -1106,6 +1110,7 @@
                 // responses that were started before this connection opened.
                 meterScaleEpoch++;
                 meterScaleRevision = null;
+                wsLastMeterAt = null;
                 statusEl.innerHTML = '<span class="status-dot"></span> Connected';
             };
 
@@ -1115,12 +1120,20 @@
                 // mode, antenna.
                 try {
                     updateMeter(JSON.parse(e.data));
+                    wsMeterGeneration++;
+                    wsLastMeterAt = Date.now();
+                    httpMeterAt = null;
                 } catch (err) { /* ignore non-JSON frames */ }
             };
 
             ws.onclose = () => {
-                statusEl.innerHTML = '<span class="status-dot offline"></span> Disconnected';
-                updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0 });
+                wsMeterGeneration++;
+                wsLastMeterAt = null;
+                const httpFresh = httpMeterAt !== null && Date.now() - httpMeterAt <= 5000;
+                statusEl.innerHTML = httpFresh ? '<span class="status-dot"></span> Connected (HTTP)'
+                    : '<span class="status-dot offline"></span> Disconnected';
+                // A failing socket must not erase the working HTTP transport.
+                if (!httpFresh) updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0 });
                 if (!wsReconnectTimer) {
                     wsReconnectTimer = setTimeout(() => {
                         wsReconnectTimer = null;
@@ -1210,13 +1223,22 @@
             clearTimeout(mqttStatusTimer);
             if (!document.hidden) {
                 const epoch = meterScaleEpoch;
+                const generation = wsMeterGeneration;
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 5000);
                 try {
                     const resp = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
                     const data = await resp.json();
-                    if (applyMeterScale(data, epoch)) drawMeter();
+                    // HTTP also carries the complete meter/control snapshot.
+                    // Use it if the socket is silent; never replace a newer
+                    // WebSocket message with a request that started earlier.
+                    if (epoch === meterScaleEpoch && generation === wsMeterGeneration &&
+                        (wsLastMeterAt === null || Date.now() - wsLastMeterAt > 1500)) {
+                        updateMeter(data);
+                        httpMeterAt = Date.now();
+                        document.getElementById('connectionStatus').innerHTML = '<span class="status-dot"></span> Connected (HTTP)';
+                    } else if (applyMeterScale(data, epoch)) drawMeter();
                     if (!data.mqtt) throw new Error('MQTT diagnostics missing; update firmware');
                     updateMqttStatus(data.mqtt);
                     updateBacklightStatus(data.display);
@@ -1224,6 +1246,11 @@
                         ? 'Device uptime: ' + Math.floor(data.uptime_ms / 1000) + ' s'
                           + (data.firmware_build ? ' · Build: ' + data.firmware_build : '') : '';
                 } catch (err) {
+                    if (httpMeterAt !== null && Date.now() - httpMeterAt > 5000) {
+                        httpMeterAt = null;
+                        updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0 });
+                        document.getElementById('connectionStatus').innerHTML = '<span class="status-dot offline"></span> Disconnected';
+                    }
                     document.getElementById('mqttStatusText').textContent = 'MQTT: status unavailable';
                     document.getElementById('mqttStatusDot').className = 'status-dot disabled';
                     document.getElementById('mqttStatusMessage').textContent = 'Live status unavailable';
@@ -1271,14 +1298,34 @@
         function updateAntennaStatus(data) {
             const init = { unknown: '--', waiting_meter: 'Ожидание данных', waiting_rf_off: 'Ожидание окончания передачи',
                 checking: 'Проверка', restoring: 'Возврат исходной антенны', ready: 'Готово', error: 'Ошибка проверки' };
-            const auto = { disabled: 'Выключен', idle: 'Ожидание смены диапазона', pending: 'Выбор антенны',
-                selected: 'Антенна выбрана', already_selected: 'Уже выбрана', skipped_power: 'Пропущен: мощность ≥100 Вт',
-                invalid_power: 'Нет свежей мощности', unassigned: 'Не задан для диапазона', uninitialized: 'Антенна не определена',
-                manual_override: 'Ручной выбор', error: 'Тюнер не подтвердил выбор' };
+            const auto = { disabled: 'Запрет переключения: автоматика выключена', idle: 'Ожидание смены диапазона', pending: 'Выбор антенны',
+                selected: 'Антенна выбрана', already_selected: 'Уже выбрана', skipped_power: 'Запрет переключения: мощность ≥100 Вт',
+                invalid_power: 'Запрет переключения: нет свежей корректной мощности',
+                unassigned: 'В таблице задано «Не переключать»', uninitialized: 'Запрет переключения: антенна не определена',
+                manual_override: 'Отменено ручной командой', manual_selection: 'Пользователь переключил антенну вручную',
+                initial_band: 'Первый диапазон: исходная антенна сохранена', retrying: 'Повторный выбор антенны',
+                waiting_meter: 'Ожидание свежего измерения мощности',
+                tuning: 'Антенна выбрана; выполняется MEM TUNE', tune_failed: 'Антенна выбрана; MEM TUNE не подтверждён',
+                tune_no_rf: 'Антенна выбрана; MEM TUNE пропущен: нет передачи',
+                tune_power_limit: 'Антенна выбрана; MEM TUNE запрещён: мощность ≥100 Вт',
+                tune_invalid_power: 'Антенна выбрана; MEM TUNE пропущен: нет свежей корректной мощности',
+                tune_band_changed: 'Антенна выбрана; MEM TUNE отменён: диапазон изменился',
+                tune_manual_override: 'Антенна выбрана; MEM TUNE отменён ручной командой',
+                waiting_tuner: 'Тюнер не подтвердил MANUAL: выбор сохранён, ожидание повторной попытки или конца передачи',
+                error: 'Тюнер не подтвердил выбор', waiting_rf_off: 'Режим неизвестен: ожидание окончания передачи' };
             if (data.antenna_init !== undefined)
                 document.getElementById('antennaInitStatus').textContent = init[data.antenna_init] || '--';
-            if (data.antenna_auto !== undefined)
-                document.getElementById('antennaAutoStatus').textContent = auto[data.antenna_auto] || '--';
+            if (data.antenna_auto !== undefined) {
+                let text = auto[data.antenna_auto] || '--';
+                if ((data.antenna_auto === 'selected' || data.antenna_auto === 'already_selected') &&
+                    antennaBands.includes(data.antenna_auto_band)) {
+                    text += ' для ' + data.antenna_auto_band;
+                    if (data.band_held === true) text += '; нет свежих данных тюнера';
+                    else if (data.band && data.band !== data.antenna_auto_band)
+                        text += '; ожидается подтверждение диапазона ' + data.band;
+                }
+                document.getElementById('antennaAutoStatus').textContent = text;
+            }
         }
 
         async function loadAntennaSettings() {

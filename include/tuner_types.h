@@ -69,7 +69,9 @@ namespace ldg {
 enum class AntennaInit : uint8_t { Unknown, Waiting, WaitingRfOff, Checking, Restoring, Ready, Error };
 enum class AntennaAuto : uint8_t {
     Disabled, Idle, Pending, Selected, AlreadySelected, HighPower,
-    InvalidPower, Unassigned, Uninitialized, Manual, Error
+    InvalidPower, Unassigned, Uninitialized, Manual, Error, WaitingRfOff,
+    ManualSelection, InitialBand, Retrying, WaitingMeter, Tuning, TuneFailed,
+    TuneNoRf, TuneHighPower, TuneInvalidPower, TuneBandChanged, TuneManual, WaitingTuner
 };
 inline const char* antennaInitName(AntennaInit state) {
     switch (state) {
@@ -94,6 +96,19 @@ inline const char* antennaAutoName(AntennaAuto state) {
         case AntennaAuto::Uninitialized: return "uninitialized";
         case AntennaAuto::Manual: return "manual_override";
         case AntennaAuto::Error: return "error";
+        case AntennaAuto::WaitingRfOff: return "waiting_rf_off";
+        case AntennaAuto::ManualSelection: return "manual_selection";
+        case AntennaAuto::InitialBand: return "initial_band";
+        case AntennaAuto::Retrying: return "retrying";
+        case AntennaAuto::WaitingMeter: return "waiting_meter";
+        case AntennaAuto::Tuning: return "tuning";
+        case AntennaAuto::TuneFailed: return "tune_failed";
+        case AntennaAuto::TuneNoRf: return "tune_no_rf";
+        case AntennaAuto::TuneHighPower: return "tune_power_limit";
+        case AntennaAuto::TuneInvalidPower: return "tune_invalid_power";
+        case AntennaAuto::TuneBandChanged: return "tune_band_changed";
+        case AntennaAuto::TuneManual: return "tune_manual_override";
+        case AntennaAuto::WaitingTuner: return "waiting_tuner";
         default: return "disabled";
     }
 }
@@ -122,6 +137,7 @@ struct tuner_state_t {
     tuner_band_t lastBand = BAND_UNKNOWN;
     ldg::AntennaInit antennaInit = ldg::AntennaInit::Unknown;
     ldg::AntennaAuto antennaAuto = ldg::AntennaAuto::Disabled;
+    tuner_band_t antennaAutoBand = BAND_UNKNOWN;
 };
 
 namespace ldg {

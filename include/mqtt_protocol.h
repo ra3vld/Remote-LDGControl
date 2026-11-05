@@ -27,7 +27,7 @@ inline MqttIdentity mqttIdentity(const char* macAddress) {
         if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return {};
         id.mac += c;
     }
-    if (id.mac.size() != 12) return {};
+    if (id.mac.size() != 12 || id.mac == "000000000000") return {};
     id.node = "ldg_" + id.mac;
     id.base = "ldg/tuner/" + id.mac;
     return id;
@@ -83,6 +83,7 @@ inline void writeState(JsonDocument& doc, const tuner_state_t& state, bool textE
     doc["band_held"] = bandIsHeld(state);
     doc["antenna_init"] = antennaInitName(state.antennaInit);
     doc["antenna_auto"] = antennaAutoName(state.antennaAuto);
+    doc["antenna_auto_band"] = bandName(state.antennaAutoBand);
     doc["antenna_confirmed"] = knownAntenna(state.antenna);
     if (textEnums) {
         doc["mode"] = modeName(state.mode);
@@ -118,7 +119,8 @@ inline tuner_state_t readWebState(JsonVariantConst doc) {
     for (unsigned i = 0; i <= unsigned(AntennaInit::Error); ++i)
         if (!strcmp(init, antennaInitName(static_cast<AntennaInit>(i)))) state.antennaInit = static_cast<AntennaInit>(i);
     const char* automatic = doc["antenna_auto"] | "disabled";
-    for (unsigned i = 0; i <= unsigned(AntennaAuto::Error); ++i)
+    state.antennaAutoBand = parseBand(doc["antenna_auto_band"].as<const char*>());
+    for (unsigned i = 0; i <= unsigned(AntennaAuto::WaitingTuner); ++i)
         if (!strcmp(automatic, antennaAutoName(static_cast<AntennaAuto>(i)))) state.antennaAuto = static_cast<AntennaAuto>(i);
     return state;
 }

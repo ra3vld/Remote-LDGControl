@@ -40,7 +40,12 @@ void setUp() {
     render();
     TFT_eSPI::instance->flushes.clear();
 }
-void tearDown() { delete ui; ui=nullptr; lv_deinit(); }
+void tearDown() {
+    lv_mem_monitor_t memory;
+    lv_mem_monitor(&memory);
+    TEST_ASSERT_LESS_THAN_UINT(LV_MEM_SIZE - 4096, memory.max_used);
+    delete ui; ui=nullptr; lv_deinit();
+}
 
 void test_scale_label_is_visible_and_matches_the_dial() {
     tuner_state_t state; state.meterValid=true; state.meter.forward_power_watts=25;
@@ -371,6 +376,33 @@ void test_antenna_initialization_status_is_visible_and_changes_without_recreatin
     }
 }
 
+void test_automatic_antenna_reasons_are_visible_on_lcd() {
+    tuner_state_t state;
+    state.antennaInit = ldg::AntennaInit::Ready;
+    state.antenna = state.lastAntenna = ANT_A;
+    auto* screen = lv_scr_act();
+    for (auto item : {std::make_pair(ldg::AntennaAuto::HighPower, "ANT: Ready; blocked: power >=100W"),
+                      std::make_pair(ldg::AntennaAuto::InvalidPower, "ANT: Ready; blocked: no fresh power"),
+                      std::make_pair(ldg::AntennaAuto::Unassigned, "ANT: Ready; table: do not switch"),
+                      std::make_pair(ldg::AntennaAuto::ManualSelection, "ANT: Ready; user selected manually"),
+                      std::make_pair(ldg::AntennaAuto::Manual, "ANT: Ready; cancelled by user"),
+                      std::make_pair(ldg::AntennaAuto::Retrying, "ANT: Ready; retrying selection"),
+                      std::make_pair(ldg::AntennaAuto::WaitingMeter, "ANT: Ready; waiting for fresh power"),
+                      std::make_pair(ldg::AntennaAuto::Tuning, "ANT: Ready; selected; memory tuning"),
+                      std::make_pair(ldg::AntennaAuto::TuneFailed, "ANT: Ready; selected; MEM TUNE failed"),
+                      std::make_pair(ldg::AntennaAuto::TuneNoRf, "ANT: Ready; selected; no RF for tuning"),
+                      std::make_pair(ldg::AntennaAuto::TuneHighPower, "ANT: Ready; selected; tune blocked >=100W"),
+                      std::make_pair(ldg::AntennaAuto::TuneInvalidPower, "ANT: Ready; selected; no fresh tune power"),
+                      std::make_pair(ldg::AntennaAuto::TuneBandChanged, "ANT: Ready; selected; tune band changed"),
+                      std::make_pair(ldg::AntennaAuto::TuneManual, "ANT: Ready; selected; tune cancelled by user"),
+                      std::make_pair(ldg::AntennaAuto::WaitingTuner, "ANT: Ready; waiting tuner; choice saved")}) {
+        state.antennaAuto = item.first;
+        ui->updateState(state); render();
+        TEST_ASSERT_NOT_NULL(label(screen, item.second));
+        TEST_ASSERT_TRUE(screen == lv_scr_act());
+    }
+}
+
 void test_last_confirmed_antenna_is_visible_as_unconfirmed_after_a_failed_command() {
     tuner_state_t state;
     state.antennaInit = ldg::AntennaInit::Ready;
@@ -390,6 +422,7 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_last_confirmed_antenna_is_visible_as_unconfirmed_after_a_failed_command);
     RUN_TEST(test_antenna_initialization_status_is_visible_and_changes_without_recreating_screen);
+    RUN_TEST(test_automatic_antenna_reasons_are_visible_on_lcd);
     RUN_TEST(test_scale_label_is_visible_and_matches_the_dial);
     RUN_TEST(test_digital_power_is_visible_for_both_scales_and_distinguishes_zero_from_missing);
     RUN_TEST(test_lcd_keeps_last_band_without_treating_expired_power_as_live);

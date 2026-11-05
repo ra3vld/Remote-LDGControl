@@ -11,6 +11,8 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <freertos/queue.h>
+#include <esp_heap_caps.h>
+#include <esp_rom_sys.h>
 #include "voltage_sensor.h"
 #include "remote_protocol.h"
 #include "config_manager.h"
@@ -29,6 +31,7 @@ MqttHandler mqtt;
 LdgWebServer webServer;
 ldg::MeterScale meterScale;
 static std::atomic<bool> s_webReady{false};
+static std::atomic<uint32_t> s_webLoopMs{0};
 
 #ifdef WITH_DISPLAY
 DisplayUI display;
@@ -326,6 +329,17 @@ static void remoteTask(void*) {
 
 void setup() {
     Serial.begin(115200);
+    heap_caps_register_failed_alloc_callback([](size_t bytes, uint32_t caps, const char* operation) {
+        static std::atomic<uint32_t> lastReport{0};
+        const uint32_t now = millis();
+        if (now - lastReport.load() < 1000) return;
+        lastReport.store(now);
+        // ROM output avoids an allocation in the failure path itself.
+        esp_rom_printf("[HEAP] failed bytes=%u caps=%x free=%u largest=%u op=%s\n",
+                       unsigned(bytes), unsigned(caps),
+                       unsigned(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                       unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)), operation);
+    });
     delay(100);
 
     Serial.println("\n=== LDG Tuner Controller ===");
@@ -338,6 +352,10 @@ void setup() {
     , __DATE__);
     Serial.printf("Web transport: %s (TLS_ENABLED=%d, port=%u)\n",
                   TLS_ENABLED ? "HTTPS" : "HTTP", TLS_ENABLED, WEB_PORT);
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+        Serial.printf("[WiFi] Station disconnected: reason=%u\n",
+                      unsigned(info.wifi_sta_disconnected.reason));
+    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
     // Load configuration from NVS
     if (!configManager.begin()) Serial.println("ERROR: configuration persistence unavailable");
@@ -426,10 +444,11 @@ void setup() {
         [](void*) {
             for (;;) {
                 webServer.loop();
+                s_webLoopMs.store(millis());
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
         },
-        "webServer", 16384, NULL, 1, NULL, 0) != pdPASS)
+        "webServer", TLS_ENABLED ? 16384 : 8192, NULL, 1, NULL, 0) != pdPASS)
         Serial.println("ERROR: web task could not start");
 
     Serial.println("=== System Ready ===");
@@ -447,6 +466,11 @@ void loop() {
         lastWiFiCheck = millis();
         wifi_mode_t mode = WiFi.getMode();
         bool staActive = (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA);
+        Serial.printf("[NET] wifi_status=%d web_loop_age_ms=%lu heap=%u min_heap=%u largest=%u\n", int(WiFi.status()),
+                      (unsigned long)(millis() - s_webLoopMs.load()),
+                      unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                      unsigned(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                      unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
         if (!staActive) {
             wifiConnected = false;
         } else if (WiFi.status() != WL_CONNECTED) {

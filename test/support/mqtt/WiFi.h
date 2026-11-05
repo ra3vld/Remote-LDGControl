@@ -7,6 +7,8 @@ struct FakeIP { String toString() const { return "192.0.2.1"; } };
 struct FakeWiFi {
     int wifiStatus = WL_CONNECTED;
     String mac = "AA:BB:CC:01:02:03";
+    uint8_t stationMac[6] = {0xaa, 0xbb, 0xcc, 1, 2, 3};
+    bool readMacOk = true;
     int status() const { return wifiStatus; }
     String macAddress() const { return mac; }
     String SSID() const { return "Test WiFi"; }

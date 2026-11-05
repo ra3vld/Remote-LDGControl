@@ -144,9 +144,11 @@ bool TunerProtocol::switchToControlMode() {
 }
 
 bool TunerProtocol::switchToMeterMode() {
+    m_meterRequested = true;
     m_meterIdx = m_eomCount = 0;
     m_state = State::METER;
     m_meterActive = sendCommand(TUNER_CMD_METER_START);
+    m_lastMeterStartMs = millis();
     return m_meterActive;
 }
 
@@ -275,6 +277,8 @@ void TunerProtocol::configureAntennas(const ldg::AntennaSettings& settings) {
 }
 
 void TunerProtocol::manualCommandStarted() {
+    m_initialModeHandled = true;
+    m_restoreAutoAfterRf = false; // A user's next mode choice takes priority.
     m_antennas.manualStarted();
     publishSnapshot();
 }
@@ -287,9 +291,52 @@ void TunerProtocol::manualCommandComplete(uint8_t command, bool success) {
 }
 
 void TunerProtocol::serviceAntennas(bool manualPending) {
+    // A written S is not proof that streaming resumed. Recover from a lost
+    // meter-start even before another band has been observed. Only actual
+    // decoded frames reset the silence timer; neither RX noise nor status
+    // requests can create zero power or an antenna transition.
+    const uint32_t now = millis();
+    if (!manualPending && m_meterRequested &&
+        now - m_lastMeterStartMs >= METER_RESTART_INTERVAL_MS &&
+        (!m_hasMeterData || now - m_lastMeterMs >= METER_RESTART_INTERVAL_MS)) {
+        portENTER_CRITICAL(&m_snapshotMux);
+        ++m_diagnostics.meterRestarts;
+        portEXIT_CRITICAL(&m_snapshotMux);
+        startMeter();
+        process();
+    }
+    if (!m_initialModeHandled && !manualPending && m_antennas.enabled() &&
+        m_antennas.init() == ldg::AntennaInit::Ready) {
+        m_initialModeHandled = true;
+        // With band automation enabled, establish AUTO after the startup
+        // antenna check. LDG has no mode query. An explicit manual command
+        // suppresses this one startup policy write.
+        if (getMode() == MODE_UNKNOWN) {
+            bool confirmed = false;
+            for (unsigned i = 0; !confirmed && i < 2; ++i) confirmed = setAutoMode();
+            m_restoreAutoAfterRf = !confirmed;
+            publishSnapshot();
+            return;
+        }
+    }
+    if (m_restoreAutoAfterRf && !m_antennas.waitingTuner() && !manualPending && m_antennas.hasFreshMeter(millis())) {
+        const auto state = getState();
+        if (state.meterValid && state.meter.forward_power_raw == 0 &&
+            state.meter.forward_power_watts == 0) {
+            // Both in-RF restore attempts lost their ACKs. Try once after a
+            // real zero-power packet; never keep retrying in an RF pause.
+            m_restoreAutoAfterRf = false;
+            const bool restored = setAutoMode();
+            portENTER_CRITICAL(&m_snapshotMux);
+            ++m_diagnostics.antennaSelection.restoreAttempts;
+            m_diagnostics.antennaSelection.autoRestored = restored;
+            portEXIT_CRITICAL(&m_snapshotMux);
+        }
+    }
     const auto previousInit = m_antennas.init();
     const auto previousAuto = m_antennas.automatic();
-    const auto request = m_antennas.poll(millis(), m_manualRevision.load(), manualPending, getAntenna());
+    const auto request = m_antennas.poll(millis(), m_manualRevision.load(), manualPending,
+                                       getAntenna(), getMode() == MODE_UNKNOWN);
     if (previousInit != m_antennas.init() || previousAuto != m_antennas.automatic()) publishSnapshot();
     if (request.action == ldg::AntennaAutomation::Action::Probe) {
         // One started operation: finish restoring before a queued manual
@@ -304,9 +351,134 @@ void TunerProtocol::serviceAntennas(bool manualPending) {
         m_antennas.probeComplete(success);
         publishSnapshot();
     } else if (request.action == ldg::AntennaAutomation::Action::Select) {
-        const bool success = selectAntenna(request.antenna);
-        m_antennas.selectionComplete(success);
+        selectBandAntenna(request.antenna, request.recovery);
         publishSnapshot();
+    } else if (request.action == ldg::AntennaAutomation::Action::RefreshMeter) {
+        if (!startMeter()) m_antennas.meterRefreshFailed();
+        else process();
+        publishSnapshot();
+    }
+}
+
+void TunerProtocol::selectBandAntenna(tuner_ant_t antenna, uint8_t recovery) {
+    const uint32_t started = millis();
+    const tuner_band_t band = m_antennas.currentBand();
+    const uint32_t manualRevision = m_manualRevision.load();
+    uint32_t framesBeforeSelection = 0;
+    ldg::AntennaSelectionDiagnostics trace;
+    trace.present = true;
+    trace.target = antenna;
+    trace.recovery = recovery;
+    trace.modeGuard = getMode() == MODE_AUTO || recovery != 0;
+    // AT-1000ProII can ignore A during RF in AUTO. M is idempotent; require
+    // its ACK before touching the antenna and restore the known original mode.
+    // Mode writes are idempotent. One retry may recover a lost mode ACK;
+    // controlResponse() synchronizes before retransmitting after a timeout.
+    for (unsigned i = 0; trace.modeGuard && !trace.manualConfirmed && i < 2; ++i) {
+        ++trace.manualAttempts;
+        trace.manualConfirmed = setManualMode();
+    }
+    const bool prepared = !trace.modeGuard || trace.manualConfirmed;
+    if (!prepared) trace.deferred = m_antennas.selectionDeferred(band, started);
+    bool fresh = false, valid = false, lowPower = false;
+    for (unsigned attempt = 0; prepared && attempt < 2; ++attempt) {
+        // M restores metering. Decode that fresh batch before starting A,
+        // rather than using the pre-M power or a held display reading.
+        const uint32_t meterWaitAt = millis();
+        do {
+            process();
+            if (!m_meterActive || m_antennas.hasFreshMeter(millis())) break;
+            delay(1);
+        } while (millis() - meterWaitAt < ldg::AntennaAutomation::MeterWaitMs);
+        const auto state = getState();
+        fresh = state.meterValid && m_meterActive && m_antennas.hasFreshMeter(millis());
+        const double power = state.meter.forward_power_watts;
+        valid = fresh && std::isfinite(power) && power >= 0;
+        lowPower = valid && power < 100;
+        const bool sameBand = state.meter.forward_power_raw == 0 || state.meter.band == band;
+        if (lowPower && sameBand) {
+            if (attempt) {
+                m_antennas.selectionRetrying();
+                publishSnapshot();
+            }
+            trace.selectionAttempted = true;
+            ++trace.attempts;
+            framesBeforeSelection = m_diagnostics.frames;
+            trace.selectionConfirmed = selectAntenna(antenna);
+            trace.response = getDiagnostics().response;
+        } else break;
+        if (trace.selectionConfirmed) break;
+        // Retry the named selection, not a blind A toggle: sync first and
+        // use each ACK to reach the requested port if the lost ACK hid a switch.
+        // Fresh power/band are checked again before this one recovery attempt.
+    }
+    // AUTO may have tuned the old antenna before M/A completed. Restoring C
+    // alone does not start a new cycle on AT-1000ProII. Tune the confirmed new
+    // port once while still in MANUAL, then restore AUTO even if T fails.
+    if (trace.modeGuard && trace.selectionConfirmed)
+        retuneBandAntenna(band, manualRevision, framesBeforeSelection, trace);
+    // A missing M ACK can mean M took effect. Keep AUTO restoration pending
+    // with the saved choice, rather than restarting the old antenna's search.
+    for (unsigned i = 0; trace.modeGuard && !trace.deferred && !trace.autoRestored && i < 2; ++i) {
+        ++trace.restoreAttempts;
+        trace.autoRestored = setAutoMode();
+    }
+    m_restoreAutoAfterRf = trace.modeGuard && !trace.autoRestored;
+    if (!trace.deferred) {
+        if (!prepared || (trace.modeGuard && !trace.autoRestored)) m_antennas.selectionComplete(false);
+        else if (!lowPower) m_antennas.selectionPowerChanged(valid);
+        else m_antennas.selectionComplete(trace.selectionConfirmed);
+    }
+    if (trace.selectionConfirmed && (!trace.modeGuard || trace.autoRestored)) {
+        using Result = ldg::MemoryTuneResult;
+        using Status = ldg::AntennaAuto;
+        switch (trace.memoryTune) {
+            case Result::Failed: m_antennas.selectionTuneStatus(Status::TuneFailed); break;
+            case Result::NoRf: m_antennas.selectionTuneStatus(Status::TuneNoRf); break;
+            case Result::HighPower: m_antennas.selectionTuneStatus(Status::TuneHighPower); break;
+            case Result::InvalidPower: m_antennas.selectionTuneStatus(Status::TuneInvalidPower); break;
+            case Result::BandChanged: m_antennas.selectionTuneStatus(Status::TuneBandChanged); break;
+            case Result::ManualOverride: m_antennas.selectionTuneStatus(Status::TuneManual); break;
+            default: break;
+        }
+    }
+    trace.durationMs = millis() - started;
+    portENTER_CRITICAL(&m_snapshotMux);
+    m_diagnostics.antennaSelection = trace;
+    portEXIT_CRITICAL(&m_snapshotMux);
+}
+
+void TunerProtocol::retuneBandAntenna(tuner_band_t band, uint32_t manualRevision,
+                                    uint32_t previousFrames, ldg::AntennaSelectionDiagnostics& trace) {
+    using Result = ldg::MemoryTuneResult;
+    const uint32_t started = millis();
+    // Require an actual post-selection packet: the previous antenna's power
+    // and held display readings cannot authorize tuning the new load.
+    bool fresh = false;
+    do {
+        process();
+        fresh = m_diagnostics.frames != previousFrames && m_meterActive &&
+                m_antennas.hasFreshMeter(millis());
+        if (fresh || !m_meterActive || m_manualRevision.load() != manualRevision) break;
+        delay(1);
+    } while (millis() - started < ldg::AntennaAutomation::MeterWaitMs);
+    const auto state = getState();
+    const double power = state.meter.forward_power_watts;
+    if (m_manualRevision.load() != manualRevision) trace.memoryTune = Result::ManualOverride;
+    else if (!fresh || !state.meterValid || !std::isfinite(power) || power < 0) trace.memoryTune = Result::InvalidPower;
+    else if (power >= 100) trace.memoryTune = Result::HighPower;
+    else if (!state.meter.forward_power_raw || power == 0) trace.memoryTune = Result::NoRf;
+    else if (state.meter.band != band) trace.memoryTune = Result::BandChanged;
+    else {
+        trace.memoryTune = Result::Tuning;
+        m_antennas.selectionTuneStatus(ldg::AntennaAuto::Tuning);
+        portENTER_CRITICAL(&m_snapshotMux);
+        m_diagnostics.antennaSelection = trace;
+        portEXIT_CRITICAL(&m_snapshotMux);
+        publishSnapshot();
+        const bool success = memoryTune(); // One cycle, no timeout/failure loop.
+        trace.tuneResponse = getDiagnostics().response;
+        trace.memoryTune = success ? Result::Succeeded : Result::Failed;
     }
 }
 
@@ -351,6 +523,7 @@ bool TunerProtocol::startMeter() {
 bool TunerProtocol::stopMeter() {
     TunerLock lock(m_mutex);
     if (!lock) return false;
+    m_meterRequested = false;
     return switchToControlMode();
 }
 
@@ -367,6 +540,7 @@ void TunerProtocol::publishSnapshot(bool received, bool meterReceived) {
     if (m_antenna != ANT_UNKNOWN) m_snapshot.lastAntenna = m_antenna;
     m_snapshot.antennaInit = m_antennas.init();
     m_snapshot.antennaAuto = m_antennas.automatic();
+    m_snapshot.antennaAutoBand = m_antennas.currentBand();
     if (received) { m_seenResponse = true; m_lastResponseMs = millis(); }
     portEXIT_CRITICAL(&m_snapshotMux);
 }

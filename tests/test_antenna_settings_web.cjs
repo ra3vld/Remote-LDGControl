@@ -41,7 +41,31 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     assert.match(ui.element('antennaAutoStatus').textContent, /100 Вт/);
     ui.socket.message({ antenna_init: 'error', antenna_auto: 'manual_override' });
     assert.equal(ui.element('antennaInitStatus').textContent, 'Ошибка проверки');
-    assert.equal(ui.element('antennaAutoStatus').textContent, 'Ручной выбор');
+    assert.equal(ui.element('antennaAutoStatus').textContent, 'Отменено ручной командой');
+    ui.socket.message({ antenna_init: 'ready', antenna_auto: 'manual_selection' });
+    assert.equal(ui.element('antennaAutoStatus').textContent, 'Пользователь переключил антенну вручную');
+    ui.socket.message({ antenna_auto: 'unassigned' });
+    assert.match(ui.element('antennaAutoStatus').textContent, /Не переключать/);
+    ui.socket.message({ antenna_auto: 'disabled' });
+    assert.match(ui.element('antennaAutoStatus').textContent, /Запрет переключения/);
+    ui.socket.message({ antenna_auto: 'retrying' });
+    assert.equal(ui.element('antennaAutoStatus').textContent, 'Повторный выбор антенны');
+    ui.socket.message({ antenna_auto: 'waiting_meter' });
+    assert.equal(ui.element('antennaAutoStatus').textContent, 'Ожидание свежего измерения мощности');
+    for (const [state, message] of [
+        ['waiting_tuner', /выбор сохранён/],
+        ['tuning', /выполняется MEM TUNE/], ['tune_failed', /MEM TUNE не подтверждён/],
+        ['tune_no_rf', /нет передачи/], ['tune_power_limit', /мощность ≥100 Вт/],
+        ['tune_invalid_power', /нет свежей корректной мощности/], ['tune_band_changed', /диапазон изменился/],
+        ['tune_manual_override', /отменён ручной командой/]
+    ]) {
+        ui.socket.message({ antenna_auto: state });
+        assert.match(ui.element('antennaAutoStatus').textContent, message);
+    }
+    ui.socket.message({ antenna_auto: 'selected', antenna_auto_band: '20m', band: '20m', band_held: true });
+    assert.equal(ui.element('antennaAutoStatus').textContent, 'Антенна выбрана для 20m; нет свежих данных тюнера');
+    ui.socket.message({ antenna_auto: 'selected', antenna_auto_band: '20m', band: '40m', band_held: false });
+    assert.match(ui.element('antennaAutoStatus').textContent, /для 20m; ожидается подтверждение диапазона 40m/);
     delete server.failSave;
     const reload = await page(server);
     assert.equal(reload.element('antennaBand20m').value, '1');

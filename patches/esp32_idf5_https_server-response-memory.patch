@@ -1,0 +1,11 @@
+--- a/src/HTTPResponse.cpp
++++ b/src/HTTPResponse.cpp
+@@ -1,2 +1,3 @@
+ #include "HTTPResponse.hpp"
++#include <new>
+ 
+@@ -20,3 +21,3 @@
+     HTTPS_LOGD("Creating buffered response, size: %d", _responseCacheSize);
+-    _responseCache = new byte[_responseCacheSize];
++    _responseCache = new (std::nothrow) byte[_responseCacheSize];
+   } else {

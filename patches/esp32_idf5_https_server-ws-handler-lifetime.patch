@@ -1,0 +1,54 @@
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -23,6 +23,11 @@
+ 
+ HTTPConnection::~HTTPConnection() {
+-  // Close the socket
++  // Transport close can occur inside a handler callback. Release the handler
++  // only here, or after dispatch returns, never from closeConnection().
+   closeConnection();
++  delete _wsHandler;
++  _wsHandler = nullptr;
++  delete _httpHeaders;
++  _httpHeaders = nullptr;
+ }
+ 
+@@ -133,15 +138,6 @@
+   }
+ 
+-  if (_httpHeaders != NULL) {
+-    HTTPS_LOGD("Free headers");
+-    delete _httpHeaders;
+-    _httpHeaders = NULL;
+-  }
+-
+-  if (_wsHandler != nullptr) {
+-    HTTPS_LOGD("Free WS Handler");
+-    delete _wsHandler;
+-    _wsHandler = NULL;
+-  }
++  // A request/callback may still be using the headers or WebSocket handler.
++  // Dispatch or the connection destructor releases them after the call returns.
+ }
+ 
+@@ -599,4 +595,8 @@
+       break;
+     case STATE_WEBSOCKET: // Do handling of the websocket
++      if (_wsHandler == nullptr) {
++        closeConnection();
++        break;
++      }
+       refreshTimeout();  // don't timeout websocket connection
+       if(pendingBufferSize() > 0) {
+@@ -612,9 +612,9 @@
+ 
+       // If the handler has terminated the connection, clean up and close the socket too
+-      if (_wsHandler->closed() || _clientState == CSTATE_CLOSED) {
++      if (_wsHandler->closed() || _clientState == CSTATE_CLOSED || isClosed()) {
+         HTTPS_LOGI("WS closed, freeing Handler, FID=%d", _socket);
+         delete _wsHandler;
+         _wsHandler = nullptr;
+-        _connectionState = STATE_CLOSING;
++        if (!isClosed()) _connectionState = STATE_CLOSING;
+       }
+       break;

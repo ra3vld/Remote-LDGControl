@@ -7,7 +7,9 @@
 #define LV_COLOR_DEPTH 16
 
 // Memory settings
-#define LV_MEM_SIZE (48U * 1024U)
+// Full rendering tests peak below 25 KiB even on a 64-bit host. Leave
+// internal RAM for Wi-Fi/HTTP/MQTT on the Sunton board without PSRAM.
+#define LV_MEM_SIZE (32U * 1024U)
 #define LV_MEM_CUSTOM 0
 
 // Tick interface

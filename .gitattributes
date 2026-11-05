@@ -1,0 +1,4 @@
+# Unified patches contain single-space context lines.
+patches/*.patch -whitespace
+# Preserve upstream excerpts exactly for strict patch context matching.
+tests/fixtures/*.cpp -whitespace
