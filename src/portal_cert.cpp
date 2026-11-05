@@ -7,7 +7,6 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/x509.h>
-#include <mbedtls/bignum.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/ecp.h>
 #include <Preferences.h>
@@ -63,13 +62,15 @@ static bool portalCert_generate() {
     mbedtls_x509write_crt_init(&crt);
     mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
 
-    mbedtls_mpi serial;
-    mbedtls_mpi_init(&serial);
     unsigned char serialBuf[16];
-    mbedtls_ctr_drbg_random(&ctr_drbg, serialBuf, sizeof(serialBuf));
-    mbedtls_mpi_read_binary(&serial, serialBuf, sizeof(serialBuf));
-    mbedtls_x509write_crt_set_serial(&crt, &serial);
-    mbedtls_mpi_free(&serial);
+    ret = mbedtls_ctr_drbg_random(&ctr_drbg, serialBuf, sizeof(serialBuf));
+    if (ret == 0) ret = mbedtls_x509write_crt_set_serial_raw(&crt, serialBuf, sizeof(serialBuf));
+    if (ret != 0) {
+        Serial.printf("Cert serial failed: -0x%04x\n", -ret);
+        mbedtls_x509write_crt_free(&crt); mbedtls_pk_free(&pk);
+        mbedtls_ctr_drbg_free(&ctr_drbg); mbedtls_entropy_free(&entropy);
+        return false;
+    }
 
     mbedtls_x509write_crt_set_validity(&crt, "20260101000000", "20360101000000");
     mbedtls_x509write_crt_set_issuer_name(&crt, "CN=LDGConfig");
@@ -154,7 +155,17 @@ bool portalCert_init() {
             mbedtls_base64_decode(keyDer, keyDerLen, &keyDerLen, (const unsigned char*)storedKey.c_str(), storedKey.length());
             mbedtls_pk_context testPk;
             mbedtls_pk_init(&testPk);
-            int ret = mbedtls_pk_parse_key(&testPk, keyDer, keyDerLen, NULL, 0);
+            mbedtls_entropy_context entropy;
+            mbedtls_entropy_init(&entropy);
+            mbedtls_ctr_drbg_context random;
+            mbedtls_ctr_drbg_init(&random);
+            static const unsigned char personalization[] = "portal-key-validation";
+            int ret = mbedtls_ctr_drbg_seed(&random, mbedtls_entropy_func, &entropy,
+                                           personalization, sizeof(personalization) - 1);
+            if (ret == 0) ret = mbedtls_pk_parse_key(&testPk, keyDer, keyDerLen, NULL, 0,
+                                                    mbedtls_ctr_drbg_random, &random);
+            mbedtls_ctr_drbg_free(&random);
+            mbedtls_entropy_free(&entropy);
             free(keyDer);
             mbedtls_pk_free(&testPk);
             if (ret != 0) {

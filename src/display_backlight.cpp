@@ -10,10 +10,9 @@ void DisplayBacklight::begin() {
     // The board BSP uses 0 dB for its light-sensor voltage range. Configure
     // this pin only, leaving any other ADC inputs untouched.
     analogSetPinAttenuation(34, ADC_0db);
-    m_ready = ledcSetup(7, 20000, 8) > 0;
+    m_ready = ledcAttachChannel(27, 20000, 8, 7);
     if (m_ready) {
-        ledcAttachPin(27, 7);
-        ledcWrite(7, 255);
+        ledcWriteChannel(7, 255);
         m_duty = 255;
         m_lastRead = millis() - 100;
         loop();
@@ -33,7 +32,7 @@ void DisplayBacklight::loop() {
     raw = (raw + 2) / 4;
     const uint8_t percent = m_control.update(configManager.brightnessSettings(), raw);
     const uint8_t duty = (unsigned(percent) * 255 + 50) / 100;
-    if (duty != m_duty) { ledcWrite(7, duty); m_duty = duty; }
+    if (duty != m_duty) { ledcWriteChannel(7, duty); m_duty = duty; }
     m_sample.store(0x80000000u | (uint32_t(percent) << 12) | uint32_t(raw));
 #endif
 }

@@ -131,7 +131,7 @@ For the BTT/headless variants, use `display`/`remote` image filenames at the sam
 ### Option 3: Build from Source
 
 ```bash
-pip install platformio
+python -m pip install -r requirements-platformio.txt
 
 pio run -e esp32-display -t upload   # Display unit
 pio run -e esp32-remote -t upload    # Remote/headless unit
@@ -140,7 +140,7 @@ pio run -e esp32-3248s035c -t uploadfs # Web UI in LittleFS (required on first i
 pio device monitor                   # Serial console
 ```
 
-The build pins PlatformIO Espressif32 6.12.0 (Arduino ESP32 2.0.17).
+The build pins pioarduino Core 6.2.0 and platform 55.03.312-1 (Arduino-ESP32 3.3.12, ESP-IDF 5.5.5).
 Run `pio test -e native -e native-display` for logic and LVGL rendering tests.
 The display tests render the actual interface to an in-memory LCD, compare
 incremental/full redraws pixel by pixel, and check both 100/1000 W scales.
