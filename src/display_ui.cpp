@@ -415,7 +415,7 @@ void DisplayUI::updateState(const tuner_state_t& state) {
             case ldg::TuningState::AutoActive: tune = "AUTO until RF off"; break;
             case ldg::TuningState::ReturningManual: tune = "returning to MANUAL"; break;
             case ldg::TuningState::HighPower: tune = "tune blocked: power >=100W"; break;
-            case ldg::TuningState::NoFreshData: tune = "no fresh SWR after MEM TUNE"; break;
+            case ldg::TuningState::NoFreshData: tune = "waiting for fresh SWR"; break;
             case ldg::TuningState::Error: tune = "tune/mode not confirmed"; break;
             case ldg::TuningState::ManualOverride: tune = "user override until next TX"; break;
             default: break; // WaitingAntenna retains the specific antenna reason.

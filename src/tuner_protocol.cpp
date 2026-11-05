@@ -327,7 +327,7 @@ bool TunerProtocol::serviceTuning(bool manualPending, bool allowTune) {
     if (revision != m_manualRevision.load()) { m_tuning.manualStarted(); publishSnapshot(); return false; }
     bool success = false;
     if (action == Action::MemoryTune) {
-        success = memoryTune(); // Exactly one memory cycle per RF start, no retry loop.
+        success = memoryTune(); // One cycle per RF start or confirmed new SWR rise; no retry loop.
         m_tuning.memoryComplete(success, millis());
     } else {
         for (unsigned i = 0; !success && i < 2; ++i) {

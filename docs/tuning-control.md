@@ -13,7 +13,7 @@ a transmission or repeat MEM TUNE.
 
 The UART worker establishes acknowledged MANUAL before tuning. Three consecutive
 fresh positive-power packets confirm a transmission. After antenna initialization
-and any pending band-table selection, it issues one `T` (MEM TUNE), including when
+and any pending band-table selection, it issues `T` (MEM TUNE), including when
 the selected antenna is already correct. It does this again on the next
 transmission on the same band. The antenna table remains a band-change policy:
 manual antenna selection is preserved on subsequent transmissions on that band.
@@ -26,15 +26,30 @@ TUNE, three consecutive fresh packets at or above the threshold authorize `C`
 (AUTO). Samples from before the memory cycle, invalid SWR, stale/absent telemetry
 and zero RF cannot enable AUTO. If MEM TUNE returns a failure but fresh high SWR
 confirms the mismatch, the same fallback is available. There is no FULL TUNE `F`
-in this policy. AUTO remains active until transmission ends, then `M` restores
-MANUAL. Mode writes allow one synchronized retry; memory cycles never loop on
-failures. Power at or above 100 W blocks tuning/fallback for that transmission;
+in this policy. SWR supervision continues for the entire transmission, including
+after a successful match or a telemetry gap. Three consecutive fresh samples
+below the threshold arm one new tuning cycle. Three subsequent consecutive fresh
+samples at or above the threshold start MEM TUNE again, even on the same band
+and antenna. If the physical tuner is in AUTO or its mode is unknown, acknowledged
+`M` precedes `T`. High SWR after that memory cycle can enable `C` again. With the
+fallback option off, new SWR rises still repeat MEM TUNE but never enable AUTO;
+the same editable SWR threshold applies with either checkbox setting.
+Constant high SWR without an intervening confirmed match cannot loop tuning.
+Missing or invalid samples break the sample streak and never authorize a command;
+waiting for fresh SWR does not disarm supervision.
+
+AUTO stays active between cycles until a new SWR rise starts another memory
+cycle or the transmission ends, when `M` restores MANUAL. Mode writes allow one
+synchronized retry; memory cycles never loop on failures. Power at or above
+100 W blocks tuning/fallback for that transmission before fallback AUTO is active;
 a later power reduction alone does not rearm it.
 
 With live TCI RX/TX state, zero-power packets during TX are SSB gaps, and a fresh
 zero-power packet in RX ends the transmission. Without reliable TCI state, the
-controller requires 1.5 seconds of continuous fresh zero-power packets. Missing
-packets do not count as zero or prove the end of transmission. If telemetry is
+controller requires actual zero-power packets spanning at least 1.5 seconds,
+with no gap between packets longer than 3 seconds. This accepts idle telemetry
+delivered in batches; command decisions still require power no older than 500 ms.
+Missing packets do not count as zero or prove the end of transmission. If telemetry is
 lost, AUTO restoration waits for fresh evidence. Normal short SSB gaps therefore
 do not retrigger MEM TUNE; a longer RF pause without TCI is indistinguishable
 from a new transmission.

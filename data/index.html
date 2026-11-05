@@ -532,9 +532,9 @@
             <div class="settings-section">
                 <h3>Параметры CONTROLLED</h3>
                 <p style="font-size:0.75rem;color:var(--text-secondary)">Выбирается кнопкой режима на главном экране: MANUAL → AUTO → CONTROLLED → MANUAL. Эти параметры действуют только в CONTROLLED.</p>
-                <p style="font-size:0.75rem;color:var(--text-secondary)">Контроллер подтверждает MANUAL и при каждом новом начале передачи ниже 100 Вт запускает MEM TUNE после выбора антенны. Таблица антенн применяется только при первом определении или смене диапазона; ручной выбор на том же диапазоне сохраняется. Без TCI новая передача определяется после 1,5 с свежей нулевой мощности. Отсутствие данных паузой не считается.</p>
-                <label><input type="checkbox" id="tuningAutoFallback" onchange="updateTuningFields()"> При высоком КСВ включать AUTO до конца передачи</label>
-                <div class="form-group"><label for="tuningSwrThreshold">Порог КСВ (1,1–10,0)</label><input id="tuningSwrThreshold" type="number" min="1.1" max="10" step="0.1" value="2.0"></div>
+                <p style="font-size:0.75rem;color:var(--text-secondary)">При каждом начале передачи ниже 100 Вт контроллер запускает MEM TUNE после выбора антенны. КСВ проверяется всю передачу: если после нормализации он снова устойчиво достигает порога, выполняется новый MEM TUNE и, при включённой опции, AUTO. При постоянно высоком КСВ настройка по кругу не повторяется. Таблица антенн применяется при первом определении или смене диапазона; ручной выбор на том же диапазоне сохраняется. Без TCI новая передача определяется после 1,5 с подтверждённой нулевой мощности. Отсутствие данных паузой не считается.</p>
+                <label><input type="checkbox" id="tuningAutoFallback"> При высоком КСВ включать AUTO до конца передачи</label>
+                <div class="form-group"><label for="tuningSwrThreshold">Порог КСВ для донастройки (1,1–10,0)</label><input id="tuningSwrThreshold" type="number" min="1.1" max="10" step="0.1" value="2.0"></div>
                 <button type="button" class="btn-save" id="btnSaveTuning" onclick="saveTuningSettings()" disabled>Сохранить параметры CONTROLLED</button>
                 <p id="tuningSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка настроек…</p>
             </div>
@@ -1388,9 +1388,6 @@
 
         let tuningSettingsLoaded = false;
         let tuningSavePending = false;
-        function updateTuningFields() {
-            document.getElementById('tuningSwrThreshold').disabled = !document.getElementById('tuningAutoFallback').checked;
-        }
         function validTuningSettings(value) {
             return typeof value.auto_fallback === 'boolean' &&
                 Number.isFinite(value.swr_threshold) && value.swr_threshold >= 1.1 && value.swr_threshold <= 10 &&
@@ -1410,7 +1407,6 @@
                 tuningSettingsLoaded = true;
                 document.getElementById('btnSaveTuning').disabled = false;
                 document.getElementById('tuningSettingsStatus').textContent = 'Применяется без перезагрузки. После временного AUTO восстанавливается MANUAL.';
-                updateTuningFields();
             } catch (error) {
                 document.getElementById('tuningSettingsStatus').textContent = 'Не удалось загрузить настройки. Обновите страницу.';
             } finally { clearTimeout(timeout); }
@@ -1441,7 +1437,7 @@
             const tuning = { native: 'Штатное управление', waiting_manual: 'Подтверждение MANUAL', waiting_rf: 'MANUAL: ожидание новой передачи',
                 waiting_antenna: 'Ожидание выбора антенны', memory_tune: 'MEM TUNE', waiting_swr: 'Проверка КСВ после MEM TUNE',
                 matched: 'MEM TUNE завершён', auto_active: 'AUTO до конца передачи', returning_manual: 'Возврат в MANUAL',
-                high_power: 'Настройка запрещена: мощность ≥100 Вт', no_fresh_data: 'Нет свежего КСВ после MEM TUNE',
+                high_power: 'Настройка запрещена: мощность ≥100 Вт', no_fresh_data: 'Ожидание свежего КСВ',
                 error: 'Тюнер не подтвердил настройку/режим', manual_override: 'Отменено ручной командой до новой передачи' };
             if (data.tuning_state !== undefined) document.getElementById('tuningStatus').textContent = tuning[data.tuning_state] || '--';
             const init = { unknown: '--', waiting_meter: 'Ожидание данных', waiting_rf_off: 'Ожидание окончания передачи',

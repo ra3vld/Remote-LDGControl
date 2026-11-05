@@ -178,8 +178,159 @@ void test_saving_controlled_options_does_not_restart_memory_or_change_operating_
     a.configure(settings); TEST_ASSERT_TRUE(a.enabled()); TEST_ASSERT_TRUE(poll(a,4)==Action::None);
 }
 
+void test_swr_supervision_continues_after_match_and_frequency_drift_for_entire_tx() {
+    for (uint32_t at : {0u,0xfffff000u}) {
+        TuningAutomation a; a.configure(managed(true)); start(a,at);
+        TEST_ASSERT_TRUE(poll(a,at)==Action::MemoryTune); a.memoryComplete(true,at);
+        // Good match persists long past the old 1.5-second post-memory window.
+        for (unsigned i=1;i<=300;++i) {
+            sample(a,at+i*100,40,1.3);
+            TEST_ASSERT_TRUE(poll(a,at+i*100)==Action::None);
+        }
+        TEST_ASSERT_TRUE(a.state()==TuningState::Matched);
+        for (unsigned i=1;i<=3;++i) {
+            sample(a,at+30000+i*100,40,2.5);
+            TEST_ASSERT_TRUE(poll(a,at+30000+i*100)==(i==3?Action::MemoryTune:Action::None));
+        }
+        a.memoryComplete(true,at+30300);
+        for (unsigned i=1;i<=3;++i) {
+            sample(a,at+30300+i*100,40,2.5);
+            TEST_ASSERT_TRUE(poll(a,at+30300+i*100)==(i==3?Action::Auto:Action::None));
+        }
+        a.modeComplete(Action::Auto,true);
+        for (unsigned i=4;i<20;++i) {
+            sample(a,at+30300+i*100,40,3);
+            TEST_ASSERT_TRUE(poll(a,at+30300+i*100,MODE_AUTO)==Action::None);
+        }
+    }
+}
+void test_missing_or_invalid_swr_pauses_monitoring_without_disarming_it() {
+    for (int scenario=0;scenario<3;++scenario) {
+        TuningAutomation a; a.configure(managed(true)); start(a);
+        TEST_ASSERT_TRUE(poll(a)==Action::MemoryTune); a.memoryComplete(true,0);
+        for (int i=1;i<=3;++i) sample(a,i*30,40,1.2);
+        TEST_ASSERT_TRUE(poll(a,100)==Action::None);
+        if (scenario==1) { a.invalidateFrame(); sample(a,200,40,NAN); }
+        if (scenario==2) { a.setPtt(true,true); for (int i=2;i<=20;++i) sample(a,i*100,0); }
+        TEST_ASSERT_TRUE(poll(a,2000)==Action::None);
+        TEST_ASSERT_TRUE(a.state()==TuningState::NoFreshData);
+        for (int i=1;i<=3;++i) {
+            sample(a,2000+i*100,40,2.2);
+            TEST_ASSERT_TRUE(poll(a,2000+i*100)==(i==3?Action::MemoryTune:Action::None));
+        }
+    }
+}
+void test_enabling_auto_after_memory_arms_only_fresh_swr_without_repeating_memory() {
+    TuningAutomation a; auto s=managed(false); a.configure(s); start(a);
+    TEST_ASSERT_TRUE(poll(a)==Action::MemoryTune); a.memoryComplete(true,0);
+    for (int i=1;i<=30;++i) { sample(a,i*100,40,3); TEST_ASSERT_TRUE(poll(a,i*100)==Action::None); }
+    s.autoFallback=true; a.configure(s);
+    TEST_ASSERT_TRUE(poll(a,3000)==Action::None); // Stored SWR must not trigger C.
+    for (int i=1;i<=3;++i) {
+        sample(a,3000+i*100,40,3);
+        TEST_ASSERT_TRUE(poll(a,3000+i*100)==(i==3?Action::Auto:Action::None));
+    }
+    a.modeComplete(Action::Auto,false);
+    s.autoFallback=false; a.configure(s); s.autoFallback=true; a.configure(s);
+    for (int i=1;i<=10;++i) { sample(a,4000+i*100,40,3); TEST_ASSERT_TRUE(poll(a,4000+i*100)==Action::None); }
+}
+void test_late_high_swr_still_respects_power_antenna_manual_and_mode_guards() {
+    for (int scenario=0;scenario<6;++scenario) {
+        TuningAutomation a; a.configure(managed(true)); start(a);
+        TEST_ASSERT_TRUE(poll(a)==Action::MemoryTune); a.memoryComplete(true,0);
+        for (int i=1;i<=3;++i) sample(a,i*100,40,1.2);
+        TEST_ASSERT_TRUE(poll(a,300)==Action::None);
+        if (scenario==0) a.manualStarted();
+        if (scenario==1) sample(a,400,100,3);
+        for (int i=1;i<=3;++i) sample(a,3000+i*100,40,3);
+        TEST_ASSERT_TRUE(poll(a,3900)==Action::None); // Stale RF cannot authorize the new cycle.
+        for (int i=1;i<=3;++i) sample(a,3900+i*100,40,3);
+        const auto result=poll(a,4200,scenario==2?MODE_UNKNOWN:MODE_MANUAL,scenario!=3,scenario==4,scenario!=5);
+        TEST_ASSERT_TRUE(result==(scenario==2?Action::Manual:Action::None));
+    }
+}
+
+void test_new_swr_rises_repeat_complete_cycles_in_one_tx_and_constant_mismatch_does_not_loop() {
+    for (bool fallback:{false,true}) {
+        TuningAutomation a; a.configure(managed(fallback)); start(a);
+        TEST_ASSERT_TRUE(poll(a)==Action::MemoryTune); a.memoryComplete(true,0);
+        uint32_t now=0; tuner_mode_t mode=MODE_MANUAL;
+        for (int cycle=0;cycle<4;++cycle) {
+            // Three good RF measurements arm exactly one new rise.
+            for (int i=0;i<3;++i) { now+=100; sample(a,now,40,1.2); TEST_ASSERT_TRUE(poll(a,now,mode)==Action::None); }
+            for (int i=0;i<2;++i) { now+=100; sample(a,now,40,3); TEST_ASSERT_TRUE(poll(a,now,mode)==Action::None); }
+            now+=100; sample(a,now,40,3);
+            TEST_ASSERT_TRUE(poll(a,now,mode)==(mode==MODE_AUTO?Action::Manual:Action::MemoryTune));
+            if (mode==MODE_AUTO) {
+                a.modeComplete(Action::Manual,true); mode=MODE_MANUAL;
+                TEST_ASSERT_TRUE(poll(a,now,mode)==Action::MemoryTune);
+            }
+            a.memoryComplete(true,now);
+            for (int i=1;i<=3;++i) {
+                now+=100; sample(a,now,40,3);
+                TEST_ASSERT_TRUE(poll(a,now,mode)==(i==3&&fallback?Action::Auto:Action::None));
+            }
+            if (fallback) { a.modeComplete(Action::Auto,true); mode=MODE_AUTO; }
+            for (int i=0;i<50;++i) { now+=100; sample(a,now,40,3); TEST_ASSERT_TRUE(poll(a,now,mode)==Action::None); }
+        }
+    }
+}
+void test_idle_zero_batches_end_rf_session_but_missing_packets_never_do() {
+    for (uint32_t at:{0u,0xfffff000u}) {
+        TuningAutomation a; a.configure(managed()); start(a,at);
+        TEST_ASSERT_TRUE(poll(a,at)==Action::MemoryTune); a.memoryComplete(true,at);
+        sample(a,at+100,0); TEST_ASSERT_TRUE(poll(a,at+100)==Action::None);
+        sample(a,at+1350,0); TEST_ASSERT_TRUE(poll(a,at+1350)==Action::None);
+        sample(a,at+2600,0); TEST_ASSERT_TRUE(poll(a,at+2600)==Action::None);
+        start(a,at+2700); TEST_ASSERT_TRUE(poll(a,at+2700)==Action::MemoryTune);
+        a.memoryComplete(true,at+2700);
+        sample(a,at+2800,0);
+        TEST_ASSERT_TRUE(poll(a,at+20000)==Action::None); // Time alone is not evidence of RF off.
+        start(a,at+20100); TEST_ASSERT_TRUE(poll(a,at+20100)==Action::None);
+        sample(a,at+20200,0); sample(a,at+30200,0); // Disconnected interval resets zero evidence.
+        start(a,at+30300); TEST_ASSERT_TRUE(poll(a,at+30300)==Action::None);
+    }
+}
+void test_failed_repeat_cycle_requires_another_match_and_rise_before_retrying() {
+    for (Action failure : {Action::Manual,Action::MemoryTune,Action::Auto}) {
+        TuningAutomation a; a.configure(managed(true)); start(a);
+        TEST_ASSERT_TRUE(poll(a)==Action::MemoryTune); a.memoryComplete(true,0);
+        uint32_t now=0;
+        for (int i=0;i<3;++i) { now+=100; sample(a,now,40,3); }
+        TEST_ASSERT_TRUE(poll(a,now)==Action::Auto); a.modeComplete(Action::Auto,true);
+        for (int i=0;i<3;++i) { now+=100; sample(a,now,40,1.2); }
+        for (int i=0;i<3;++i) { now+=100; sample(a,now,40,3); }
+        TEST_ASSERT_TRUE(poll(a,now,MODE_AUTO)==Action::Manual);
+        a.modeComplete(Action::Manual,failure!=Action::Manual);
+        if (failure!=Action::Manual) {
+            TEST_ASSERT_TRUE(poll(a,now)==Action::MemoryTune);
+            a.memoryComplete(failure!=Action::MemoryTune,now);
+            for (int i=0;i<3;++i) { now+=100; sample(a,now,40,3); }
+            TEST_ASSERT_TRUE(poll(a,now)==Action::Auto);
+            a.modeComplete(Action::Auto,failure!=Action::Auto);
+        }
+        const auto mode=failure==Action::Manual||failure==Action::Auto?MODE_UNKNOWN:MODE_AUTO;
+        for (int i=0;i<40;++i) {
+            now+=100; sample(a,now,40,3); TEST_ASSERT_TRUE(poll(a,now,mode)==Action::None);
+        }
+        for (int i=0;i<3;++i) { now+=100; sample(a,now,40,1.2); }
+        for (int i=0;i<3;++i) { now+=100; sample(a,now,40,3); }
+        TEST_ASSERT_TRUE(poll(a,now,mode)==Action::Manual);
+        a.modeComplete(Action::Manual,true);
+        TEST_ASSERT_TRUE(poll(a,now)==Action::MemoryTune);
+    }
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_failed_repeat_cycle_requires_another_match_and_rise_before_retrying);
+    RUN_TEST(test_new_swr_rises_repeat_complete_cycles_in_one_tx_and_constant_mismatch_does_not_loop);
+    RUN_TEST(test_idle_zero_batches_end_rf_session_but_missing_packets_never_do);
+    RUN_TEST(test_swr_supervision_continues_after_match_and_frequency_drift_for_entire_tx);
+    RUN_TEST(test_missing_or_invalid_swr_pauses_monitoring_without_disarming_it);
+    RUN_TEST(test_enabling_auto_after_memory_arms_only_fresh_swr_without_repeating_memory);
+    RUN_TEST(test_late_high_swr_still_respects_power_antenna_manual_and_mode_guards);
+
     RUN_TEST(test_saving_controlled_options_does_not_restart_memory_or_change_operating_mode);
     RUN_TEST(test_default_native_and_strict_persistent_settings);
     RUN_TEST(test_each_new_transmission_gets_exactly_one_memory_tune);

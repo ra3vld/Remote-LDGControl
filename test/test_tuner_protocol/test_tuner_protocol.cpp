@@ -1790,8 +1790,73 @@ void test_failed_mode_persistence_does_not_change_policy_or_send_a_command() {
     TEST_ASSERT_TRUE(tuner.getState().tuningState == ldg::TuningState::Error);
 }
 
+void test_controlled_late_intraband_mismatch_repeats_memory_then_optional_auto_without_antenna_switches() {
+    for (bool fallback : {false,true}) {
+        HardwareSerial::written=nullptr;
+        TunerProtocol tuner; begin(tuner);
+        uint16_t forward=150, reflected=10, band=2328;
+        unsigned memories=0, antennas=0, autos=0;
+        std::string commands, expected;
+        HardwareSerial::written=[&](HardwareSerial& serial,uint8_t cmd) {
+            respondSync(serial,cmd);
+            if (cmd=='A') { ++antennas; serial.bytes.push_back('1'); }
+            if (cmd=='M') { commands+='M'; serial.bytes.push_back('M'); }
+            if (cmd=='T') { commands+='T'; ++memories; serial.bytes.push_back('T'); }
+            if (cmd=='C') { commands+='C'; ++autos; serial.bytes.push_back('A'); }
+            if (cmd=='S') for (auto b:frame(forward,reflected,band)) serial.bytes.push_back(b);
+        };
+        tuner.manualCommandStarted(); TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_A));
+        tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_A,true);
+        ldg::TuningSettings profile; profile.managed=1; profile.autoFallback=fallback;
+        tuner.configureTuning(profile);
+        for (int i=0;i<3;++i) feed(tuner,frame(forward,reflected,band));
+        tuner.serviceAntennas(); tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_UINT(1,memories); TEST_ASSERT_EQUAL_UINT(0,autos);
+        TEST_ASSERT_EQUAL_STRING("MT",commands.c_str()); commands.clear();
+        for (int cycle=0;cycle<4;++cycle) {
+            // Good match arms a new rise even while the physical tuner is AUTO.
+            reflected=10;
+            for (int i=0;i<100;++i) {
+                testMillis+=100; feed(tuner,frame(forward,reflected,band)); tuner.serviceAntennas();
+            }
+            TEST_ASSERT_TRUE(tuner.getState().tuningState==
+                (cycle&&fallback?ldg::TuningState::AutoActive:ldg::TuningState::Matched));
+            band=2330; reflected=60; // Different point within 40m; same RF session and antenna.
+            for (int i=1;i<=3;++i) {
+                testMillis+=100; feed(tuner,frame(forward,reflected,band)); tuner.serviceAntennas();
+                TEST_ASSERT_EQUAL_UINT(fallback?cycle:0,autos); // M/T must precede C.
+            }
+            tuner.serviceAntennas(); // Complete pending T after acknowledged M in later cycles.
+            TEST_ASSERT_EQUAL_UINT(cycle+2,memories); TEST_ASSERT_EQUAL_UINT(1,antennas);
+            for (int i=0;i<3;++i) {
+                testMillis+=100; feed(tuner,frame(forward,reflected,band)); tuner.serviceAntennas();
+            }
+            expected += fallback?(cycle?"MTC":"TC"):"T";
+            TEST_ASSERT_EQUAL_STRING(expected.c_str(),commands.c_str());
+            TEST_ASSERT_EQUAL_UINT(fallback?cycle+1:0,autos);
+            TEST_ASSERT_EQUAL_INT(MODE_CONTROLLED,ldg::operatingMode(tuner.getState()));
+            TEST_ASSERT_EQUAL_INT(fallback?MODE_AUTO:MODE_MANUAL,tuner.getMode());
+            for (int i=0;i<40;++i) {
+                testMillis+=100; feed(tuner,frame(forward,reflected,band)); tuner.serviceAntennas();
+            }
+            TEST_ASSERT_EQUAL_STRING(expected.c_str(),commands.c_str()); // Constant mismatch never loops.
+        }
+        forward=reflected=0;
+        for (int i=0;i<3;++i) { testMillis+=1250; feed(tuner,frame(0,0,band)); tuner.serviceAntennas(); }
+        if (fallback) expected+='M';
+        TEST_ASSERT_EQUAL_STRING(expected.c_str(),commands.c_str());
+        TEST_ASSERT_EQUAL_INT(MODE_MANUAL,tuner.getMode());
+        forward=150; reflected=10;
+        for (int i=0;i<3;++i) { testMillis+=100; feed(tuner,frame(forward,reflected,band)); tuner.serviceAntennas(); }
+        expected+='T'; TEST_ASSERT_EQUAL_STRING(expected.c_str(),commands.c_str());
+        TEST_ASSERT_EQUAL_UINT(6,memories); TEST_ASSERT_EQUAL_UINT(1,antennas);
+    }
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_controlled_late_intraband_mismatch_repeats_memory_then_optional_auto_without_antenna_switches);
+
     RUN_TEST(test_three_operating_modes_are_exclusive_and_controlled_never_reaches_uart);
     RUN_TEST(test_failed_mode_persistence_does_not_change_policy_or_send_a_command);
     RUN_TEST(test_manual_command_queued_during_antenna_selection_cancels_unstarted_memory_tune);
