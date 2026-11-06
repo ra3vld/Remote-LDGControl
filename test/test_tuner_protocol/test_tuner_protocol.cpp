@@ -1962,8 +1962,74 @@ void test_controlled_pending_band_survives_delayed_post_manual_meter_without_ano
     TEST_ASSERT_EQUAL_UINT(toggles+1,antennas); TEST_ASSERT_EQUAL_UINT(2,memories); TEST_ASSERT_EQUAL_UINT(2,autos);
 }
 
+void test_controlled_tci_tune_without_trx_runs_memory_and_swr_fallback() {
+    for (bool fallback : {false, true}) {
+        HardwareSerial::written = nullptr;
+        radioFixture = ldg::RadioState{};
+        radioFixture.connection = ldg::RadioConnection::Ready;
+        radioFixture.frequencyValid = radioFixture.rxKnown = radioFixture.tuneKnown = true;
+        radioFixture.txFrequencyHz = 14286500; radioFixture.stableMs = 200;
+        TunerProtocol tuner; tuner.setRadioStateGetter(readRadioFixture); begin(tuner);
+        uint16_t fwd = 0, reflected = 0;
+        unsigned memories = 0, autos = 0;
+        std::string wire;
+        HardwareSerial::written = [&](HardwareSerial& serial, uint8_t cmd) {
+            respondSync(serial, cmd);
+            if (cmd == 'A') serial.bytes.push_back('2');
+            if (cmd == 'M') { wire += 'M'; serial.bytes.push_back('M'); }
+            if (cmd == 'T') { wire += 'T'; ++memories; serial.bytes.push_back('T'); }
+            if (cmd == 'C') { wire += 'C'; ++autos; serial.bytes.push_back('A'); }
+            if (cmd == 'S') for (auto b : frame(fwd, reflected, 1153)) serial.bytes.push_back(b);
+        };
+        tuner.manualCommandStarted(); TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+        tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_B, true);
+        ldg::AntennaSettings table; table.enabled = 1; table.bands[BAND_20M] = ANT_B;
+        tuner.configureAntennas(table);
+        ldg::TuningSettings profile; profile.managed = 1; profile.autoFallback = fallback;
+        tuner.configureTuning(profile);
+        for (int i = 0; i < 5; ++i) { feed(tuner, frame(0, 0, 1153)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_INT(MODE_MANUAL, tuner.getMode());
+        wire.clear();
+
+        // Observed SunSDR2DX state: TRX=false, TUNE=true, ~40 W and SWR 2.5.
+        // TUNE alone cannot authorize a command without actual RF packets.
+        radioFixture.tuning = true;
+        tuner.serviceAntennas(); TEST_ASSERT_EQUAL_UINT(0, memories);
+        fwd = 150; reflected = 65;
+        for (int i = 0; i < 3; ++i) { feed(tuner, frame(fwd, reflected, 1153)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_STRING("T", wire.c_str());
+        for (int i = 0; i < 8; ++i) { feed(tuner, frame(fwd, reflected, 1153)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_STRING(fallback ? "TC" : "T", wire.c_str());
+        TEST_ASSERT_EQUAL_UINT(1, memories); TEST_ASSERT_EQUAL_UINT(fallback ? 1 : 0, autos);
+
+        // A zero-power gap with TUNE still on is not a new transmission.
+        fwd = reflected = 0;
+        for (int i = 0; i < 10; ++i) { testMillis += 200; feed(tuner, frame(0, 0, 1153)); tuner.serviceAntennas(); }
+        fwd = 150; reflected = 65;
+        for (int i = 0; i < 5; ++i) { feed(tuner, frame(fwd, reflected, 1153)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(1, memories);
+
+        // A genuine match followed by a new SWR rise still starts a full cycle.
+        reflected = 0;
+        for (int i = 0; i < 3; ++i) { feed(tuner, frame(fwd, reflected, 1153)); tuner.serviceAntennas(); }
+        reflected = 65;
+        for (int i = 0; i < 8; ++i) { feed(tuner, frame(fwd, reflected, 1153)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(2, memories); TEST_ASSERT_EQUAL_UINT(fallback ? 2 : 0, autos);
+
+        // TUNE off plus a real zero ends the session and restores MANUAL.
+        radioFixture.tuning = false; fwd = reflected = 0;
+        feed(tuner, frame(0, 0, 1153)); tuner.serviceAntennas();
+        TEST_ASSERT_EQUAL_INT(MODE_MANUAL, tuner.getMode());
+        TEST_ASSERT_TRUE(tuner.getState().tuningState == ldg::TuningState::WaitingRf);
+        radioFixture.tuning = true; fwd = 150; reflected = 65;
+        for (int i = 0; i < 3; ++i) { feed(tuner, frame(fwd, reflected, 1153)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(3, memories);
+    }
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_controlled_tci_tune_without_trx_runs_memory_and_swr_fallback);
     RUN_TEST(test_controlled_pending_band_survives_delayed_post_manual_meter_without_another_rf_start);
     RUN_TEST(test_controlled_20_to_160_waits_for_confirmed_band_and_selects_before_tuning_in_one_tx);
     RUN_TEST(test_controlled_late_intraband_mismatch_repeats_memory_then_optional_auto_without_antenna_switches);

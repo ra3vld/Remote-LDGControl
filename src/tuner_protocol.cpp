@@ -124,8 +124,10 @@ void TunerProtocol::observeRadio() {
     const auto band = m_antennas.currentBand();
     const bool source = m_antennas.usesRadio();
     const auto radio = m_radioStateGetter ? m_radioStateGetter() : ldg::RadioState{};
+    // ExpertSDR3 can assert TUNE without TRX for its RF carrier. Both are TX
+    // intent; the tuning policy still requires actual fresh low-power RF.
     m_tuning.setPtt(radio.connection == ldg::RadioConnection::Ready && radio.rxKnown &&
-                    radio.ageMs <= ldg::RadioState::LivenessMs, radio.transmitting);
+                    radio.ageMs <= ldg::RadioState::LivenessMs, radio.transmitting || radio.tuning);
     m_antennas.observeRadio(radio, m_manualRevision.load());
     if (previous != m_antennas.automatic() || band != m_antennas.currentBand() || source != m_antennas.usesRadio())
         publishSnapshot();

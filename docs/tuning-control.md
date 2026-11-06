@@ -61,9 +61,13 @@ synchronized retry; memory cycles never loop on failures. Power at or above
 100 W blocks tuning/fallback for that transmission before fallback AUTO is active;
 a later power reduction alone does not rearm it.
 
-With live TCI RX/TX state, zero-power packets during TX are SSB gaps, and a fresh
-zero-power packet in RX ends the transmission. Without reliable TCI state, the
-controller requires actual zero-power packets spanning at least 1.5 seconds,
+With live TCI state, either TRX or TUNE asserts transmission intent. ExpertSDR3
+can report TRX=false and TUNE=true while sending a tuning carrier. Fresh positive
+RF packets are still required before MEM TUNE or AUTO; TUNE alone cannot start
+a tuning command. Zero-power packets while either flag is on are RF gaps, and a
+fresh zero-power packet with both flags off ends the transmission.
+Without reliable TCI state, the controller requires actual zero-power packets
+spanning at least 1.5 seconds,
 with no gap between packets longer than 3 seconds. This accepts idle telemetry
 delivered in batches; command decisions still require power no older than 500 ms.
 Missing packets do not count as zero or prove the end of transmission. If telemetry is
