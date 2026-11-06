@@ -40,7 +40,7 @@ inline bool validDeviceConfig(const DeviceConfig& config) {
         terminated(config.ant1Name) && terminated(config.ant2Name) && terminated(config.remoteHost) &&
         terminated(config.staticIP) && terminated(config.staticNetmask) &&
         terminated(config.staticGateway) && terminated(config.staticDNS) &&
-        config.webUsername[0] && config.webPassword[0] && config.mqttPort &&
+        config.webUsername[0] && config.webPassword[0] && config.mqttPort && config.displayOrientation < 16 &&
         std::isfinite(config.meterPsuVoltage) && config.meterPsuVoltage >= 8 && config.meterPsuVoltage <= 18 &&
         (!config.useStaticIP || (validIPv4(config.staticIP) && validIPv4(config.staticNetmask) &&
             validIPv4(config.staticGateway) && (!config.staticDNS[0] || validIPv4(config.staticDNS))));
@@ -50,13 +50,14 @@ struct StoredConfig {
     uint32_t version;
     DeviceConfig value;
 };
+static_assert(sizeof(StoredConfig) == 564, "Display orientation must not grow stored configuration");
 
 // A single NVS blob replaces individually committed keys: a failed update
 // cannot leave a mixture of old credentials and new network settings.
 template<class Storage> bool writeConfig(Storage& storage, const DeviceConfig& config) {
     if (!validDeviceConfig(config)) return false;
     StoredConfig stored{};
-    stored.version = 1;
+    stored.version = 2;
     stored.value = config;
     return storage.putBytes("configV1", &stored, sizeof(stored)) == sizeof(stored);
 }
@@ -65,7 +66,10 @@ template<class Storage> bool readConfig(Storage& storage, DeviceConfig& config) 
     StoredConfig stored{};
     if (storage.getBytesLength("configV1") != sizeof(stored) ||
         storage.getBytes("configV1", &stored, sizeof(stored)) != sizeof(stored) ||
-        stored.version != 1 || !validDeviceConfig(stored.value)) return false;
+        (stored.version != 1 && stored.version != 2)) return false;
+    // V1's tail padding was unspecified. Never interpret it as a setting.
+    if (stored.version == 1) stored.value.displayOrientation = 0;
+    if (!validDeviceConfig(stored.value)) return false;
     config = stored.value;
     return true;
 }

@@ -39,6 +39,12 @@ UI previews with demo data: 250 W forward, 10 W reflected, SWR 1.5, and the 20m 
 
 ### Web interface
 
+Controls, live numbers and critical settings load first. Other settings load on
+request; the meter and graphs load afterward. Assets are minified and gzipped at
+build time, with no browser libraries or device-side compression. See
+[web asset build and staged loading](docs/web-loading.md) for Node/npm setup,
+measurements and installation requirements.
+
 ![Desktop tuner controls](docs/screenshots/web-control-desktop.png)
 
 <details>
@@ -242,7 +248,7 @@ The scale endpoint returns `meter_scale`, `meter_logarithmic` and `meter_scale_r
 are also included in `/api/status` and live WebSocket meter updates, including
 when the tuner is idle. Invalid scale requests return HTTP 400. To install this
 feature, upload both the application and LittleFS (`uploadfs`) and reload the
-browser page. Run `pio test -e native`, `node tests/test_meter_scale_web.cjs` and
+browser page. Generate test assets with `npm run build:web`, then run `pio test -e native`, `node tests/test_meter_scale_web.cjs` and
 `node tests/test_control_web.cjs`
 for the shared-state and page synchronization regression checks.
 `node tests/test_display_settings_web.cjs` checks saved custom/log ranges and
@@ -255,6 +261,9 @@ confirmed controls. A late HTTP response cannot overwrite a newer WebSocket
 snapshot. Repeated socket reconnects preserve fresh HTTP readings; stale readings
 are cleared if both transports fail. `node tests/test_live_status_web.cjs` covers
 this fallback.
+The [web history charts](docs/web-history.md) show power, SWR, mode, antenna and
+band using history held only in the open browser page, without device-side
+processing or storage for the charts.
 The managed HTTP dependency keeps request headers and WebSocket handlers alive
 until their active request/callback returns; closing a socket during I/O must not
 reboot the controller. Socket writes have a deadline, truncated/oversized incoming

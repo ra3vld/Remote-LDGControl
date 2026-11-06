@@ -19,6 +19,17 @@ jobs:
         with:
           python-version: '3.11'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install web build tools
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build production web assets
+        run: node scripts/build_web.cjs --out .pio/web-test-assets
+
       - name: Install PlatformIO
         run: python -m pip install -r requirements-platformio.txt
 
@@ -27,15 +38,20 @@ jobs:
 
       - name: Test browser meter scale synchronization
         run: |
+          node tests/test_web_assets.cjs
           node tests/test_meter_scale_web.cjs
+          node tests/test_antenna_settings_web.cjs
           node tests/test_control_web.cjs
           node tests/test_settings_web.cjs
           node tests/test_language_web.cjs
+          node tests/test_history_web.cjs
+          node tests/test_orientation_web.cjs
           node tests/test_tuning_settings_web.cjs
           node tests/test_radio_web.cjs
           node tests/test_display_settings_web.cjs
           node tests/test_live_status_web.cjs
           node tests/test_startup_web.cjs
+          node tests/test_progressive_web.cjs
 
       - name: Build all environments
         run: |

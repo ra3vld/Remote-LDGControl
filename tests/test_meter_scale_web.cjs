@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const html = fs.readFileSync(path.join(__dirname, '../data/index.html'), 'utf8');
+const { html, asset } = require('./web_assets.cjs');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => {
@@ -39,6 +39,7 @@ function board() {
                 }
                 return { ok: true, json: async () => ({ ...this.brightness }) };
             }
+            if (url === '/api/radio-config') return { ok: true, json: async () => ({ enabled: false, host: '', port: 40001, receiver: 0 }) };
             if (url === '/api/antenna-config') return { ok: true, json: async () => ({ enabled: false, bands: Array(11).fill(0) }) };
             if (url === '/api/tuning-config') return { ok: true, json: async () => ({ auto_fallback: false, swr_threshold: 2 }) };
             if (url === '/api/ws-token') return { ok: true, json: async () => ({ token: 'test' }) };
@@ -84,7 +85,8 @@ async function page(server, initialSnapshot = true, browser = {}) {
             textContent: '', style: {}, dataset: {}, width: 480, height: 320, events: {},
             classList: { add() {}, remove() {} },
             addEventListener(event, fn) { this.events[event] = fn; },
-            getContext() { return context2d; }, scrollIntoView() {}
+            getContext() { return context2d; }, scrollIntoView() {}, querySelectorAll() { return []; },
+            removeEventListener(event) { delete this.events[event]; }, remove() {}
         });
         return elements.get(id);
     }
@@ -99,7 +101,15 @@ async function page(server, initialSnapshot = true, browser = {}) {
     class ClockDate extends Date { static now() { return 100000 + now; } }
     const timers = new Map();
     const context = vm.createContext({
-        document: { hidden: false, documentElement: {}, createElement: () => element(Symbol()), getElementById: element, querySelectorAll: () => [], querySelector: element },
+        document: { head: { appendChild(script) {
+            const execute = () => {
+                context.document.currentScript = script;
+                try { vm.runInContext(asset(script.src), context, { filename: script.src }); script.onload(); }
+                catch (error) { script.onerror(error); }
+                finally { context.document.currentScript = null; }
+            };
+            if (browser.loadScript) browser.loadScript(script, execute); else execute();
+        } }, hidden: false, documentElement: {}, createElement: () => element(Symbol()), getElementById: element, querySelectorAll: () => [], querySelector: element },
         navigator: { language: browser.language || 'en-US' }, localStorage: browser.storage,
         location: { protocol: 'http:', host: 'board.test' }, WebSocket: Socket, AbortController, Date: ClockDate,
         fetch: server.fetch.bind(server),
@@ -107,6 +117,7 @@ async function page(server, initialSnapshot = true, browser = {}) {
         clearTimeout(id) { timers.delete(id); }, console
     });
     vm.runInContext(script, context, { filename: 'index.html' });
+    if (browser.optional !== false) vm.runInContext('loadAdvancedSettings();loadVisuals();', context);
     await tick();
     const socket = server.sockets.at(-1);
     socket.open();
@@ -158,7 +169,7 @@ async function run() {
     staleBoard.holdStatus = deferred();
     const stale = await page(staleBoard, false);
     assert.equal(stale.watts(), 1000); // Initial HTML default, not authoritative.
-    await stale.click();
+    await stale.click('scaleValue');
     assert.equal(staleBoard.watts, 1000);
     assert.equal(stale.watts(), 1000);
     staleBoard.holdStatus.resolve();

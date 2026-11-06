@@ -3,7 +3,7 @@ const {board,page,tick,deferred} = require('./test_meter_scale_web.cjs');
 
 (async () => {
     const server=board(), fetch=server.fetch.bind(server), pending=[];
-    const paths=['/api/config','/api/antenna-config','/api/radio-config','/api/tuning-config','/api/display-config','/api/status'];
+    const paths=['/api/status','/api/config','/api/tuning-config','/api/antenna-config','/api/radio-config','/api/display-config'];
     let active=0, peak=0;
     server.fetch=async (url,options) => {
         if (!paths.includes(url)) return fetch(url,options);
@@ -20,6 +20,7 @@ const {board,page,tick,deferred} = require('./test_meter_scale_web.cjs');
     const ui=await page(server);
     for (let i=0;i<paths.length;++i) {
         assert.deepEqual(pending.map(x=>x.url),paths.slice(0,i+1),'Settings loading must wait for the preceding response');
+        if (i === 4) assert.equal(require('node:vm').runInContext('coreReady', ui.context), true);
         pending[i].gate.resolve(); await tick();
     }
     assert.equal(peak,1,'Startup settings must fit one HTTP slot alongside WebSockets');

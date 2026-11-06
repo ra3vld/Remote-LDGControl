@@ -7,7 +7,9 @@ browser and device origin. If storage is blocked, switching still works for the
 current page. Reloading uses the browser language again.
 
 Labels, help, tooltips, placeholders, live statuses, known MQTT errors, meter
-captions and notifications switch immediately. Unsaved form values and custom
+captions and notifications switch immediately once their dictionary is available.
+Critical Russian strings are inline; optional captions finish loading asynchronously
+on the first Russian selection. Unsaved form values and custom
 antenna names are preserved. Protocol mode names such as AUTO, MANUAL and
 CONTROLLED retain their standard spelling. Unrecognized diagnostic text is
 displayed verbatim.
@@ -16,13 +18,11 @@ displayed verbatim.
 
 The feature adds **0 bytes of ESP32 application RAM**, below the 200-byte limit.
 All language state, translation strings and rendering execute in the browser.
-Only `data/index.html` changes in the device image: it lives in LittleFS, and
-`h_root()` in `src/web_server.cpp` continues to stream it through its existing
-512-byte stack buffer. The firmware adds no variables, language API, NVS setting,
-JSON field, heap allocation or larger response buffer. The larger page takes
-more flash space and transfer time. This is an architectural RAM bound, not a
-claim that free heap measured on a running device stays numerically constant.
+Translations live in `web/messages.ru.json`, generated into the inline core and
+an optional language module in LittleFS. The firmware streams these prebuilt
+assets through its existing 512-byte stack buffer; there is no language API,
+NVS setting or additional language state on the ESP32. This is an architectural
+RAM bound, not a measured runtime heap result.
 
-Build the web image with `pio run -e esp32-3248s035c -t buildfs` (or the matching
-board environment). Updating an existing device requires updating LittleFS;
-uploading only the application firmware does not update the web page.
+See [asset build and loading](web-loading.md) for `npm ci`, the PlatformIO build
+hook, gzip, module caching and application/LittleFS installation requirements.

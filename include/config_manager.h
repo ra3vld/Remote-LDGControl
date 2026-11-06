@@ -19,6 +19,7 @@ public:
 
     bool begin();
     DeviceConfig get() const;
+    uint8_t displayOrientation() const;
     bool update(const DeviceConfig& config);
     ldg::AntennaSettings antennaSettings() const;
     bool updateAntennaSettings(const ldg::AntennaSettings& settings);

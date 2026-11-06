@@ -1,0 +1,183 @@
+<div class="settings-section"><h3 data-i18n>CONTROLLED settings</h3>
+                <p style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>At each transmission start below 100 W, the controller runs MEM TUNE after selecting the antenna. SWR is monitored throughout transmission: if it stabilizes above the threshold again after returning to normal, MEM TUNE runs again, followed by AUTO if enabled. Persistently high SWR does not trigger repeated tuning. The antenna table applies on the first band detection or a band change; manual selection on the same band is retained. Without TCI, a new transmission is detected after 1.5 s of confirmed zero power. Missing data does not count as a pause.</p>
+</div>
+<div class="settings-section">
+                <h3 data-i18n>Network</h3>
+                <div class="form-group">
+                    <label data-i18n>Connected SSID</label>
+                    <input type="text" id="ssid" readonly style="opacity: 0.7; cursor: not-allowed;">
+                </div>
+                <div class="form-row" style="align-items:center;margin-bottom:0.5rem;">
+                    <label style="margin:0;font-weight:600;" data-i18n>IP Mode</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
+                        <input type="checkbox" id="useStaticIP" onchange="toggleStaticIP()"><span data-i18n>Static IP</span></label>
+                </div>
+                <div id="staticIPFields" style="display:none;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label data-i18n>IP Address</label>
+                            <input type="text" id="staticIP" placeholder="192.168.1.100" pattern="\d+\.\d+\.\d+\.\d+">
+                        </div>
+                        <div class="form-group">
+                            <label data-i18n>Netmask</label>
+                            <input type="text" id="staticNetmask" placeholder="255.255.255.0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label data-i18n>Gateway</label>
+                            <input type="text" id="staticGateway" placeholder="192.168.1.1">
+                        </div>
+                        <div class="form-group">
+                            <label>DNS</label>
+                            <input type="text" id="staticDNS" placeholder="192.168.1.1">
+                        </div>
+                    </div>
+                </div>
+                <div id="dhcpInfo" style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem;"><span data-i18n>Current:</span><span id="currentIP">--</span> / <span id="currentNetmask">--</span>
+                    &nbsp;GW: <span id="currentGateway">--</span>
+                </div>
+                <div id="remoteHostGroup" style="display:none;margin-top:0.75rem;">
+                    <div class="form-group">
+                        <label data-i18n>Remote Unit Host</label>
+                        <input type="text" id="remoteHost" placeholder="ldgcontrol-remote.local">
+                    </div>
+                </div>
+                <p style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.4rem;" data-i18n>To change WiFi network, press the reset button on the device to launch the captive portal.</p>
+            </div>
+<div class="settings-section">
+                <h3 data-i18n>Display orientation</h3>
+                <p id="orientationStatus" aria-live="polite" data-i18n>Waiting for display settings…</p>
+                <fieldset id="orientationControls" disabled style="border:0;min-width:0">
+                    <div class="form-group">
+                        <label for="displayRotation" data-i18n>Rotation</label>
+                        <select id="displayRotation">
+                            <option value="0">0°</option><option value="1">90°</option>
+                            <option value="2">180°</option><option value="3">270°</option>
+                        </select>
+                    </div>
+                    <div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem">
+                        <input id="displayMirrorX" type="checkbox" style="width:auto"><span data-i18n>Mirror horizontally</span></label></div>
+                    <div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem">
+                        <input id="displayMirrorY" type="checkbox" style="width:auto"><span data-i18n>Mirror vertically</span></label></div>
+                    <button class="btn btn-blue" type="button" id="btnSaveOrientation" onclick="saveDisplayOrientation()" data-i18n>Apply and save</button>
+                </fieldset>
+                <p class="history-note" data-i18n>Changes the physical display and touch controls immediately. Mirrors are applied after rotation. 0° is the standard landscape view.</p>
+            </div>
+<div class="settings-section">
+                <h3 data-i18n>Display brightness</h3>
+                <p id="brightnessStatus" aria-live="polite" data-i18n>Waiting for display data…</p>
+                <div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem">
+                    <input type="checkbox" id="brightnessAuto" style="width:auto" onchange="updateBrightnessControls()"><span data-i18n>Automatic light sensor control</span></label></div>
+                <div class="form-group"><label for="brightnessManual" data-i18n>Manual brightness, %</label>
+                    <input id="brightnessManual" type="number" min="1" max="100" value="100"></div>
+                <div class="form-row">
+                    <div class="form-group"><label for="brightnessMin" data-i18n>Minimum in darkness, %</label>
+                        <input id="brightnessMin" type="number" min="1" max="100" value="15"></div>
+                    <div class="form-group"><label for="brightnessMax" data-i18n>Maximum in bright light, %</label>
+                        <input id="brightnessMax" type="number" min="1" max="100" value="100"></div>
+                </div>
+                <details><summary data-i18n>Sensor calibration</summary>
+                    <p data-i18n>Cover or illuminate the sensor, wait for the reading to update, then capture the corresponding value.</p>
+                    <div class="form-row">
+                        <div class="form-group"><label for="brightnessDark" data-i18n>Darkness (0–4095)</label>
+                            <input id="brightnessDark" type="number" min="0" max="4095" value="3500">
+                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessDark')" data-i18n>Capture darkness</button></div>
+                        <div class="form-group"><label for="brightnessBright" data-i18n>Bright light (0–4095)</label>
+                            <input id="brightnessBright" type="number" min="0" max="4095" value="300">
+                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessBright')" data-i18n>Capture bright light</button></div>
+                    </div>
+                </details>
+                <button class="btn btn-blue" type="button" id="btnSaveBrightness" onclick="saveBrightnessSettings()" disabled data-i18n>Apply and save</button>
+            </div>
+<div class="settings-section">
+                <h3>MQTT</h3>
+                <div class="mqtt-diagnostics" aria-live="polite">
+                    <strong id="mqttStatusMessage" data-i18n>Checking live status...</strong>
+                    <p id="mqttStatusDetail"></p>
+                    <p id="mqttStatusError" hidden></p>
+                    <p id="deviceRuntime"></p>
+                </div>
+                <div class="form-row">
+                    <button class="btn btn-blue" type="button" onclick="refreshMqttStatus()" data-i18n>Refresh status</button>
+                    <button class="btn btn-blue" type="button" id="btnMqttReconnect" onclick="reconnectMqtt()" data-i18n>Reconnect MQTT</button>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n>Broker</label>
+                        <input type="text" id="mqttBroker" placeholder="192.168.1.100">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n>Port</label>
+                        <input type="number" id="mqttPort" value="1883">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n>Username</label>
+                        <input type="text" id="mqttUser" placeholder="ldgcontroller">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n>Password</label>
+                        <input type="password" id="mqttPass" placeholder="Leave blank to keep password" data-i18n-placeholder autocomplete="new-password">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:0.5rem">
+                        <input type="checkbox" id="mqttDiscoveryEnabled" checked style="width:auto"><span data-i18n>Home Assistant auto discovery</span></label>
+                </div>
+                <div class="form-group">
+                    <label data-i18n>Device topic (generated from MAC)</label>
+                    <input type="text" id="mqttBaseTopic" readonly>
+                </div>
+                <p style="font-size:0.7rem;color:var(--text-secondary)" data-i18n>Leave Broker empty to disable MQTT. Discovery uses the homeassistant prefix. State updates every 1 second during significant changes, otherwise every 30 seconds.</p>
+            </div>
+<div class="settings-section">
+                <h3 data-i18n>Web Authentication</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label data-i18n>Username</label>
+                        <input type="text" id="webUser" placeholder="admin">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n>Password</label>
+                        <input type="password" id="webPass" placeholder="change_me_please">
+                    </div>
+                </div>
+            </div>
+<div class="settings-section">
+                <h3 data-i18n>Tuner</h3>
+                <div class="form-group">
+                    <label data-i18n>Meter PSU Voltage (tuner's 12V supply)</label>
+                    <input type="number" id="psuVoltage" step="0.1" value="13.8" placeholder="13.8">
+                </div>
+                <div class="form-group">
+                    <label data-i18n>Antenna 1 Name</label>
+                    <input type="text" id="ant1Name" maxlength="8" placeholder="ANT 1">
+                </div>
+                <div class="form-group">
+                    <label data-i18n>Antenna 2 Name</label>
+                    <input type="text" id="ant2Name" maxlength="8" placeholder="ANT 2">
+                </div>
+            </div>
+<div class="settings-section">
+                <h3 data-i18n>Antenna by band</h3>
+                <p style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Only below 100 W. Band changes at 100 W or above are skipped. Manual selection lasts until the next band change and does not modify the table.</p>
+                <div id="antennaBandTable"></div>
+                <button type="button" class="btn-save" id="btnSaveAntennas" onclick="saveAntennaSettings()" disabled data-i18n>Save antenna table</button>
+            </div>
+<div class="settings-section">
+                <h3 data-i18n>Transceiver · TCI</h3>
+                <label><input type="checkbox" id="radioEnabled"><span data-i18n>Receive frequency via TCI</span></label>
+                <p style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Enable TCI in ExpertSDR3 and enter the computer's LAN address. Configure the controller connected to the LDG. The antenna is selected from the table during RX with fresh zero-power telemetry. If TCI disconnects, LDG RF telemetry is used.</p>
+                <div class="form-group"><label for="radioHost" data-i18n>TCI server address</label><input id="radioHost" type="text" maxlength="63" placeholder="192.168.1.10"></div>
+                <div class="form-row">
+                    <div class="form-group"><label for="radioPort" data-i18n>Port</label><input id="radioPort" type="number" min="1" max="65535" value="40001"></div>
+                    <div class="form-group"><label for="radioReceiver" data-i18n>RX index (0 = first)</label><input id="radioReceiver" type="number" min="0" max="15" value="0"></div>
+                </div>
+                <button type="button" class="btn-save" id="btnSaveRadio" onclick="saveRadioSettings()" disabled data-i18n>Save TCI</button>
+                <p id="radioSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Loading settings…</p>
+                <p id="radioDiagnostics" style="font-size:0.75rem;color:var(--text-secondary)"></p>
+            </div>
+<button class="btn-save" id="btnSaveGeneral" disabled onclick="saveSettings()" data-i18n>Save settings</button>
+<button class="btn-reset" onclick="resetSettings()" data-i18n>Reset to Defaults</button>

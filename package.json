@@ -1,0 +1,12 @@
+{
+  "name": "remote-ldgcontrol-web-build",
+  "private": true,
+  "scripts": {
+    "build:web": "node scripts/build_web.cjs --out .pio/web-test-assets"
+  },
+  "devDependencies": {
+    "acorn": "8.11.3",
+    "postcss": "8.4.31",
+    "terser": "5.19.2"
+  }
+}

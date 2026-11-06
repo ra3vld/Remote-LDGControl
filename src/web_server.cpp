@@ -1,4 +1,5 @@
 #include "web_server.h"
+#include "web_asset_request.h"
 #include "config_manager.h"
 #include "display_backlight.h"
 #ifdef WITH_DISPLAY
@@ -304,13 +305,29 @@ static void sendJsonDocument(hsv::HTTPResponse* res, const JsonDocument& doc) {
 
 static void h_root(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (!authenticate(req, res)) return;
-    res->setHeader("Content-Type", "text/html; charset=utf-8");
-
-    if (LittleFS.exists("/index.html")) {
-        fs::File f = LittleFS.open("/index.html", "r");
+    std::string asset;
+    const bool isAsset = req->getParams()->getQueryParameter("asset", asset);
+    if (isAsset && !ldg::validWebAsset(asset.c_str())) {
+        sendJson(res, 404, "{\"error\":\"asset not found\"}"); return;
+    }
+    const auto encoding = ldg::webEncoding(req->getHeader("Accept-Encoding").c_str());
+    std::string filename = isAsset ? "/" + asset : "/index.html";
+    bool compressed = false;
+    if (encoding.gzip && LittleFS.exists((filename + ".gz").c_str())) {
+        filename += ".gz";
+        compressed = true;
+    } else if (!encoding.identity) {
+        sendJson(res, 406, "{\"error\":\"unsupported content encoding\"}"); return;
+    }
+    res->setHeader("Content-Type", isAsset ? "text/javascript; charset=utf-8" : "text/html; charset=utf-8");
+    res->setHeader("X-Content-Type-Options", "nosniff");
+    res->setHeader("Vary", "Accept-Encoding");
+    if (LittleFS.exists(filename.c_str())) {
+        fs::File f = LittleFS.open(filename.c_str(), "r");
         if (f) {
             res->setHeader("Content-Length", std::to_string(f.size()));
-            res->setHeader("Cache-Control", "no-store");
+            res->setHeader("Cache-Control", isAsset ? "private, max-age=31536000, immutable" : "no-store");
+            if (compressed) res->setHeader("Content-Encoding", "gzip");
             uint8_t buf[512];
             int n;
             while ((n = f.read(buf, sizeof(buf))) > 0) {
@@ -320,7 +337,7 @@ static void h_root(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
             return;
         }
     }
-
+    if (isAsset) { sendJson(res, 404, "{\"error\":\"asset not found\"}"); return; }
     res->print(
         "<!DOCTYPE html><html><head>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -479,6 +496,7 @@ static void h_config_get(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     doc["wifiSSID"]        = WiFi.SSID();
 #ifdef WITH_DISPLAY
     doc["remoteHost"]      = cfg.remoteHost;
+    doc["display_orientation"] = cfg.displayOrientation;
     doc["build"]           = "display";
 #else
     doc["build"]           = "remote";
@@ -598,6 +616,16 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
 #ifdef WITH_DISPLAY
     if (doc["remoteHost"].is<const char*>()) strlcpy(cfg.remoteHost, doc["remoteHost"], sizeof(cfg.remoteHost));
 #endif
+    if (!doc["display_orientation"].isUnbound()) {
+#ifdef WITH_DISPLAY
+        if (!doc["display_orientation"].is<uint8_t>() || doc["display_orientation"].as<uint8_t>() >= 16) {
+            sendJson(res, 400, "{\"error\":\"invalid display orientation\"}"); return;
+        }
+        cfg.displayOrientation = doc["display_orientation"];
+#else
+        sendJson(res, 400, "{\"error\":\"display unavailable\"}"); return;
+#endif
+    }
     cfg.configured = true;
 
     if (!ldg::validDeviceConfig(cfg)) { sendJson(res, 400, "{\"error\":\"invalid configuration\"}"); return; }

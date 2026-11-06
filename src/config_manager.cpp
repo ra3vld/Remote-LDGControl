@@ -375,6 +375,13 @@ DeviceConfig ConfigManager::get() const {
     return config;
 }
 
+uint8_t ConfigManager::displayOrientation() const {
+    portENTER_CRITICAL(&m_configMux);
+    const uint8_t orientation = m_config.displayOrientation;
+    portEXIT_CRITICAL(&m_configMux);
+    return orientation;
+}
+
 ldg::BrightnessSettings ConfigManager::brightnessSettings() const {
     portENTER_CRITICAL(&m_configMux);
     const auto settings = m_brightnessSettings;
@@ -613,6 +620,7 @@ bool ConfigManager::isConfigured() const {
 }
 
 void ConfigManager::loadDefaults() {
+    m_config.displayOrientation = 0;
     m_config.wifiSSID[0] = '\0';
     m_config.wifiPassword[0] = '\0';
     // MQTT is optional. Leave broker/creds empty by default — main.cpp uses

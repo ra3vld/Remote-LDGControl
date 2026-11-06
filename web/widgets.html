@@ -1,0 +1,34 @@
+<div class="history-toolbar">
+                    <h2 data-i18n>Live history</h2>
+                    <label for="historyWindow" data-i18n>Time window</label>
+                    <select id="historyWindow" onchange="setHistoryWindow(this.value)">
+                        <option value="60" data-i18n>1 minute</option>
+                        <option value="300" selected data-i18n>5 minutes</option>
+                        <option value="900" data-i18n>15 minutes</option>
+                        <option value="1800" data-i18n>30 minutes</option>
+                    </select>
+                    <button type="button" onclick="clearHistory()" data-i18n>Clear history</button>
+                </div>
+                <p class="history-note" data-i18n>History is kept only in this page's memory for up to 30 minutes. Reloading clears it. Gaps mean no data; a held band is marked “last”.</p>
+                <div class="history-readout" id="historyReadout">
+                    <span id="historyFwd" class="history-fwd">FWD: --</span>
+                    <span id="historyRef" class="history-ref">REF: --</span>
+                    <span id="historySwr" class="history-swr">SWR: --</span>
+                    <span id="historyMode">--</span>
+                    <span id="historyAntenna">--</span>
+                    <span id="historyBand">--</span>
+                </div>
+                <div class="history-card">
+                    <h3><span data-i18n>Power, W</span><span class="history-fwd" data-i18n>FWD · Forward</span><span class="history-ref" data-i18n>REF · Reflected</span></h3>
+                    <canvas class="history-canvas" id="historyPower" role="img" aria-label="Power history" aria-describedby="historyReadout" data-i18n data-i18n-arialabel>Power history</canvas>
+                </div>
+                <div class="history-card">
+                    <h3 class="history-swr" data-i18n>SWR</h3>
+                    <canvas class="history-canvas" id="historySWR" role="img" aria-label="SWR history" aria-describedby="historyReadout" data-i18n data-i18n-arialabel>SWR history</canvas>
+                </div>
+                <div class="history-card">
+                    <h3 data-i18n>Mode, antenna and band</h3>
+                    <canvas class="history-canvas" id="historyStates" role="img" aria-label="Mode, antenna and band history" aria-describedby="historyReadout" data-i18n data-i18n-arialabel>Mode, antenna and band history</canvas>
+                </div>
+                <span id="historyTime" aria-live="off"></span>
+                <p class="history-note" data-i18n>Move over a chart or touch it to inspect the values at that time.</p>

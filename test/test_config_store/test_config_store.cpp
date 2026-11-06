@@ -3,6 +3,8 @@
 #include "config_store.h"
 #include "remote_protocol.h"
 #include "command_feedback.h"
+#include "display_orientation.h"
+#include <cstddef>
 
 void setUp() {}
 void tearDown() {}
@@ -43,6 +45,58 @@ void test_failed_config_write_preserves_previous_snapshot() {
     TEST_ASSERT_EQUAL_STRING(original.webPassword, loaded.webPassword);
     store.bytes.pop_back();
     TEST_ASSERT_FALSE(ldg::readConfig(store, loaded));
+}
+
+void test_display_orientation_uses_padding_and_migrates_v1_without_reading_padding() {
+    TEST_ASSERT_EQUAL_UINT(560, sizeof(DeviceConfig));
+    TEST_ASSERT_EQUAL_UINT(558, offsetof(DeviceConfig, displayOrientation));
+    TEST_ASSERT_EQUAL_UINT(564, sizeof(ldg::StoredConfig));
+    Storage store;
+    auto original = config();
+    original.displayOrientation = 15;
+    TEST_ASSERT_TRUE(ldg::writeConfig(store, original));
+    DeviceConfig loaded{};
+    TEST_ASSERT_TRUE(ldg::readConfig(store, loaded));
+    TEST_ASSERT_EQUAL_UINT8(15, loaded.displayOrientation);
+    TEST_ASSERT_FALSE(ldg::networkSettingsChanged(config(), original));
+    TEST_ASSERT_FALSE(ldg::mqttSettingsChanged(config(), original));
+    original.displayOrientation = 16;
+    TEST_ASSERT_FALSE(ldg::writeConfig(store, original));
+    TEST_ASSERT_TRUE(ldg::readConfig(store, loaded));
+    TEST_ASSERT_EQUAL_UINT8(15, loaded.displayOrientation);
+    // Legacy record: bytes at the new field offset were arbitrary padding.
+    store.bytes[0] = 1;
+    store.bytes[sizeof(uint32_t) + offsetof(DeviceConfig, displayOrientation)] = 0xff;
+    TEST_ASSERT_TRUE(ldg::readConfig(store, loaded));
+    TEST_ASSERT_EQUAL_UINT8(0, loaded.displayOrientation);
+    TEST_ASSERT_EQUAL_STRING(config().webPassword, loaded.webPassword);
+    store.bytes[0] = 99;
+    TEST_ASSERT_FALSE(ldg::readConfig(store, loaded));
+}
+
+void test_all_display_touch_transforms_invert_the_hardware_address_mapping() {
+    for (unsigned mode = 0; mode < 16; ++mode) {
+        const auto driver = ldg::displayDriverRotation(mode);
+        const auto madctl = ldg::displayMadctl(driver);
+        for (int16_t x : {int16_t(0), int16_t(173), int16_t(479)}) {
+            for (int16_t y : {int16_t(0), int16_t(111), int16_t(319)}) {
+                int16_t uiX = x, uiY = y;
+                ldg::orientDisplayTouch(uiX, uiY, driver);
+                TEST_ASSERT_GREATER_OR_EQUAL_INT(0, uiX);
+                TEST_ASSERT_GREATER_OR_EQUAL_INT(0, uiY);
+                TEST_ASSERT_LESS_THAN_INT((driver&1) ? 480 : 320, uiX);
+                TEST_ASSERT_LESS_THAN_INT((driver&1) ? 320 : 480, uiY);
+                // Independent model of MADCTL: exchange native column/row,
+                // then reverse the selected native axes.
+                int column = (madctl & 0x20) ? uiY : uiX;
+                int row = (madctl & 0x20) ? uiX : uiY;
+                if (madctl & 0x40) column = 319 - column;
+                if (madctl & 0x80) row = 479 - row;
+                TEST_ASSERT_EQUAL_INT(x, row);
+                TEST_ASSERT_EQUAL_INT(y, column);
+            }
+        }
+    }
 }
 
 void test_invalid_config_never_replaces_saved_credentials() {
@@ -139,6 +193,8 @@ void test_command_feedback_waits_for_real_completion_and_ignores_older_requests(
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_failed_config_write_preserves_previous_snapshot);
+    RUN_TEST(test_display_orientation_uses_padding_and_migrates_v1_without_reading_padding);
+    RUN_TEST(test_all_display_touch_transforms_invert_the_hardware_address_mapping);
     RUN_TEST(test_invalid_config_never_replaces_saved_credentials);
     RUN_TEST(test_remote_results_and_source_contract);
     RUN_TEST(test_remote_deadlines_allow_tuning_recovery_and_antenna_selection);

@@ -40,6 +40,50 @@ not change the live scale. Responses, `/api/status` and WebSocket events expose
 Browsers reject older revisions and do not overwrite unsaved form edits.
 The versioned `meterScaleV1` NVS record is separate from network credentials.
 
+## Display orientation
+
+The web Settings page provides 0°/90°/180°/270° rotation and horizontal/vertical
+mirroring for both physical display builds. 0° is the existing 480×320 landscape.
+Mirrors apply in the resulting screen axes after rotation. Press **Apply and
+save** in that section: it saves just the orientation, preserves other browser
+drafts, and applies in the UI loop without rebooting. Portrait orientations
+keep the dial above a two-column button layout. Touch coordinates follow the
+same hardware transformation; a held finger must be released after a change.
+Headless builds and older firmware disable these controls.
+
+`GET /api/config` exposes `display_orientation` only on display builds. A partial
+`POST /api/config` accepts an integer 0–15: bits 0–1 are quarter-turns, bit 2
+mirrors horizontally and bit 3 vertically. Invalid values, booleans and writes
+to a headless build return HTTP 400. Persistence failure leaves the active
+orientation unchanged. No new endpoint, task or polling loop is introduced.
+
+The byte occupies existing tail padding in `DeviceConfig`: its size stays
+560 bytes, and `StoredConfig` stays 564 bytes. Compile-time checks enforce this.
+The NVS blob advances from version 1 to 2; existing version-1 records migrate to
+0° without interpreting their former padding or changing credentials. Older
+firmware cannot read version-2 records, so export settings before downgrading.
+
+Rotation and mirroring use the ST7796/ILI9488 MADCTL register. The existing TFT
+rotation byte holds the applied flags. There is no software pixel rotation,
+new framebuffer, extra draw buffer, task, timer, or orientation object. The
+existing five-row draw buffer and delta scratch allocation retain their sizes.
+LVGL uses its existing fixed memory pool. Saving still uses the existing
+HTTP/JSON/NVS path and stack; this is not a claim of literally executing without
+RAM or of an unchanged on-device free-heap reading.
+
+The before/after builds for this change have identical DRAM/IRAM section sizes
+on all three profiles: static RAM is 105,288 bytes (`esp32-display`), 62,760
+bytes (`esp32-remote`) and 105,520 bytes (`esp32-3248s035c`). This is a linker
+comparison, not a measurement of runtime HTTP/JSON allocation or stack use.
+
+`node tests/test_orientation_web.cjs` covers all 16 settings, partial saves,
+reload, drafts, errors and unsupported firmware. `tests/test_orientation_browser.cjs`
+checks the real settings controls with Playwright. Native configuration tests
+check V1 migration and the touch/MADCTL inverse for all 16 modes. Native LCD
+tests render every mode, check control bounds and verify the existing draw
+buffer pointer and capacity are unchanged. Physical LCD/touch acceptance still
+requires installing both the firmware and its matching LittleFS image.
+
 ## Backlight
 
 Automatic backlight control is available on **ESP32-3248S035C**, using the

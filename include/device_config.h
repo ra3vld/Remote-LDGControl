@@ -25,4 +25,7 @@ struct DeviceConfig {
     char staticDNS[16];
     // Display-build only: hostname/IP of remote unit to subscribe to
     char remoteHost[64];
+    // Occupies existing tail padding; the object and stored record do not grow.
+    uint8_t displayOrientation = 0;
 };
+static_assert(sizeof(DeviceConfig) == 560, "Display orientation must not grow DeviceConfig");

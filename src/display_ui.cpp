@@ -10,6 +10,7 @@
 #include <math.h>
 #include <algorithm>
 #include "display_backlight.h"
+#include "display_orientation.h"
 #include <src/draw/sw/lv_draw_sw.h>
 
 DisplayUI* DisplayUI::s_instance = nullptr;
@@ -269,6 +270,7 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     lv_obj_add_event_cb(m_btnBypass,   btnBypassEvent,   LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(m_btnAuto,     btnAutoEvent,     LV_EVENT_CLICKED, NULL);
     updateMeterScale();
+    updateOrientation();
 
 #ifdef BOARD_ESP32_3248S035C
     lv_refr_now(NULL);
@@ -283,6 +285,7 @@ void DisplayUI::loop() {
     displayBacklight.loop();
 #endif
     // Web requests only change the atomic model; all LVGL calls stay here.
+    updateOrientation();
     updateMeterScale();
     // UART can publish much faster than the LCD refreshes. Consume only the
     // latest sample once per frame so invalid rectangles cannot accumulate
@@ -344,8 +347,6 @@ void DisplayUI::updateState(const tuner_state_t& state) {
             lv_obj_set_style_text_color(m_ssidLabel, lv_color_hex(enabled ? 0x66ccff : 0x666666), LV_PART_MAIN);
             lv_obj_set_width(m_ssidLabel, enabled ? 172 : LV_SIZE_CONTENT);
             if (enabled) {
-                lv_obj_set_align(m_ssidLabel, LV_ALIGN_TOP_LEFT);
-                lv_obj_set_pos(m_ssidLabel, 305, 0);
                 lv_label_set_long_mode(m_ssidLabel, LV_LABEL_LONG_CLIP);
             }
             else {
@@ -353,6 +354,7 @@ void DisplayUI::updateState(const tuner_state_t& state) {
                 lv_obj_align(m_ssidLabel, LV_ALIGN_TOP_RIGHT, -5, 5);
                 m_radioText[0] = 0;
             }
+            layoutNetworkInfo();
         }
         char text[sizeof(m_radioText)];
         const char* trx = radio.transmitting ? "TX" : radio.rxKnown ? "RX" : "?";
@@ -635,8 +637,8 @@ void DisplayUI::readTouch(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         uint16_t x, y;
         if (ns2009Read(&x, &y)) {
             data->state = LV_INDEV_STATE_PR;
-            data->point.x = map(x, 200, 3900, 0, DISPLAY_WIDTH);
-            data->point.y = map(y, 200, 3900, 0, DISPLAY_HEIGHT);
+            data->point.x = map(x, 200, 3900, 0, DISPLAY_WIDTH - 1);
+            data->point.y = map(y, 200, 3900, 0, DISPLAY_HEIGHT - 1);
         } else {
             data->state = LV_INDEV_STATE_REL;
         }
@@ -644,6 +646,73 @@ void DisplayUI::readTouch(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         data->state = LV_INDEV_STATE_REL;
     }
 #endif
+    if (data->state == LV_INDEV_STATE_PR)
+        ldg::orientDisplayTouch(data->point.x, data->point.y, m_tft->getRotation());
+}
+
+void DisplayUI::layoutNetworkInfo() {
+    if (!(m_tft->getRotation() & 1)) {
+        lv_obj_set_width(m_ssidLabel, 172);
+        lv_label_set_long_mode(m_ssidLabel, LV_LABEL_LONG_CLIP);
+        lv_obj_align(m_ssidLabel, LV_ALIGN_TOP_LEFT, 4, 0);
+        lv_obj_align(m_ipLabel, LV_ALIGN_TOP_RIGHT, -4, 0);
+        lv_obj_align(m_modeLabel, LV_ALIGN_TOP_RIGHT, -4, 18);
+    } else {
+        lv_obj_set_width(m_ssidLabel, m_radioVisible ? 172 : LV_SIZE_CONTENT);
+        lv_obj_align(m_ssidLabel, m_radioVisible ? LV_ALIGN_TOP_LEFT : LV_ALIGN_TOP_RIGHT,
+                     m_radioVisible ? 305 : -5, m_radioVisible ? 0 : 5);
+        lv_obj_align(m_ipLabel, LV_ALIGN_TOP_RIGHT, -5, 22);
+        lv_obj_align(m_modeLabel, LV_ALIGN_TOP_RIGHT, -5, 45);
+    }
+}
+
+void DisplayUI::updateOrientation() {
+    const uint8_t requested = ldg::displayDriverRotation(configManager.displayOrientation());
+    // The TFT driver's existing rotation byte also holds the two reflection
+    // bits. Width/height and address-window bookkeeping stay in that driver.
+    if (m_tft->getRotation() == requested) return;
+    m_tft->setRotation(requested & 3);
+    m_tft->startWrite();
+    m_tft->writecommand(TFT_MADCTL);
+#ifdef TFT_MAD_COLOR_ORDER
+    m_tft->writedata(ldg::displayMadctl(requested) | TFT_MAD_COLOR_ORDER);
+#else
+    m_tft->writedata(ldg::displayMadctl(requested) | TFT_MAD_BGR);
+#endif
+    m_tft->endWrite();
+    m_tft->rotation = requested;
+    // Reset a held finger so a setting change cannot become a button press.
+    for (auto* input = lv_indev_get_next(nullptr); input; input = lv_indev_get_next(input))
+        lv_indev_wait_release(input);
+    auto* display = lv_disp_get_default();
+    display->driver->hor_res = m_tft->width();
+    display->driver->ver_res = m_tft->height();
+    lv_disp_drv_update(display, display->driver);
+    const bool portrait = !(requested & 1);
+    const auto place = [](lv_obj_t* object, int x, int y, int width, int height) {
+        lv_obj_set_pos(object, x, y);
+        lv_obj_set_size(object, width, height);
+    };
+    lv_obj_set_pos(m_meter, portrait ? 10 : 0, portrait ? 36 : 0);
+    lv_obj_set_pos(m_refPowerLabel, portrait ? 18 : 8, portrait ? 300 : 264);
+    lv_obj_set_pos(m_fwdPowerLabel, portrait ? 166 : 156, portrait ? 300 : 264);
+    lv_obj_align_to(m_bandLabel, m_meter, LV_ALIGN_OUT_BOTTOM_LEFT, 10, 5);
+    lv_obj_align_to(m_scaleLabel, m_meter, LV_ALIGN_OUT_BOTTOM_RIGHT, -10, 5);
+    lv_obj_set_pos(m_antennaInitLabel, 8, portrait ? 340 : 305);
+    lv_obj_set_width(m_antennaInitLabel, portrait ? 304 : 290);
+    lv_obj_set_pos(m_commandLabel, portrait ? 8 : 315, portrait ? 352 : 303);
+    lv_obj_set_width(m_commandLabel, portrait ? 304 : 150);
+    place(m_btnMemTune, portrait ? 8 : 315, portrait ? 366 : 67, portrait ? 148 : 140, portrait ? 34 : 36);
+    place(m_btnFullTune, portrait ? 164 : 315, portrait ? 366 : 108, portrait ? 148 : 140, portrait ? 34 : 36);
+    place(m_btnAnt1, portrait ? 8 : 315, portrait ? 404 : 149, portrait ? 148 : 67, portrait ? 34 : 67);
+    place(m_btnAnt2, portrait ? 164 : 387, portrait ? 404 : 149, portrait ? 148 : 67, portrait ? 34 : 67);
+    lv_obj_set_width(m_ant1NameLabel, portrait ? 144 : 63);
+    lv_obj_set_width(m_ant2NameLabel, portrait ? 144 : 63);
+    place(m_btnBypass, portrait ? 8 : 315, portrait ? 442 : 221, portrait ? 148 : 140, portrait ? 34 : 36);
+    place(m_btnAuto, portrait ? 164 : 315, portrait ? 442 : 262, portrait ? 148 : 140, portrait ? 34 : 36);
+    layoutNetworkInfo();
+    m_previousValid = false;
+    lv_obj_invalidate(m_scr);
 }
 
 void DisplayUI::drawMeterEvent(lv_event_t* e) {

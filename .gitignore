@@ -6,6 +6,7 @@
 .venv/
 
 # Build artifacts
+/node_modules/
 *.o
 *.a
 *.elf

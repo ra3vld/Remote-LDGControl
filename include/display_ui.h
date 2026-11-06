@@ -123,6 +123,8 @@ private:
     // Touch
     void setupTouch();
     void readTouch(lv_indev_drv_t* drv, lv_indev_data_t* data);
+    void updateOrientation();
+    void layoutNetworkInfo();
 
     // Button events
     static void btnMemTuneEvent(lv_event_t* e);

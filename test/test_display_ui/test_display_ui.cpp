@@ -32,6 +32,7 @@ static lv_obj_t* label(lv_obj_t* parent,const char* text) {
 }
 void setUp() {
     testMillis=0; lastCommand=0; scale.set(1000);
+    configManager.config.displayOrientation=0;
     strcpy(configManager.config.ant1Name,"Dipole");
     strcpy(configManager.config.ant2Name,"Vertical");
     ui=new DisplayUI;
@@ -480,10 +481,48 @@ void test_managed_tuning_progress_updates_without_rebuilding_screen() {
     TEST_ASSERT_EQUAL_PTR(screen,lv_scr_act());
 }
 
+void test_orientation_reuses_display_buffer_and_keeps_every_control_on_screen() {
+    auto* buffer = lv_disp_get_default()->driver->draw_buf->buf1;
+    const auto capacity = lv_disp_get_default()->driver->draw_buf->size;
+    const auto check = [](lv_obj_t* object, int width, int height) {
+        lv_area_t bounds; lv_obj_get_coords(object, &bounds);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT(0, bounds.x1);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT(0, bounds.y1);
+        TEST_ASSERT_LESS_THAN_INT(width, bounds.x2);
+        TEST_ASSERT_LESS_THAN_INT(height, bounds.y2);
+    };
+    for (unsigned mode = 0; mode < 16; ++mode) {
+        configManager.config.displayOrientation = mode;
+        render();
+        auto* display = lv_disp_get_default();
+        const int width = (mode&1) ? 320 : 480, height = (mode&1) ? 480 : 320;
+        TEST_ASSERT_EQUAL_INT(width, lv_disp_get_hor_res(display));
+        TEST_ASSERT_EQUAL_INT(height, lv_disp_get_ver_res(display));
+        TEST_ASSERT_EQUAL_PTR(buffer, display->driver->draw_buf->buf1);
+        TEST_ASSERT_EQUAL_UINT(capacity, display->driver->draw_buf->size);
+        for (uint32_t i = 0; i < lv_obj_get_child_cnt(lv_scr_act()); ++i)
+            check(lv_obj_get_child(lv_scr_act(), i), width, height);
+        TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "MEM TUNE"));
+        TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "FULL TUNE"));
+        if (const char* prefix = getenv("LDG_ORIENTATION_LCD_PPM")) {
+            char filename[512]; snprintf(filename, sizeof(filename), "%s-%u.ppm", prefix, mode);
+            FILE* image = fopen(filename, "wb"); TEST_ASSERT_NOT_NULL(image);
+            fprintf(image, "P6\n480 320\n255\n");
+            for (uint16_t pixel : TFT_eSPI::instance->pixels) {
+                const uint8_t rgb[] = {uint8_t(((pixel >> 11)&31)*255/31),
+                    uint8_t(((pixel >> 5)&63)*255/63), uint8_t((pixel&31)*255/31)};
+                fwrite(rgb, 1, 3, image);
+            }
+            fclose(image);
+        }
+    }
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_managed_tuning_progress_updates_without_rebuilding_screen);
     RUN_TEST(test_tci_frequency_and_connection_fit_above_ip_and_wait_reason_is_visible);
+    RUN_TEST(test_orientation_reuses_display_buffer_and_keeps_every_control_on_screen);
     RUN_TEST(test_last_confirmed_antenna_is_visible_as_unconfirmed_after_a_failed_command);
     RUN_TEST(test_antenna_initialization_status_is_visible_and_changes_without_recreating_screen);
     RUN_TEST(test_automatic_antenna_reasons_are_visible_on_lcd);

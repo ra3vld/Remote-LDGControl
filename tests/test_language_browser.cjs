@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
 
-const html = fs.readFileSync(path.join(__dirname, '../data/index.html'), 'utf8');
+const { html, serveAsset } = require('./web_assets.cjs');
 const meter = { meter_scale: 1000, meter_logarithmic: false, meter_scale_revision: 0,
     fwd_power: 40, ref_power: 1, swr: 1.4, band: '20m', mode: 1, tuner_mode: 1,
     antenna: 1, antenna_init: 'ready', antenna_auto: 'selected', antenna_auto_band: '20m',
@@ -31,6 +31,7 @@ const brightness = { supported: true, active: true, brightness: 75, light_raw: 1
             const requests = [], errors = [];
             let failSave = false;
             await context.route('http://ldg.test/**', async route => {
+            if (await serveAsset(route)) return;
                 const request = route.request(), url = new URL(request.url());
                 if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
                 requests.push({ method: request.method(), url: url.pathname, body: request.postData() });
@@ -54,6 +55,7 @@ const brightness = { supported: true, active: true, brightness: 75, light_raw: 1
             const page = await context.newPage();
             page.on('pageerror', error => errors.push(error.message));
             await page.goto('http://ldg.test/');
+        await page.evaluate(() => loadAdvancedSettings());
             await page.waitForFunction(() => meterSettingsLoaded && brightnessLoaded && !mqttStatusPending &&
                 document.getElementById('deviceRuntime').textContent.includes('test-build'));
             return { context, page, requests, errors, failSave() { failSave = true; } };
@@ -72,6 +74,7 @@ const brightness = { supported: true, active: true, brightness: 75, light_raw: 1
         assert.ok(english.every(text => !/[А-Яа-яЁё]/.test(text)), 'English UI contains Russian text');
         const requestCount = en.requests.length;
         await page.locator('#languageSelect').selectOption('ru');
+        await page.evaluate(() => ensureLocale());
         assert.equal(en.requests.length, requestCount, 'Language selection must not call the board');
         assert.equal(await page.locator('html').getAttribute('lang'), 'ru');
         assert.equal(await page.locator('[data-tab="settings"]').textContent(), 'Настройки');
@@ -110,6 +113,7 @@ const brightness = { supported: true, active: true, brightness: 75, light_raw: 1
             lastError: { message: 'Connection failed', code: -2, ageMs: 3000,
                 detail: 'TCP connection failed (check broker address, DNS, port, and network)', topic: '<img src=x>' } }));
         await page.locator('#languageSelect').selectOption('ru');
+        await page.evaluate(() => ensureLocale());
         assert.match(await page.locator('#mqttStatusError').textContent(), /Ошибка подключения.*код -2.*<img src=x>/);
         assert.match(await page.locator('#mqttStatusDetail').textContent(), /<b>Connected<\/b>.*Повтор через 2 с/);
         assert.equal(await page.locator('#mqttStatusDetail b, #mqttStatusError img').count(), 0);
@@ -123,6 +127,7 @@ const brightness = { supported: true, active: true, brightness: 75, light_raw: 1
         await page.evaluate(() => saveAntennaSettings());
         assert.equal(await page.locator('#toast').textContent(), 'Cannot save antenna table');
         await page.locator('#languageSelect').selectOption('ru');
+        await page.evaluate(() => ensureLocale());
         assert.equal(await page.locator('#toast').textContent(), 'Не удалось сохранить таблицу антенн');
         await page.reload();
         assert.equal(await page.locator('html').getAttribute('lang'), 'ru', 'Persist language on reload');
