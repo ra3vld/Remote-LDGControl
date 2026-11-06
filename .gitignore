@@ -5,8 +5,15 @@
 # Virtual environment
 .venv/
 
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Build artifacts
 /node_modules/
+/build/
+/dist/
 *.o
 *.a
 *.elf
@@ -32,6 +39,18 @@ data/certs/
 
 # Local config overrides
 include/config_local.h
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local tool state and credentials
+/.agents/
+/.codex/
+/.aws/
+
+# Runtime logs
+*.log
 
 # Local working notes
 /local-notes/
