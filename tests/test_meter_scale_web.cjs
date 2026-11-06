@@ -76,7 +76,7 @@ function board() {
     };
 }
 
-async function page(server, initialSnapshot = true) {
+async function page(server, initialSnapshot = true, browser = {}) {
     const elements = new Map();
     const context2d = new Proxy({}, { get: (target, key) => target[key] || (() => {}) });
     function element(id) {
@@ -99,7 +99,8 @@ async function page(server, initialSnapshot = true) {
     class ClockDate extends Date { static now() { return 100000 + now; } }
     const timers = new Map();
     const context = vm.createContext({
-        document: { hidden: false, createElement: () => element(Symbol()), getElementById: element, querySelectorAll: () => [], querySelector: element },
+        document: { hidden: false, documentElement: {}, createElement: () => element(Symbol()), getElementById: element, querySelectorAll: () => [], querySelector: element },
+        navigator: { language: browser.language || 'en-US' }, localStorage: browser.storage,
         location: { protocol: 'http:', host: 'board.test' }, WebSocket: Socket, AbortController, Date: ClockDate,
         fetch: server.fetch.bind(server),
         setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: now + delay }); return id; },

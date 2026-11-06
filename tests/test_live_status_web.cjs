@@ -37,7 +37,7 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     ui.socket.open(); ui.socket.close();
     assert.equal(ui.element('bandValue').textContent,'Band: 40m','Repeated socket failures must preserve fresh HTTP data');
     assert.match(ui.element('btnAnt1').className,/\bactive\b/);
-    assert.match(ui.element('connectionStatus').innerHTML,/Connected \(HTTP\)/);
+    assert.match(ui.element('connectionText').textContent,/Connected \(HTTP\)/);
     server.failStatus=true;
     await ui.advance(6000);
     await vm.runInContext('refreshMqttStatus()',ui.context);

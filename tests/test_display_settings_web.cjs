@@ -66,7 +66,7 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     await vm.runInContext('saveSettings()',mainSave.context);
     assert.equal(configWrites,2,'Failed scale persistence must stop the main save');
     assert.equal(mainSave.element('meterRange').value,'99');
-    assert.match(mainSave.element('toast').textContent,/Не удалось сохранить/);
+    assert.match(mainSave.element('toast').textContent,/Cannot save/);
 
     const server=board(), a=await page(server), b=await page(server);
     a.element('meterRange').value='600';
@@ -99,7 +99,7 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     await vm.runInContext('saveMeterSettings()',a.context);
     assert.equal(a.watts(),600);
     assert.equal(a.element('meterRange').value,'200');
-    assert.match(a.element('toast').textContent,/Не удалось сохранить/);
+    assert.match(a.element('toast').textContent,/Cannot save/);
     delete server.failPost;
 
     a.element('brightnessAuto').checked=true;
@@ -130,6 +130,6 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     server.failBrightness=true;
     await vm.runInContext('saveBrightnessSettings()',a.context);
     assert.equal(server.brightness.minimum,20);
-    assert.match(a.element('toast').textContent,/Не удалось сохранить яркость/);
+    assert.match(a.element('toast').textContent,/Cannot save brightness/);
     console.log('PASS: custom/log scale sync, inverse mapping, edited fields, persistence failures, brightness calibration, limits and duplicate saves');
 })().catch(error => { console.error(error); process.exitCode=1; });

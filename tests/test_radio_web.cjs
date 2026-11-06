@@ -54,6 +54,6 @@ const { board, page, tick, deferred } = require('./test_meter_scale_web.cjs');
     server.broadcast({ ...server.snapshot(), antenna_source: 'ldg',
         radio: { state: 'disconnected', tx_frequency_hz: null, rx_tx: 'unknown', error: 'TCI disconnected' } });
     assert.equal(ui.element('radioFrequency').textContent, '--');
-    assert.match(ui.element('radioStatus').textContent, /нет связи.*LDG/);
+    assert.match(ui.element('radioStatus').textContent, /disconnected.*LDG/);
     console.log('PASS: TCI settings persistence, validation, failed save, duplicate clicks, split/TX status and LDG fallback');
 })().catch(error => { console.error(error); process.exitCode = 1; });

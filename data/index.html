@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LDG Tuner Control</title>
+    <title data-i18n>LDG Tuner Control</title>
     <style>
         :root {
             --bg-primary: #0b0c10;
@@ -49,6 +49,12 @@
 
         .header-status { font-size: 0.75rem; color: var(--text-secondary); display: flex;
                          flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem 1rem; }
+        #languageSelect { color: var(--text-primary); background: var(--bg-input);
+                          border: 1px solid var(--border); border-radius: 4px;
+                          font: inherit; padding: 0.15rem 0.3rem; max-width: 100%; }
+        .header { gap: 0.5rem; }
+        .header h1 { flex-shrink: 0; }
+        .header-status { align-items: center; }
         .mqtt-indicator { color: inherit; font: inherit; background: none; border: 0; cursor: pointer; }
         .mqtt-diagnostics { background: var(--bg-input); border: 1px solid var(--border);
                             border-radius: 6px; padding: 0.65rem; margin-bottom: 0.8rem;
@@ -299,22 +305,26 @@
 </head>
 <body>
     <div class="header">
-        <h1>LDG Tuner</h1>
+        <h1 data-i18n>LDG Tuner</h1>
         <div class="header-status">
+            <select id="languageSelect" aria-label="Language / Язык" onchange="setLanguage(this.value)">
+                <option value="ru" lang="ru">Русский</option>
+                <option value="en" lang="en" selected>English</option>
+            </select>
             <span id="connectionStatus">
-                <span class="status-dot connecting"></span>
-                Connecting...
+                <span class="status-dot connecting" id="connectionDot"></span>
+                <span id="connectionText" data-i18n>Connecting...</span>
             </span>
-            <button type="button" class="mqtt-indicator" id="mqttIndicator" title="Open MQTT settings">
+            <button type="button" class="mqtt-indicator" id="mqttIndicator" title="Open MQTT settings" data-i18n-title>
                 <span class="status-dot disabled" id="mqttStatusDot"></span>
-                <span id="mqttStatusText">MQTT: checking...</span>
+                <span id="mqttStatusText" data-i18n>MQTT: checking...</span>
             </button>
         </div>
     </div>
 
     <nav class="nav">
-        <button class="nav-tab active" data-tab="control">Control</button>
-        <button class="nav-tab" data-tab="settings">Settings</button>
+        <button class="nav-tab active" data-tab="control" data-i18n>Control</button>
+        <button class="nav-tab" data-tab="settings" data-i18n>Settings</button>
     </nav>
 
     <main class="main">
@@ -323,23 +333,23 @@
                 <div class="meter-container">
                     <canvas id="meterCanvas" width="600" height="600"></canvas>
                     <div class="meter-info">
-                        <span class="band" id="bandValue">Band: --</span>
-                        <span class="scale" id="scaleValue" title="Tap to toggle">1000W</span>
+                        <span class="band" id="bandValue" data-i18n>Band: --</span>
+                        <span class="scale" id="scaleValue" title="Tap to toggle" data-i18n-title>1000W</span>
                     </div>
                 </div>
             </div>
             <div class="control-panel">
                 <div class="status-bar">
-                    <div class="status-row"><span>Mode</span><span id="modeValue">--</span></div>
-                    <div class="status-row"><span>Антенна</span><span id="antennaInitStatus">--</span></div>
-                    <div class="status-row"><span>Автовыбор</span><span id="antennaAutoStatus">--</span></div>
-                    <div class="status-row"><span>Настройка</span><span id="tuningStatus">--</span></div>
-                    <div class="status-row"><span>Трансивер</span><span id="radioStatus">TCI выключен · LDG</span></div>
-                    <div class="status-row"><span>Будущий TX</span><span id="radioFrequency">--</span></div>
+                    <div class="status-row"><span data-i18n>Mode</span><span id="modeValue">--</span></div>
+                    <div class="status-row"><span data-i18n>Antenna</span><span id="antennaInitStatus">--</span></div>
+                    <div class="status-row"><span data-i18n>Auto selection</span><span id="antennaAutoStatus">--</span></div>
+                    <div class="status-row"><span data-i18n>Tuning</span><span id="tuningStatus">--</span></div>
+                    <div class="status-row"><span data-i18n>Transceiver</span><span id="radioStatus" data-i18n>TCI disabled · LDG</span></div>
+                    <div class="status-row"><span data-i18n>Next TX</span><span id="radioFrequency">--</span></div>
                 </div>
                 <div class="button-stack">
-                    <button class="btn btn-red" onclick="sendCommand('memory_tune')">Mem Tune</button>
-                    <button class="btn btn-red" onclick="sendCommand('full_tune')">Full Tune</button>
+                    <button class="btn btn-red" onclick="sendCommand('memory_tune')" data-i18n>Mem Tune</button>
+                    <button class="btn btn-red" onclick="sendCommand('full_tune')" data-i18n>Full Tune</button>
                     <div class="form-row" style="gap:0.5rem;margin-bottom:0.35rem;">
                         <button class="btn ant-btn" id="btnAnt1" onclick="selectAntenna(1)">
                             <span class="ant-hw">ANT 1</span>
@@ -350,39 +360,38 @@
                             <span class="ant-label" id="ant2Label">ANT 2</span>
                         </button>
                     </div>
-                    <button class="btn btn-orange" id="btnBypass" onclick="toggleBypass()" title="Enable bypass; when active, switch it off by returning to AUTO.">BYPASS ON</button>
-                    <button class="btn btn-blue" id="btnMode" onclick="toggleTuningMode()">Set Manual</button>
+                    <button class="btn btn-orange" id="btnBypass" onclick="toggleBypass()" title="Enable bypass; when active, switch it off by returning to AUTO." data-i18n-title data-i18n>BYPASS ON</button>
+                    <button class="btn btn-blue" id="btnMode" onclick="toggleTuningMode()" data-i18n>Set Manual</button>
                 </div>
             </div>
         </div>
 
         <div id="tab-settings" class="tab-content">
             <div class="settings-section">
-                <h3>Network</h3>
+                <h3 data-i18n>Network</h3>
                 <div class="form-group">
-                    <label>Connected SSID</label>
+                    <label data-i18n>Connected SSID</label>
                     <input type="text" id="ssid" readonly style="opacity: 0.7; cursor: not-allowed;">
                 </div>
                 <div class="form-row" style="align-items:center;margin-bottom:0.5rem;">
-                    <label style="margin:0;font-weight:600;">IP Mode</label>
+                    <label style="margin:0;font-weight:600;" data-i18n>IP Mode</label>
                     <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;">
-                        <input type="checkbox" id="useStaticIP" onchange="toggleStaticIP()"> Static IP
-                    </label>
+                        <input type="checkbox" id="useStaticIP" onchange="toggleStaticIP()"><span data-i18n>Static IP</span></label>
                 </div>
                 <div id="staticIPFields" style="display:none;">
                     <div class="form-row">
                         <div class="form-group">
-                            <label>IP Address</label>
+                            <label data-i18n>IP Address</label>
                             <input type="text" id="staticIP" placeholder="192.168.1.100" pattern="\d+\.\d+\.\d+\.\d+">
                         </div>
                         <div class="form-group">
-                            <label>Netmask</label>
+                            <label data-i18n>Netmask</label>
                             <input type="text" id="staticNetmask" placeholder="255.255.255.0">
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Gateway</label>
+                            <label data-i18n>Gateway</label>
                             <input type="text" id="staticGateway" placeholder="192.168.1.1">
                         </div>
                         <div class="form-group">
@@ -391,174 +400,467 @@
                         </div>
                     </div>
                 </div>
-                <div id="dhcpInfo" style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem;">
-                    Current: <span id="currentIP">--</span> / <span id="currentNetmask">--</span>
+                <div id="dhcpInfo" style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem;"><span data-i18n>Current:</span><span id="currentIP">--</span> / <span id="currentNetmask">--</span>
                     &nbsp;GW: <span id="currentGateway">--</span>
                 </div>
                 <div id="remoteHostGroup" style="display:none;margin-top:0.75rem;">
                     <div class="form-group">
-                        <label>Remote Unit Host</label>
+                        <label data-i18n>Remote Unit Host</label>
                         <input type="text" id="remoteHost" placeholder="ldgcontrol-remote.local">
                     </div>
                 </div>
-                <p style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.4rem;">
-                    To change WiFi network, press the reset button on the device to launch the captive portal.
-                </p>
+                <p style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.4rem;" data-i18n>To change WiFi network, press the reset button on the device to launch the captive portal.</p>
             </div>
             <div class="settings-section">
-                <h3>Шкала мощности</h3>
+                <h3 data-i18n>Power scale</h3>
                 <div class="form-group">
-                    <label for="meterRange">Общий предел FWD / REF, Вт (1–1000)</label>
+                    <label for="meterRange" data-i18n>Shared FWD / REF limit, W (1–1000)</label>
                     <input type="number" id="meterRange" min="1" max="1000" step="1" value="1000">
                 </div>
                 <div class="form-group">
                     <label style="display:flex;align-items:center;gap:0.5rem">
-                        <input type="checkbox" id="meterLogarithmic" style="width:auto"> Логарифмическая шкала
-                    </label>
+                        <input type="checkbox" id="meterLogarithmic" style="width:auto"><span data-i18n>Logarithmic scale</span></label>
                 </div>
-                <button class="btn btn-blue" type="button" id="btnSaveMeter" onclick="saveMeterSettings()" disabled>Применить и сохранить</button>
-                <p id="meterSettingsStatus" aria-live="polite">Ожидание настроек платы…</p>
+                <button class="btn btn-blue" type="button" id="btnSaveMeter" onclick="saveMeterSettings()" disabled data-i18n>Apply and save</button>
+                <p id="meterSettingsStatus" aria-live="polite" data-i18n>Waiting for board settings…</p>
             </div>
             <div class="settings-section">
-                <h3>Яркость дисплея</h3>
-                <p id="brightnessStatus" aria-live="polite">Ожидание данных дисплея…</p>
+                <h3 data-i18n>Display brightness</h3>
+                <p id="brightnessStatus" aria-live="polite" data-i18n>Waiting for display data…</p>
                 <div class="form-group"><label style="display:flex;align-items:center;gap:0.5rem">
-                    <input type="checkbox" id="brightnessAuto" style="width:auto" onchange="updateBrightnessControls()"> Автоматически по датчику освещения
-                </label></div>
-                <div class="form-group"><label for="brightnessManual">Ручная яркость, %</label>
+                    <input type="checkbox" id="brightnessAuto" style="width:auto" onchange="updateBrightnessControls()"><span data-i18n>Automatic light sensor control</span></label></div>
+                <div class="form-group"><label for="brightnessManual" data-i18n>Manual brightness, %</label>
                     <input id="brightnessManual" type="number" min="1" max="100" value="100"></div>
                 <div class="form-row">
-                    <div class="form-group"><label for="brightnessMin">Минимум в темноте, %</label>
+                    <div class="form-group"><label for="brightnessMin" data-i18n>Minimum in darkness, %</label>
                         <input id="brightnessMin" type="number" min="1" max="100" value="15"></div>
-                    <div class="form-group"><label for="brightnessMax">Максимум на свету, %</label>
+                    <div class="form-group"><label for="brightnessMax" data-i18n>Maximum in bright light, %</label>
                         <input id="brightnessMax" type="number" min="1" max="100" value="100"></div>
                 </div>
-                <details><summary>Калибровка датчика</summary>
-                    <p>Закройте датчик или осветите его, дождитесь обновления показаний и запомните соответствующее значение.</p>
+                <details><summary data-i18n>Sensor calibration</summary>
+                    <p data-i18n>Cover or illuminate the sensor, wait for the reading to update, then capture the corresponding value.</p>
                     <div class="form-row">
-                        <div class="form-group"><label for="brightnessDark">Темнота (0–4095)</label>
+                        <div class="form-group"><label for="brightnessDark" data-i18n>Darkness (0–4095)</label>
                             <input id="brightnessDark" type="number" min="0" max="4095" value="3500">
-                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessDark')">Запомнить темноту</button></div>
-                        <div class="form-group"><label for="brightnessBright">Яркий свет (0–4095)</label>
+                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessDark')" data-i18n>Capture darkness</button></div>
+                        <div class="form-group"><label for="brightnessBright" data-i18n>Bright light (0–4095)</label>
                             <input id="brightnessBright" type="number" min="0" max="4095" value="300">
-                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessBright')">Запомнить яркий свет</button></div>
+                            <button class="btn btn-blue" type="button" onclick="calibrateBrightness('brightnessBright')" data-i18n>Capture bright light</button></div>
                     </div>
                 </details>
-                <button class="btn btn-blue" type="button" id="btnSaveBrightness" onclick="saveBrightnessSettings()" disabled>Применить и сохранить</button>
+                <button class="btn btn-blue" type="button" id="btnSaveBrightness" onclick="saveBrightnessSettings()" disabled data-i18n>Apply and save</button>
             </div>
             <div class="settings-section">
                 <h3>MQTT</h3>
                 <div class="mqtt-diagnostics" aria-live="polite">
-                    <strong id="mqttStatusMessage">Checking live status...</strong>
+                    <strong id="mqttStatusMessage" data-i18n>Checking live status...</strong>
                     <p id="mqttStatusDetail"></p>
                     <p id="mqttStatusError" hidden></p>
                     <p id="deviceRuntime"></p>
                 </div>
                 <div class="form-row">
-                    <button class="btn btn-blue" type="button" onclick="refreshMqttStatus()">Refresh status</button>
-                    <button class="btn btn-blue" type="button" id="btnMqttReconnect" onclick="reconnectMqtt()">Reconnect MQTT</button>
+                    <button class="btn btn-blue" type="button" onclick="refreshMqttStatus()" data-i18n>Refresh status</button>
+                    <button class="btn btn-blue" type="button" id="btnMqttReconnect" onclick="reconnectMqtt()" data-i18n>Reconnect MQTT</button>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Broker</label>
+                        <label data-i18n>Broker</label>
                         <input type="text" id="mqttBroker" placeholder="192.168.1.100">
                     </div>
                     <div class="form-group">
-                        <label>Port</label>
+                        <label data-i18n>Port</label>
                         <input type="number" id="mqttPort" value="1883">
                     </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Username</label>
+                        <label data-i18n>Username</label>
                         <input type="text" id="mqttUser" placeholder="ldgcontroller">
                     </div>
                     <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" id="mqttPass" placeholder="Leave blank to keep password" autocomplete="new-password">
+                        <label data-i18n>Password</label>
+                        <input type="password" id="mqttPass" placeholder="Leave blank to keep password" data-i18n-placeholder autocomplete="new-password">
                     </div>
                 </div>
                 <div class="form-group">
                     <label style="display:flex;align-items:center;gap:0.5rem">
-                        <input type="checkbox" id="mqttDiscoveryEnabled" checked style="width:auto">
-                        Home Assistant auto discovery
-                    </label>
+                        <input type="checkbox" id="mqttDiscoveryEnabled" checked style="width:auto"><span data-i18n>Home Assistant auto discovery</span></label>
                 </div>
                 <div class="form-group">
-                    <label>Device topic (generated from MAC)</label>
+                    <label data-i18n>Device topic (generated from MAC)</label>
                     <input type="text" id="mqttBaseTopic" readonly>
                 </div>
-                <p style="font-size:0.7rem;color:var(--text-secondary)">
-                    Leave Broker empty to disable MQTT. Discovery uses the homeassistant prefix.
-                    State updates every 1 second during significant changes, otherwise every 30 seconds.
-                </p>
+                <p style="font-size:0.7rem;color:var(--text-secondary)" data-i18n>Leave Broker empty to disable MQTT. Discovery uses the homeassistant prefix. State updates every 1 second during significant changes, otherwise every 30 seconds.</p>
             </div>
             <div class="settings-section">
-                <h3>Web Authentication</h3>
+                <h3 data-i18n>Web Authentication</h3>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Username</label>
+                        <label data-i18n>Username</label>
                         <input type="text" id="webUser" placeholder="admin">
                     </div>
                     <div class="form-group">
-                        <label>Password</label>
+                        <label data-i18n>Password</label>
                         <input type="password" id="webPass" placeholder="change_me_please">
                     </div>
                 </div>
             </div>
             <div class="settings-section">
-                <h3>Tuner</h3>
+                <h3 data-i18n>Tuner</h3>
                 <div class="form-group">
-                    <label>Meter PSU Voltage (tuner's 12V supply)</label>
+                    <label data-i18n>Meter PSU Voltage (tuner's 12V supply)</label>
                     <input type="number" id="psuVoltage" step="0.1" value="13.8" placeholder="13.8">
                 </div>
                 <div class="form-group">
-                    <label>Antenna 1 Name</label>
+                    <label data-i18n>Antenna 1 Name</label>
                     <input type="text" id="ant1Name" maxlength="8" placeholder="ANT 1">
                 </div>
                 <div class="form-group">
-                    <label>Antenna 2 Name</label>
+                    <label data-i18n>Antenna 2 Name</label>
                     <input type="text" id="ant2Name" maxlength="8" placeholder="ANT 2">
                 </div>
             </div>
             <div class="settings-section">
-                <h3>Антенна по диапазону</h3>
-                <label><input type="checkbox" id="antennaAutoEnabled"> Автоматический выбор при смене диапазона</label>
-                <p style="font-size:0.75rem;color:var(--text-secondary)">Только при мощности ниже 100 Вт. Переход при 100 Вт и выше пропускается. Ручной выбор действует до следующей смены диапазона и не изменяет таблицу.</p>
+                <h3 data-i18n>Antenna by band</h3>
+                <label><input type="checkbox" id="antennaAutoEnabled"><span data-i18n>Select automatically when the band changes</span></label>
+                <p style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Only below 100 W. Band changes at 100 W or above are skipped. Manual selection lasts until the next band change and does not modify the table.</p>
                 <div id="antennaBandTable"></div>
-                <button type="button" class="btn-save" id="btnSaveAntennas" onclick="saveAntennaSettings()" disabled>Сохранить таблицу антенн</button>
-                <p id="antennaSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка таблицы…</p>
+                <button type="button" class="btn-save" id="btnSaveAntennas" onclick="saveAntennaSettings()" disabled data-i18n>Save antenna table</button>
+                <p id="antennaSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Loading table…</p>
             </div>
             <div class="settings-section">
-                <h3>Параметры CONTROLLED</h3>
-                <p style="font-size:0.75rem;color:var(--text-secondary)">Выбирается кнопкой режима на главном экране: MANUAL → AUTO → CONTROLLED → MANUAL. Эти параметры действуют только в CONTROLLED.</p>
-                <p style="font-size:0.75rem;color:var(--text-secondary)">При каждом начале передачи ниже 100 Вт контроллер запускает MEM TUNE после выбора антенны. КСВ проверяется всю передачу: если после нормализации он снова устойчиво достигает порога, выполняется новый MEM TUNE и, при включённой опции, AUTO. При постоянно высоком КСВ настройка по кругу не повторяется. Таблица антенн применяется при первом определении или смене диапазона; ручной выбор на том же диапазоне сохраняется. Без TCI новая передача определяется после 1,5 с подтверждённой нулевой мощности. Отсутствие данных паузой не считается.</p>
-                <label><input type="checkbox" id="tuningAutoFallback"> При высоком КСВ включать AUTO до конца передачи</label>
-                <div class="form-group"><label for="tuningSwrThreshold">Порог КСВ для донастройки (1,1–10,0)</label><input id="tuningSwrThreshold" type="number" min="1.1" max="10" step="0.1" value="2.0"></div>
-                <button type="button" class="btn-save" id="btnSaveTuning" onclick="saveTuningSettings()" disabled>Сохранить параметры CONTROLLED</button>
-                <p id="tuningSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка настроек…</p>
+                <h3 data-i18n>CONTROLLED settings</h3>
+                <p style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Use the mode button on the main screen: MANUAL → AUTO → CONTROLLED → MANUAL. These settings apply only in CONTROLLED.</p>
+                <p style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>At each transmission start below 100 W, the controller runs MEM TUNE after selecting the antenna. SWR is monitored throughout transmission: if it stabilizes above the threshold again after returning to normal, MEM TUNE runs again, followed by AUTO if enabled. Persistently high SWR does not trigger repeated tuning. The antenna table applies on the first band detection or a band change; manual selection on the same band is retained. Without TCI, a new transmission is detected after 1.5 s of confirmed zero power. Missing data does not count as a pause.</p>
+                <label><input type="checkbox" id="tuningAutoFallback"><span data-i18n>Enable AUTO until transmission ends if SWR remains high</span></label>
+                <div class="form-group"><label for="tuningSwrThreshold" data-i18n>Retuning SWR threshold (1.1–10.0)</label><input id="tuningSwrThreshold" type="number" min="1.1" max="10" step="0.1" value="2.0"></div>
+                <button type="button" class="btn-save" id="btnSaveTuning" onclick="saveTuningSettings()" disabled data-i18n>Save CONTROLLED settings</button>
+                <p id="tuningSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Loading settings…</p>
             </div>
             <div class="settings-section">
-                <h3>Трансивер · TCI</h3>
-                <label><input type="checkbox" id="radioEnabled"> Получать частоту через TCI</label>
-                <p style="font-size:0.75rem;color:var(--text-secondary)">Включите TCI в ExpertSDR3 и укажите LAN-адрес компьютера. Настраивайте на контроллере, подключённом к LDG. Антенна выбирается по таблице во время RX при свежей нулевой мощности. При обрыве TCI используется RF-телеметрия LDG.</p>
-                <div class="form-group"><label for="radioHost">Адрес TCI-сервера</label><input id="radioHost" type="text" maxlength="63" placeholder="192.168.1.10"></div>
+                <h3 data-i18n>Transceiver · TCI</h3>
+                <label><input type="checkbox" id="radioEnabled"><span data-i18n>Receive frequency via TCI</span></label>
+                <p style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Enable TCI in ExpertSDR3 and enter the computer's LAN address. Configure the controller connected to the LDG. The antenna is selected from the table during RX with fresh zero-power telemetry. If TCI disconnects, LDG RF telemetry is used.</p>
+                <div class="form-group"><label for="radioHost" data-i18n>TCI server address</label><input id="radioHost" type="text" maxlength="63" placeholder="192.168.1.10"></div>
                 <div class="form-row">
-                    <div class="form-group"><label for="radioPort">Порт</label><input id="radioPort" type="number" min="1" max="65535" value="40001"></div>
-                    <div class="form-group"><label for="radioReceiver">Индекс RX (0 = первый)</label><input id="radioReceiver" type="number" min="0" max="15" value="0"></div>
+                    <div class="form-group"><label for="radioPort" data-i18n>Port</label><input id="radioPort" type="number" min="1" max="65535" value="40001"></div>
+                    <div class="form-group"><label for="radioReceiver" data-i18n>RX index (0 = first)</label><input id="radioReceiver" type="number" min="0" max="15" value="0"></div>
                 </div>
-                <button type="button" class="btn-save" id="btnSaveRadio" onclick="saveRadioSettings()" disabled>Сохранить TCI</button>
-                <p id="radioSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)">Загрузка настроек…</p>
+                <button type="button" class="btn-save" id="btnSaveRadio" onclick="saveRadioSettings()" disabled data-i18n>Save TCI</button>
+                <p id="radioSettingsStatus" style="font-size:0.75rem;color:var(--text-secondary)" data-i18n>Loading settings…</p>
                 <p id="radioDiagnostics" style="font-size:0.75rem;color:var(--text-secondary)"></p>
             </div>
-            <button class="btn-save" onclick="saveSettings()">Save settings</button>
-            <button class="btn-reset" onclick="resetSettings()">Reset to Defaults</button>
+            <button class="btn-save" onclick="saveSettings()" data-i18n>Save settings</button>
+            <button class="btn-reset" onclick="resetSettings()" data-i18n>Reset to Defaults</button>
         </div>
     </main>
 
     <div class="toast" id="toast"></div>
 
     <script>
+
+        // All translations, bindings and preferences live in the browser.
+        // ESP32 still streams this LittleFS file using its fixed 512-byte buffer.
+        const languageMessages = {
+            "LDG Tuner Control": "Управление тюнером LDG",
+            "LDG Tuner": "Тюнер LDG",
+            "Control": "Управление",
+            "Settings": "Настройки",
+            "Connecting...": "Подключение…",
+            "MQTT: checking...": "MQTT: проверка…",
+            "Open MQTT settings": "Открыть настройки MQTT",
+            "Tap to toggle": "Нажмите для переключения",
+            "Band: ": "Диапазон: ",
+            "Band: --": "Диапазон: --",
+            " (last)": " (последний)",
+            "unknown": "неизвестен",
+            "Mode": "Режим",
+            "Antenna": "Антенна",
+            "Auto selection": "Автовыбор",
+            "Tuning": "Настройка",
+            "Transceiver": "Трансивер",
+            "Next TX": "Будущий TX",
+            "Mem Tune": "Настройка из памяти",
+            "Full Tune": "Полная настройка",
+            "BYPASS ON": "Включить обход",
+            "BYPASS OFF": "Выключить обход",
+            "Set Manual": "Включить MANUAL",
+            "Set Auto": "Включить AUTO",
+            "Set Controlled": "Включить CONTROLLED",
+            "Enable bypass; when active, switch it off by returning to AUTO.": "Включить обход; для отключения обхода вернуться в AUTO.",
+            "Network": "Сеть",
+            "Connected SSID": "Подключённая сеть SSID",
+            "IP Mode": "Режим IP",
+            "Static IP": "Статический IP",
+            "IP Address": "IP-адрес",
+            "Netmask": "Маска сети",
+            "Gateway": "Шлюз",
+            "Current:": "Текущий адрес:",
+            "Remote Unit Host": "Адрес удалённого устройства",
+            "To change WiFi network, press the reset button on the device to launch the captive portal.": "Для смены сети Wi-Fi нажмите кнопку сброса на устройстве, чтобы открыть портал настройки.",
+            "Power scale": "Шкала мощности",
+            "Shared FWD / REF limit, W (1–1000)": "Общий предел FWD / REF, Вт (1–1000)",
+            "Logarithmic scale": "Логарифмическая шкала",
+            "Apply and save": "Применить и сохранить",
+            "Waiting for board settings…": "Ожидание настроек платы…",
+            "Display brightness": "Яркость дисплея",
+            "Waiting for display data…": "Ожидание данных дисплея…",
+            "Automatic light sensor control": "Автоматически по датчику освещения",
+            "Manual brightness, %": "Ручная яркость, %",
+            "Minimum in darkness, %": "Минимум в темноте, %",
+            "Maximum in bright light, %": "Максимум на свету, %",
+            "Sensor calibration": "Калибровка датчика",
+            "Cover or illuminate the sensor, wait for the reading to update, then capture the corresponding value.": "Закройте датчик или осветите его, дождитесь обновления показаний и запомните соответствующее значение.",
+            "Darkness (0–4095)": "Темнота (0–4095)",
+            "Capture darkness": "Запомнить темноту",
+            "Bright light (0–4095)": "Яркий свет (0–4095)",
+            "Capture bright light": "Запомнить яркий свет",
+            "Checking live status...": "Проверка текущего состояния…",
+            "Refresh status": "Обновить состояние",
+            "Reconnect MQTT": "Переподключить MQTT",
+            "Broker": "Брокер",
+            "Port": "Порт",
+            "Username": "Имя пользователя",
+            "Password": "Пароль",
+            "Leave blank to keep password": "Оставьте пустым, чтобы сохранить пароль",
+            "Home Assistant auto discovery": "Автообнаружение Home Assistant",
+            "Device topic (generated from MAC)": "Топик устройства (из MAC-адреса)",
+            "Leave Broker empty to disable MQTT. Discovery uses the homeassistant prefix. State updates every 1 second during significant changes, otherwise every 30 seconds.": "Оставьте поле брокера пустым для отключения MQTT. Для обнаружения используется префикс homeassistant. Состояние обновляется раз в секунду при значимых изменениях, иначе раз в 30 секунд.",
+            "Web Authentication": "Авторизация веб-интерфейса",
+            "Tuner": "Тюнер",
+            "Meter PSU Voltage (tuner's 12V supply)": "Напряжение питания тюнера (12 В)",
+            "Antenna 1 Name": "Название антенны 1",
+            "Antenna 2 Name": "Название антенны 2",
+            "Antenna by band": "Антенна по диапазону",
+            "Select automatically when the band changes": "Автоматический выбор при смене диапазона",
+            "Only below 100 W. Band changes at 100 W or above are skipped. Manual selection lasts until the next band change and does not modify the table.": "Только при мощности ниже 100 Вт. Переход при 100 Вт и выше пропускается. Ручной выбор действует до следующей смены диапазона и не изменяет таблицу.",
+            "Save antenna table": "Сохранить таблицу антенн",
+            "Loading table…": "Загрузка таблицы…",
+            "CONTROLLED settings": "Параметры CONTROLLED",
+            "Use the mode button on the main screen: MANUAL → AUTO → CONTROLLED → MANUAL. These settings apply only in CONTROLLED.": "Выбирается кнопкой режима на главном экране: MANUAL → AUTO → CONTROLLED → MANUAL. Эти параметры действуют только в CONTROLLED.",
+            "At each transmission start below 100 W, the controller runs MEM TUNE after selecting the antenna. SWR is monitored throughout transmission: if it stabilizes above the threshold again after returning to normal, MEM TUNE runs again, followed by AUTO if enabled. Persistently high SWR does not trigger repeated tuning. The antenna table applies on the first band detection or a band change; manual selection on the same band is retained. Without TCI, a new transmission is detected after 1.5 s of confirmed zero power. Missing data does not count as a pause.": "При каждом начале передачи ниже 100 Вт контроллер запускает MEM TUNE после выбора антенны. КСВ проверяется всю передачу: если после нормализации он снова устойчиво достигает порога, выполняется новый MEM TUNE и, при включённой опции, AUTO. При постоянно высоком КСВ настройка по кругу не повторяется. Таблица антенн применяется при первом определении или смене диапазона; ручной выбор на том же диапазоне сохраняется. Без TCI новая передача определяется после 1,5 с подтверждённой нулевой мощности. Отсутствие данных паузой не считается.",
+            "Enable AUTO until transmission ends if SWR remains high": "При высоком КСВ включать AUTO до конца передачи",
+            "Retuning SWR threshold (1.1–10.0)": "Порог КСВ для донастройки (1,1–10,0)",
+            "Save CONTROLLED settings": "Сохранить параметры CONTROLLED",
+            "Loading settings…": "Загрузка настроек…",
+            "Transceiver · TCI": "Трансивер · TCI",
+            "Receive frequency via TCI": "Получать частоту через TCI",
+            "Enable TCI in ExpertSDR3 and enter the computer's LAN address. Configure the controller connected to the LDG. The antenna is selected from the table during RX with fresh zero-power telemetry. If TCI disconnects, LDG RF telemetry is used.": "Включите TCI в ExpertSDR3 и укажите LAN-адрес компьютера. Настраивайте на контроллере, подключённом к LDG. Антенна выбирается по таблице во время RX при свежей нулевой мощности. При обрыве TCI используется RF-телеметрия LDG.",
+            "TCI server address": "Адрес TCI-сервера",
+            "RX index (0 = first)": "Индекс RX (0 = первый)",
+            "Save TCI": "Сохранить TCI",
+            "Save settings": "Сохранить настройки",
+            "Reset to Defaults": "Сбросить настройки",
+            "Waiting for tuner...": "Ожидание тюнера…",
+            "Full tune completed": "Полная настройка завершена",
+            "Memory tune completed": "Настройка из памяти завершена",
+            "Auto mode selected": "Выбран режим AUTO",
+            "Manual mode selected": "Выбран режим MANUAL",
+            "Controlled mode selected": "Выбран режим CONTROLLED",
+            "Bypass enabled": "Обход включён",
+            "ANT 1 selected": "Выбрана ANT 1",
+            "ANT 2 selected": "Выбрана ANT 2",
+            "Command completed": "Команда выполнена",
+            "Tuner did not confirm the command": "Тюнер не подтвердил команду",
+            "Command result unavailable: ": "Результат команды недоступен: ",
+            "Cannot change meter scale: ": "Не удалось переключить шкалу: ",
+            "Settings saved": "Настройки сохранены",
+            "Settings saved. Restarting...": "Настройки сохранены. Перезагрузка…",
+            "Save failed": "Не удалось сохранить",
+            "Connection error": "Ошибка соединения",
+            "Reset all settings to defaults? This will restart the device.": "Сбросить все настройки? Устройство будет перезагружено.",
+            "Settings reset. Restarting...": "Настройки сброшены. Перезагрузка…",
+            "Reset failed": "Не удалось сбросить настройки",
+            "Changes pending — click “Apply and save” or “Save settings”.": "Есть изменения — нажмите «Применить и сохранить» или «Сохранить настройки».",
+            "LCD and browsers use the same scale.": "Одинаковая шкала на LCD и в браузерах.",
+            "Power limit must be an integer from 1 to 1000 W": "Предел мощности должен быть целым числом от 1 до 1000 Вт",
+            "Connection changed; check board settings": "Соединение изменилось; проверьте настройки платы",
+            "The board did not confirm the selected scale": "Плата не подтвердила выбранную шкалу",
+            "Scale settings saved.": "Настройки шкалы сохранены.",
+            "Scale settings saved": "Настройки шкалы сохранены",
+            "Cannot save scale: ": "Не удалось сохранить шкалу: ",
+            "Built-in brightness control is unavailable on this board.": "Встроенное управление яркостью недоступно на этой плате.",
+            "Brightness: ": "Яркость: ",
+            "% · Sensor: ": "% · Датчик: ",
+            "Waiting for backlight; if this persists, check PWM startup.": "Ожидание подсветки; если сообщение сохраняется, проверьте запуск PWM.",
+            "No fresh sensor data": "Нет свежих данных датчика",
+            "Cannot load brightness settings": "Не удалось загрузить настройки яркости",
+            "Check brightness 1–100%, minimum ≤ maximum and calibration difference of at least 100": "Проверьте яркость 1–100%, минимум ≤ максимум и разницу калибровки не менее 100",
+            "Brightness settings saved": "Настройки яркости сохранены",
+            "Cannot save brightness": "Не удалось сохранить яркость",
+            " already selected": " уже выбрана",
+            "Unconfirmed; last ANT": "Не подтверждена; последняя ANT",
+            "Auth failed": "Ошибка авторизации",
+            "Connected": "Подключено",
+            "Connected (HTTP)": "Подключено (HTTP)",
+            "Disconnected": "Нет соединения",
+            "Disabled": "Выключено",
+            "Waiting for Wi-Fi": "Ожидание Wi-Fi",
+            "Connecting": "Подключение",
+            "Reconnecting": "Переподключение",
+            "Error": "Ошибка",
+            "Unknown": "Неизвестно",
+            "Broker: ": "Брокер: ",
+            " · Connection attempts: ": " · Попыток подключения: ",
+            "Set a broker below to enable MQTT.": "Укажите брокер ниже для включения MQTT.",
+            " · Connected for ": " · Подключено в течение ",
+            " · Retry in ": " · Повтор через ",
+            " s": " с",
+            " (code ": " (код ",
+            "; topic: ": "; топик: ",
+            "Error: ": "Ошибка: ",
+            "Last error (recovered): ": "Последняя ошибка (связь восстановлена): ",
+            " s ago": " с назад",
+            "Device uptime: ": "Время работы: ",
+            " · Build: ": " · Сборка: ",
+            "MQTT: status unavailable": "MQTT: состояние недоступно",
+            "Live status unavailable": "Текущее состояние недоступно",
+            "Cannot read device status: ": "Не удалось прочитать состояние: ",
+            "Live status unavailable; open MQTT settings": "Состояние недоступно; откройте настройки MQTT",
+            "MQTT diagnostics missing; update firmware": "Диагностика MQTT отсутствует; обновите прошивку",
+            "MQTT reconnect requested": "Запрошено переподключение MQTT",
+            "Cannot reconnect MQTT: ": "Не удалось переподключить MQTT: ",
+            "request rejected": "запрос отклонён",
+            "Disabled (broker not configured)": "Выключено (брокер не задан)",
+            "Disconnected; waiting to reconnect": "Нет соединения; ожидание переподключения",
+            "Initialization failed": "Ошибка инициализации",
+            "Broker response / keepalive timeout": "Тайм-аут ответа брокера / keepalive",
+            "Network connection lost": "Сетевое соединение потеряно",
+            "TCP connection failed (check broker address, DNS, port, and network)": "Ошибка TCP-соединения (проверьте адрес брокера, DNS, порт и сеть)",
+            "Client disconnected": "Клиент отключён",
+            "Broker rejected MQTT protocol version": "Брокер отклонил версию протокола MQTT",
+            "Broker rejected client ID": "Брокер отклонил идентификатор клиента",
+            "Broker unavailable": "Брокер недоступен",
+            "Broker rejected username or password": "Брокер отклонил имя пользователя или пароль",
+            "Broker denied authorization": "Брокер отказал в доступе",
+            "Unknown MQTT error": "Неизвестная ошибка MQTT",
+            "Cannot generate MQTT identity from MAC address": "Не удалось создать идентификатор MQTT из MAC-адреса",
+            "Not enough memory to initialize MQTT": "Недостаточно памяти для инициализации MQTT",
+            "Connection failed": "Ошибка подключения",
+            "Connection lost": "Соединение потеряно",
+            "Wi-Fi disconnected": "Wi-Fi отключён",
+            "Publish failed (transport write failed)": "Ошибка публикации (ошибка записи в транспорт)",
+            "Subscription request could not be sent": "Не удалось отправить запрос подписки",
+            "MQTT packet exceeds the 1024-byte buffer": "Пакет MQTT превышает буфер 1024 байта",
+            "Do not switch": "Не переключать",
+            "TCI disabled": "TCI выключен",
+            "TCI disconnected": "TCI нет связи",
+            "TCI connecting": "TCI подключение",
+            "TCI synchronizing": "TCI синхронизация",
+            "TCI connected": "TCI подключён",
+            "Controller unavailable": "Контроллер недоступен",
+            "TCI unknown": "TCI неизвестен",
+            "TCI settings apply without rebooting. The RX index must match the transmitter in use.": "Сохранение действует без перезагрузки. Индекс RX должен соответствовать используемому передатчику.",
+            "Cannot load TCI settings. Reload the page.": "Не удалось загрузить настройки TCI. Обновите страницу.",
+            "Check the address, port and RX index": "Проверьте адрес, порт и индекс RX",
+            "TCI settings saved": "Настройки TCI сохранены",
+            "Cannot save TCI: ": "Не удалось сохранить TCI: ",
+            "Applies without rebooting. MANUAL is restored after temporary AUTO.": "Применяется без перезагрузки. После временного AUTO восстанавливается MANUAL.",
+            "Cannot load settings. Reload the page.": "Не удалось загрузить настройки. Обновите страницу.",
+            "SWR threshold: 1.1–10.0 in steps of 0.1": "Порог КСВ: 1,1–10,0 с шагом 0,1",
+            "CONTROLLED settings saved": "Параметры CONTROLLED сохранены",
+            "Cannot save CONTROLLED settings: ": "Не удалось сохранить параметры CONTROLLED: ",
+            "Native control": "Штатное управление",
+            "Confirming MANUAL": "Подтверждение MANUAL",
+            "MANUAL: waiting for a new transmission": "MANUAL: ожидание новой передачи",
+            "Waiting for antenna selection": "Ожидание выбора антенны",
+            "Checking SWR after MEM TUNE": "Проверка КСВ после MEM TUNE",
+            "MEM TUNE completed": "MEM TUNE завершён",
+            "AUTO until transmission ends": "AUTO до конца передачи",
+            "Returning to MANUAL": "Возврат в MANUAL",
+            "Tuning blocked: power ≥100 W": "Настройка запрещена: мощность ≥100 Вт",
+            "Waiting for fresh SWR": "Ожидание свежего КСВ",
+            "Tuner did not confirm tuning/mode": "Тюнер не подтвердил настройку/режим",
+            "Cancelled by manual command until the next transmission": "Отменено ручной командой до новой передачи",
+            "Waiting for data": "Ожидание данных",
+            "Waiting for transmission to end": "Ожидание окончания передачи",
+            "Checking": "Проверка",
+            "Restoring the original antenna": "Возврат исходной антенны",
+            "Ready": "Готово",
+            "Check failed": "Ошибка проверки",
+            "Switching blocked: automation disabled": "Запрет переключения: автоматика выключена",
+            "Waiting for a band change": "Ожидание смены диапазона",
+            "Selecting antenna": "Выбор антенны",
+            "Antenna selected": "Антенна выбрана",
+            "Already selected": "Уже выбрана",
+            "Switching blocked: power ≥100 W": "Запрет переключения: мощность ≥100 Вт",
+            "Switching blocked: no fresh valid power": "Запрет переключения: нет свежей корректной мощности",
+            "Table specifies “Do not switch”": "В таблице задано «Не переключать»",
+            "Switching blocked: antenna unknown": "Запрет переключения: антенна не определена",
+            "Cancelled by manual command": "Отменено ручной командой",
+            "User selected the antenna manually": "Пользователь переключил антенну вручную",
+            "First band: original antenna retained": "Первый диапазон: исходная антенна сохранена",
+            "Retrying antenna selection": "Повторный выбор антенны",
+            "Waiting for a fresh power reading": "Ожидание свежего измерения мощности",
+            "Waiting for complete TCI state and band": "Ожидание полного состояния и диапазона TCI",
+            "Waiting for RX without TUNE": "Ожидание RX без TUNE",
+            "Waiting for a stable TCI band": "Ожидание стабильного диапазона TCI",
+            "Antenna selected; MEM TUNE in progress": "Антенна выбрана; выполняется MEM TUNE",
+            "Antenna selected; MEM TUNE unconfirmed": "Антенна выбрана; MEM TUNE не подтверждён",
+            "Antenna selected; MEM TUNE skipped: no transmission": "Антенна выбрана; MEM TUNE пропущен: нет передачи",
+            "Antenna selected; MEM TUNE blocked: power ≥100 W": "Антенна выбрана; MEM TUNE запрещён: мощность ≥100 Вт",
+            "Antenna selected; MEM TUNE skipped: no fresh valid power": "Антенна выбрана; MEM TUNE пропущен: нет свежей корректной мощности",
+            "Antenna selected; MEM TUNE cancelled: band changed": "Антенна выбрана; MEM TUNE отменён: диапазон изменился",
+            "Antenna selected; MEM TUNE cancelled by manual command": "Антенна выбрана; MEM TUNE отменён ручной командой",
+            "Tuner did not confirm MANUAL: selection saved, waiting for retry or transmission end": "Тюнер не подтвердил MANUAL: выбор сохранён, ожидание повторной попытки или конца передачи",
+            "Tuner did not confirm selection": "Тюнер не подтвердил выбор",
+            "Mode unknown: waiting for transmission to end": "Режим неизвестен: ожидание окончания передачи",
+            " for ": " для ",
+            "; no fresh tuner data": "; нет свежих данных тюнера",
+            "; waiting for band confirmation: ": "; ожидается подтверждение диапазона ",
+            "Changes apply at the next band change.": "Изменения действуют со следующей смены диапазона.",
+            "Cannot load table. Reload the page.": "Не удалось загрузить таблицу. Обновите страницу.",
+            "Antenna table saved": "Таблица антенн сохранена",
+            "Cannot save antenna table": "Не удалось сохранить таблицу антенн",
+            "WATTS": "ВАТТ",
+            "SWR ": "КСВ ",
+            "TCI disabled · LDG": "TCI выключен · LDG"
+        };
+        let language = 'en';
+        try {
+            const saved = localStorage.getItem('ldg.language');
+            language = saved === 'ru' || saved === 'en' ? saved
+                : /^ru\b/i.test(navigator.language) ? 'ru' : 'en';
+        } catch (_) {
+            if (typeof navigator !== 'undefined' && /^ru\b/i.test(navigator.language)) language = 'ru';
+        }
+        const languageBindings = new Map();
+        function t(source) {
+            return language === 'ru' && Object.hasOwn(languageMessages, source) ? languageMessages[source] : source;
+        }
+        function setText(target, text, property = 'textContent') {
+            const element = typeof target === 'string' ? document.getElementById(target) : target;
+            if (!languageBindings.has(element)) languageBindings.set(element, new Map());
+            const render = typeof text === 'function' ? text : () => t(text);
+            languageBindings.get(element).set(property, render);
+            element[property] = render();
+        }
+        function bindLanguageText() {
+            document.querySelectorAll('[data-i18n]').forEach(element => {
+                const source = element.textContent;
+                if (!languageBindings.has(element)) setText(element, source);
+            });
+            for (const property of ['title', 'placeholder']) {
+                document.querySelectorAll('[data-i18n-' + property + ']').forEach(element => {
+                    const source = element[property];
+                    setText(element, source, property);
+                });
+            }
+        }
+        function setLanguage(value) {
+            language = value === 'ru' ? 'ru' : 'en';
+            document.documentElement.lang = language;
+            document.getElementById('languageSelect').value = language;
+            try { localStorage.setItem('ldg.language', language); } catch (_) {}
+            for (const [element, properties] of languageBindings)
+                for (const [property, render] of properties) element[property] = render();
+            drawMeter();
+        }
+        function setConnection(message, dot = '') {
+            document.getElementById('connectionDot').className = 'status-dot ' + dot;
+            setText('connectionText', message);
+        }
+
         document.querySelectorAll('.nav-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
@@ -576,7 +878,7 @@
         let toastTimer = null;
         function showToast(message, type = 'success', pending = false) {
             const toast = document.getElementById('toast');
-            toast.textContent = message;
+            setText(toast, message);
             toast.className = 'toast ' + type + ' show';
             clearTimeout(toastTimer);
             if (!pending) toastTimer = setTimeout(() => toast.classList.remove('show'), 3000);
@@ -635,7 +937,7 @@
         for (const id of ['meterRange', 'meterLogarithmic']) {
             const markEdited = () => {
                 meterSettingsDirty = true;
-                document.getElementById('meterSettingsStatus').textContent = 'Есть изменения — нажмите «Применить и сохранить» или «Save settings».';
+                setText('meterSettingsStatus', "Changes pending — click “Apply and save” or “Save settings”.");
             };
             document.getElementById(id).addEventListener('input', markEdited);
             document.getElementById(id).addEventListener('change', markEdited);
@@ -727,7 +1029,7 @@
             ctx.fillText(meterState.maxPower.toString(), cx, crossY - 22);
             ctx.fillStyle = '#888';
             ctx.font = '12px -apple-system, sans-serif';
-            ctx.fillText('WATTS', cx, crossY - 40);
+            ctx.fillText(t('WATTS'), cx, crossY - 40);
 
             // Dim pivot rings (drawn before needles so the bright dots stack on top)
             ctx.fillStyle = '#166534';
@@ -743,7 +1045,7 @@
 
         function drawMeter() {
             const w = canvas.width, h = canvas.height;
-            const faceKey = [w, h, meterState.maxPower, meterState.logarithmic].join(':');
+            const faceKey = [w, h, meterState.maxPower, meterState.logarithmic, language].join(':');
             const drawKey = [faceKey, meterState.fwdPower, meterState.refPower, meterState.swr].join(':');
             if (drawKey === lastMeterDrawKey) return;
             if (!meterFace || meterFaceKey !== faceKey) {
@@ -814,7 +1116,7 @@
                 : swr > 2.0 ? '#ef4444' : swr > 1.5 ? '#f59e0b' : '#22c55e';
             ctx.font = 'bold 24px -apple-system, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('SWR ' + (swr === null ? '--' : swr.toFixed(1) + ':1'), cx, fwdPy + 35);
+            ctx.fillText(t('SWR ') + (swr === null ? '--' : swr.toFixed(1) + ':1'), cx, fwdPy + 35);
         }
 
         function drawSWRCurves(fwdPx, fwdPy, refPx, refPy, arm) {
@@ -900,7 +1202,7 @@
             document.getElementById('scaleValue').textContent = watts + 'W' + (logarithmic ? ' LOG' : '');
             meterSettingsLoaded = true;
             document.getElementById('btnSaveMeter').disabled = scaleRequestPending;
-            if (!meterSettingsEdited()) document.getElementById('meterSettingsStatus').textContent = 'Одинаковая шкала на LCD и в браузерах.';
+            if (!meterSettingsEdited()) setText('meterSettingsStatus', "LCD and browsers use the same scale.");
             renderMeterSettings();
             return true;
         }
@@ -910,7 +1212,7 @@
             const watts = Number(document.getElementById('meterRange').value);
             const logarithmic = document.getElementById('meterLogarithmic').checked;
             if (!Number.isInteger(watts) || watts < 1 || watts > 1000) {
-                showToast('Предел мощности должен быть целым числом от 1 до 1000 Вт', 'error');
+                showToast("Power limit must be an integer from 1 to 1000 W", 'error');
                 return false;
             }
             scaleRequestPending = true;
@@ -926,23 +1228,23 @@
                         meter_logarithmic: logarithmic, save: true }) });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
-                if (epoch !== meterScaleEpoch) throw new Error('Соединение изменилось; проверьте настройки платы');
+                if (epoch !== meterScaleEpoch) throw new Error("Connection changed; check board settings");
                 if (data.meter_scale !== watts || data.meter_logarithmic !== logarithmic ||
                     !Number.isInteger(data.meter_scale_revision) || data.meter_scale_revision < 0 || data.meter_scale_revision > 0xffffffff)
-                    throw new Error('Плата не подтвердила выбранную шкалу');
+                    throw new Error("The board did not confirm the selected scale");
                 applyMeterScale(data, epoch);
                 // Keep a draft made while this request was in flight.
                 if (document.getElementById('meterRange').value === String(watts) &&
                     document.getElementById('meterLogarithmic').checked === logarithmic) {
                     meterSettingsDirty = false;
                     renderMeterSettings(true);
-                    document.getElementById('meterSettingsStatus').textContent = 'Настройки шкалы сохранены.';
+                    setText('meterSettingsStatus', "Scale settings saved.");
                 }
                 drawMeter();
-                showToast('Настройки шкалы сохранены');
+                showToast("Scale settings saved");
                 return true;
             } catch (err) {
-                showToast('Не удалось сохранить шкалу: ' + err.message, 'error');
+                showToast(() => t("Cannot save scale: ") + t(err.message), 'error');
                 return false;
             } finally {
                 clearTimeout(timeout);
@@ -959,17 +1261,17 @@
             if (!data || typeof data.supported !== 'boolean') return;
             lightRaw = Number.isInteger(data.light_raw) && data.light_raw >= 0 && data.light_raw <= 4095 ? data.light_raw : null;
             lightReadAt = Date.now();
-            document.getElementById('brightnessStatus').textContent = !data.supported
-                ? 'Встроенное управление яркостью недоступно на этой плате.'
-                : data.active ? 'Яркость: ' + data.brightness + '% · Датчик: ' + lightRaw
-                : 'Ожидание подсветки; если сообщение сохраняется, проверьте запуск PWM.';
+            setText('brightnessStatus', () => !data.supported
+                ? t("Built-in brightness control is unavailable on this board.")
+                : data.active ? t("Brightness: ") + data.brightness + t("% · Sensor: ") + lightRaw
+                : t("Waiting for backlight; if this persists, check PWM startup."));
         }
         function updateBrightnessControls() {
             document.getElementById('brightnessManual').disabled = document.getElementById('brightnessAuto').checked;
         }
         function calibrateBrightness(id) {
             if (!brightnessLoaded || lightRaw === null || Date.now() - lightReadAt > 10000) {
-                showToast('Нет свежих данных датчика', 'error'); return;
+                showToast("No fresh sensor data", 'error'); return;
             }
             document.getElementById(id).value = String(lightRaw);
         }
@@ -989,7 +1291,7 @@
                 updateBrightnessControls();
                 brightnessLoaded = true;
                 document.getElementById('btnSaveBrightness').disabled = false;
-            } catch (err) { document.getElementById('brightnessStatus').textContent = 'Не удалось загрузить настройки яркости'; }
+            } catch (err) { setText('brightnessStatus', "Cannot load brightness settings"); }
             finally { clearTimeout(timeout); }
         }
         async function saveBrightnessSettings() {
@@ -1004,7 +1306,7 @@
                 settings.minimum > settings.maximum ||
                 ![settings.dark_adc, settings.bright_adc].every(n => Number.isInteger(n) && n >= 0 && n <= 4095) ||
                 Math.abs(settings.dark_adc - settings.bright_adc) < 100) {
-                showToast('Проверьте яркость 1–100%, минимум ≤ максимум и разницу калибровки не менее 100', 'error'); return;
+                showToast("Check brightness 1–100%, minimum ≤ maximum and calibration difference of at least 100", 'error'); return;
             }
             brightnessPending = true;
             const button = document.getElementById('btnSaveBrightness'); button.disabled = true;
@@ -1014,8 +1316,8 @@
                 const resp = await fetch('/api/display-config', { method: 'POST', signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
                 if (!resp.ok || (await resp.json()).result !== 'ok') throw new Error('save');
-                showToast('Настройки яркости сохранены');
-            } catch (err) { showToast('Не удалось сохранить яркость', 'error'); }
+                showToast("Brightness settings saved");
+            } catch (err) { showToast("Cannot save brightness", 'error'); }
             finally { clearTimeout(timeout); brightnessPending = false; button.disabled = false; }
         }
 
@@ -1036,7 +1338,7 @@
                 const data = await resp.json();
                 if (applyMeterScale(data, epoch)) drawMeter();
             } catch (err) {
-                showToast('Cannot change meter scale: ' + err.message, 'error');
+                showToast(() => t('Cannot change meter scale: ') + t(err.message), 'error');
             } finally {
                 clearTimeout(timeout);
                 scaleRequestPending = false;
@@ -1062,7 +1364,7 @@
         function selectAntenna(ant) {
             if (ant !== 1 && ant !== 2) return;
             if (commandPending) return;
-            if (ant === activeAntenna) { showToast('ANT ' + ant + ' already selected'); return; }
+            if (ant === activeAntenna) { showToast(() => 'ANT ' + ant + t(' already selected')); return; }
             return sendCommand('antenna_' + ant);
         }
 
@@ -1079,8 +1381,8 @@
                 activeMode = Number.isInteger(data.mode) && data.mode >= 0 && data.mode <= 4 ? data.mode : 0;
                 tunerMode = Number.isInteger(data.tuner_mode) && data.tuner_mode >= 0 && data.tuner_mode <= 3
                     ? data.tuner_mode : activeMode === 4 ? 0 : activeMode;
-                document.getElementById('btnMode').textContent = activeMode === 2 ? 'Set Auto' : activeMode === 1 ? 'Set Controlled' : 'Set Manual';
-                document.getElementById('btnBypass').textContent = tunerMode === 3 ? 'BYPASS OFF' : 'BYPASS ON';
+                setText('btnMode', () => activeMode === 2 ? t('Set Auto') : activeMode === 1 ? t('Set Controlled') : t('Set Manual'));
+                setText('btnBypass', () => tunerMode === 3 ? t('BYPASS OFF') : t('BYPASS ON'));
                 const modes = { 0: '--', 1: 'AUTO', 2: 'MANUAL', 3: 'BYPASS', 4: 'CONTROLLED' };
                 document.getElementById('modeValue').textContent = modes[data.mode] || '--';
             }
@@ -1096,13 +1398,13 @@
 
             if (data.band) {
                 meterState.band = data.band;
-                document.getElementById('bandValue').textContent = 'Band: ' + data.band + (data.band_held ? ' (last)' : '');
+                setText('bandValue', () => t('Band: ') + t(data.band) + (data.band_held ? t(' (last)') : ''));
             }
             updateOperatingMode(data);
             if (data.antenna !== undefined) {
                 updateAntennaButtons(data.antenna, data.antenna_last);
                 if (data.antenna === 0 && (data.antenna_last === 1 || data.antenna_last === 2))
-                    document.getElementById('antennaInitStatus').textContent = 'Не подтверждена; последняя ANT' + data.antenna_last;
+                    setText('antennaInitStatus', () => t("Unconfirmed; last ANT") + data.antenna_last);
             }
 
             drawMeter();
@@ -1116,7 +1418,6 @@
         let httpMeterAt = null;
 
         async function connectWS() {
-            const statusEl = document.getElementById('connectionStatus');
             // Browsers don't reliably attach Basic Auth to WebSocket upgrade
             // requests, so we fetch a single-use bearer token via plain HTTP
             // (which DOES carry the cached creds) and pass it on the WS URL.
@@ -1126,7 +1427,7 @@
                 if (!r.ok) throw new Error('token http ' + r.status);
                 ({ token } = await r.json());
             } catch (err) {
-                statusEl.innerHTML = '<span class="status-dot offline"></span> Auth failed';
+                setConnection('Auth failed', 'offline');
                 if (!wsReconnectTimer) {
                     wsReconnectTimer = setTimeout(() => {
                         wsReconnectTimer = null;
@@ -1144,7 +1445,7 @@
                 meterScaleEpoch++;
                 meterScaleRevision = null;
                 wsLastMeterAt = null;
-                statusEl.innerHTML = '<span class="status-dot"></span> Connected';
+                setConnection('Connected');
             };
 
             ws.onmessage = (e) => {
@@ -1163,8 +1464,7 @@
                 wsMeterGeneration++;
                 wsLastMeterAt = null;
                 const httpFresh = httpMeterAt !== null && Date.now() - httpMeterAt <= 5000;
-                statusEl.innerHTML = httpFresh ? '<span class="status-dot"></span> Connected (HTTP)'
-                    : '<span class="status-dot offline"></span> Disconnected';
+                setConnection(httpFresh ? 'Connected (HTTP)' : 'Disconnected', httpFresh ? '' : 'offline');
                 // A failing socket must not erase the working HTTP transport.
                 if (!httpFresh) updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0,
                     antenna_source: 'unknown', radio: { state: 'unavailable', rx_tx: 'unknown', tx_frequency_hz: null } });
@@ -1201,12 +1501,12 @@
                     const names = { full_tune: 'Full tune completed', memory_tune: 'Memory tune completed',
                         auto: 'Auto mode selected', manual: 'Manual mode selected', controlled: 'Controlled mode selected', bypass: 'Bypass enabled',
                         antenna_1: 'ANT 1 selected', antenna_2: 'ANT 2 selected' };
-                    showToast(names[cmd] || 'Command completed');
+                    showToast(() => t(names[cmd]) || t('Command completed'));
                 } else {
                     showToast('Tuner did not confirm the command', 'error');
                 }
             } catch (err) {
-                showToast('Command result unavailable: ' + err.message, 'error');
+                showToast(() => t('Command result unavailable: ') + t(err.message), 'error');
             } finally {
                 clearTimeout(timeout);
                 commandPending = false;
@@ -1216,10 +1516,10 @@
 
         function mqttErrorText(error) {
             if (!error) return '';
-            let text = error.message;
-            if (error.code !== undefined) text += ' (code ' + error.code + ')';
-            if (error.detail) text += ': ' + error.detail;
-            if (error.topic) text += '; topic: ' + error.topic;
+            let text = t(error.message);
+            if (error.code !== undefined) text += t(' (code ') + error.code + ')';
+            if (error.detail) text += ': ' + t(error.detail);
+            if (error.topic) text += t('; topic: ') + error.topic;
             return text;
         }
 
@@ -1230,23 +1530,26 @@
             const dot = status.errorActive || status.state === 'error' ? 'offline'
                 : status.state === 'connected' ? ''
                 : status.state === 'disabled' ? 'disabled' : 'connecting';
-            document.getElementById('mqttStatusText').textContent = 'MQTT: ' + label;
+            setText('mqttStatusText', () => 'MQTT: ' + t(label));
             document.getElementById('mqttStatusDot').className = 'status-dot ' + dot;
-            document.getElementById('mqttStatusMessage').textContent = status.message;
-            let detail = status.enabled ? 'Broker: ' + status.broker + ':' + status.port
-                + ' · Connection attempts: ' + status.attempts : 'Set a broker below to enable MQTT.';
-            if (status.connectedForMs !== undefined)
-                detail += ' · Connected for ' + Math.floor(status.connectedForMs / 1000) + ' s';
-            if (status.state === 'disconnected')
-                detail += ' · Retry in ' + Math.ceil(status.retryInMs / 1000) + ' s';
-            document.getElementById('mqttStatusDetail').textContent = detail;
+            setText('mqttStatusMessage', () => t(status.message));
+            setText('mqttStatusDetail', () => {
+                let detail = status.enabled ? t('Broker: ') + status.broker + ':' + status.port
+                    + t(' · Connection attempts: ') + status.attempts : t('Set a broker below to enable MQTT.');
+                if (status.connectedForMs !== undefined)
+                    detail += t(' · Connected for ') + Math.floor(status.connectedForMs / 1000) + t(' s');
+                if (status.state === 'disconnected')
+                    detail += t(' · Retry in ') + Math.ceil(status.retryInMs / 1000) + t(' s');
+                return detail;
+            });
             const error = document.getElementById('mqttStatusError');
             error.hidden = !status.lastError;
             error.className = status.errorActive ? 'mqtt-error' : '';
-            error.textContent = status.lastError ? (status.errorActive ? 'Error: ' : 'Last error (recovered): ')
-                + mqttErrorText(status.lastError) + ' · ' + Math.floor(status.lastError.ageMs / 1000) + ' s ago' : '';
-            document.getElementById('mqttIndicator').title = status.message
-                + (status.lastError ? '\n' + error.textContent : '') + '\nOpen MQTT settings';
+            const errorText = () => status.lastError ? (status.errorActive ? t('Error: ') : t('Last error (recovered): '))
+                + mqttErrorText(status.lastError) + ' · ' + Math.floor(status.lastError.ageMs / 1000) + t(' s ago') : '';
+            setText(error, errorText);
+            setText('mqttIndicator', () => t(status.message)
+                + (status.lastError ? '\n' + errorText() : '') + '\n' + t('Open MQTT settings'), 'title');
         }
 
         // Separate from meter traffic: status also refreshes when the tuner is idle.
@@ -1272,27 +1575,27 @@
                         (wsLastMeterAt === null || Date.now() - wsLastMeterAt > 1500)) {
                         updateMeter(data);
                         httpMeterAt = Date.now();
-                        document.getElementById('connectionStatus').innerHTML = '<span class="status-dot"></span> Connected (HTTP)';
+                        setConnection('Connected (HTTP)');
                     } else if (applyMeterScale(data, epoch)) drawMeter();
                     if (!data.mqtt) throw new Error('MQTT diagnostics missing; update firmware');
                     updateMqttStatus(data.mqtt);
                     updateBacklightStatus(data.display);
-                    document.getElementById('deviceRuntime').textContent = Number.isFinite(data.uptime_ms)
-                        ? 'Device uptime: ' + Math.floor(data.uptime_ms / 1000) + ' s'
-                          + (data.firmware_build ? ' · Build: ' + data.firmware_build : '') : '';
+                    setText('deviceRuntime', () => Number.isFinite(data.uptime_ms)
+                        ? t('Device uptime: ') + Math.floor(data.uptime_ms / 1000) + t(' s')
+                          + (data.firmware_build ? t(' · Build: ') + data.firmware_build : '') : '');
                 } catch (err) {
                     if (httpMeterAt !== null && Date.now() - httpMeterAt > 5000) {
                         httpMeterAt = null;
                         updateMeter({ fwd_power: null, ref_power: null, swr: null, band: '--', mode: 0, antenna: 0,
                             antenna_source: 'unknown', radio: { state: 'unavailable', rx_tx: 'unknown', tx_frequency_hz: null } });
-                        document.getElementById('connectionStatus').innerHTML = '<span class="status-dot offline"></span> Disconnected';
+                        setConnection('Disconnected', 'offline');
                     }
-                    document.getElementById('mqttStatusText').textContent = 'MQTT: status unavailable';
+                    setText('mqttStatusText', 'MQTT: status unavailable');
                     document.getElementById('mqttStatusDot').className = 'status-dot disabled';
-                    document.getElementById('mqttStatusMessage').textContent = 'Live status unavailable';
-                    document.getElementById('mqttStatusDetail').textContent = 'Cannot read device status: ' + err.message;
+                    setText('mqttStatusMessage', 'Live status unavailable');
+                    setText('mqttStatusDetail', () => t('Cannot read device status: ') + t(err.message));
                     document.getElementById('mqttStatusError').hidden = true;
-                    document.getElementById('mqttIndicator').title = 'Live status unavailable; open MQTT settings';
+                    setText('mqttIndicator', () => t('Live status unavailable; open MQTT settings'), 'title');
                 } finally {
                     clearTimeout(timeout);
                 }
@@ -1314,7 +1617,7 @@
                 if (!response.ok || (await response.json()).result !== 'ok') throw new Error('request rejected');
                 showToast('MQTT reconnect requested');
                 await refreshMqttStatus();
-            } catch (error) { showToast('Cannot reconnect MQTT: ' + error.message, 'error'); }
+            } catch (error) { showToast(() => t('Cannot reconnect MQTT: ') + t(error.message), 'error'); }
             finally { clearTimeout(timeout); button.disabled = false; mqttReconnectPending = false; }
         }
 
@@ -1326,21 +1629,21 @@
         const antennaBands = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m'];
         document.getElementById('antennaBandTable').innerHTML = antennaBands.map(band =>
             '<div class="form-group"><label for="antennaBand' + band + '">' + band + '</label>' +
-            '<select id="antennaBand' + band + '"><option value="0">Не переключать</option>' +
+            '<select id="antennaBand' + band + '"><option value="0" data-i18n>Do not switch</option>' +
             '<option value="1">ANT1</option><option value="2">ANT2</option></select></div>').join('');
         let radioSettingsLoaded = false, radioSavePending = false;
         function updateRadioStatus(radio, source = 'ldg') {
-            const names = { disabled: 'TCI выключен', disconnected: 'TCI нет связи',
-                connecting: 'TCI подключение', synchronizing: 'TCI синхронизация', ready: 'TCI подключён', unavailable: 'Контроллер недоступен' };
+            const names = { disabled: "TCI disabled", disconnected: "TCI disconnected",
+                connecting: "TCI connecting", synchronizing: "TCI synchronizing", ready: "TCI connected", unavailable: "Controller unavailable" };
             const trx = radio.rx_tx === 'tx' ? 'TX' : radio.rx_tx === 'rx' ? 'RX' : '?';
-            document.getElementById('radioStatus').textContent = (names[radio.state] || 'TCI неизвестен')
+            setText('radioStatus', () => (t(names[radio.state]) || t("TCI unknown"))
                 + (radio.state !== 'disabled' ? ' · ' + trx + (radio.tuning ? ' TUNE' : '') : '')
-                + ' · ' + (source === 'tci' ? 'TCI' : source === 'ldg' ? 'LDG' : '--');
-            document.getElementById('radioFrequency').textContent = Number.isSafeInteger(radio.tx_frequency_hz) && radio.tx_frequency_hz > 0
-                ? (radio.tx_frequency_hz / 1e6).toFixed(6) + ' MHz · ' + (radio.band || '--') + (radio.split ? ' · SPLIT' : '') : '--';
-            document.getElementById('radioDiagnostics').textContent = [radio.device, radio.protocol, radio.error,
+                + ' · ' + (source === 'tci' ? 'TCI' : source === 'ldg' ? 'LDG' : '--'));
+            setText('radioFrequency', () => Number.isSafeInteger(radio.tx_frequency_hz) && radio.tx_frequency_hz > 0
+                ? (radio.tx_frequency_hz / 1e6).toFixed(6) + ' MHz · ' + (radio.band || '--') + (radio.split ? ' · SPLIT' : '') : '--');
+            setText('radioDiagnostics', () => [radio.device, radio.protocol, radio.error,
                 radio.free_heap ? 'Heap ' + radio.free_heap + ' B; max ' + radio.largest_block + ' B; stack ' + radio.stack_free + ' B' : '']
-                .filter(Boolean).join(' · ');
+                .filter(Boolean).join(' · '));
         }
         async function loadRadioSettings() {
             const controller = new AbortController();
@@ -1358,8 +1661,8 @@
                 document.getElementById('radioReceiver').value = String(data.receiver);
                 radioSettingsLoaded = true;
                 document.getElementById('btnSaveRadio').disabled = false;
-                document.getElementById('radioSettingsStatus').textContent = 'Сохранение действует без перезагрузки. Индекс RX должен соответствовать используемому передатчику.';
-            } catch (error) { document.getElementById('radioSettingsStatus').textContent = 'Не удалось загрузить настройки TCI. Обновите страницу.'; }
+                setText('radioSettingsStatus', "TCI settings apply without rebooting. The RX index must match the transmitter in use.");
+            } catch (error) { setText('radioSettingsStatus', "Cannot load TCI settings. Reload the page."); }
             finally { clearTimeout(timeout); }
         }
         async function saveRadioSettings() {
@@ -1370,7 +1673,7 @@
             if ((config.enabled && !config.host) || config.host.length > 63 || !/^[a-zA-Z0-9.-]*$/.test(config.host) ||
                 !Number.isInteger(config.port) || config.port < 1 || config.port > 65535 ||
                 !Number.isInteger(config.receiver) || config.receiver < 0 || config.receiver > 15) {
-                showToast('Проверьте адрес, порт и индекс RX', 'error'); return;
+                showToast("Check the address, port and RX index", 'error'); return;
             }
             radioSavePending = true;
             const button = document.getElementById('btnSaveRadio'); button.disabled = true;
@@ -1381,8 +1684,8 @@
                     body: JSON.stringify(config), signal: controller.signal });
                 const data = await response.json();
                 if (!response.ok || data.result !== 'ok') throw new Error(data.error || 'save');
-                showToast('Настройки TCI сохранены');
-            } catch (error) { showToast('Не удалось сохранить TCI: ' + error.message, 'error'); }
+                showToast("TCI settings saved");
+            } catch (error) { showToast(() => t("Cannot save TCI: ") + t(error.message), 'error'); }
             finally { clearTimeout(timeout); radioSavePending = false; button.disabled = false; }
         }
 
@@ -1406,16 +1709,16 @@
                 document.getElementById('tuningSwrThreshold').value = data.swr_threshold.toFixed(1);
                 tuningSettingsLoaded = true;
                 document.getElementById('btnSaveTuning').disabled = false;
-                document.getElementById('tuningSettingsStatus').textContent = 'Применяется без перезагрузки. После временного AUTO восстанавливается MANUAL.';
+                setText('tuningSettingsStatus', "Applies without rebooting. MANUAL is restored after temporary AUTO.");
             } catch (error) {
-                document.getElementById('tuningSettingsStatus').textContent = 'Не удалось загрузить настройки. Обновите страницу.';
+                setText('tuningSettingsStatus', "Cannot load settings. Reload the page.");
             } finally { clearTimeout(timeout); }
         }
         async function saveTuningSettings() {
             if (!tuningSettingsLoaded || tuningSavePending) return;
             const value = { auto_fallback: document.getElementById('tuningAutoFallback').checked,
                 swr_threshold: Number(document.getElementById('tuningSwrThreshold').value) };
-            if (!validTuningSettings(value)) { showToast('Порог КСВ: 1,1–10,0 с шагом 0,1', 'error'); return; }
+            if (!validTuningSettings(value)) { showToast("SWR threshold: 1.1–10.0 in steps of 0.1", 'error'); return; }
             tuningSavePending = true;
             const button = document.getElementById('btnSaveTuning'); button.disabled = true;
             const controller = new AbortController();
@@ -1425,8 +1728,8 @@
                     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value), signal: controller.signal });
                 const data = await response.json();
                 if (!response.ok || data.result !== 'ok') throw new Error(data.error || 'save');
-                showToast('Параметры CONTROLLED сохранены');
-            } catch (error) { showToast('Не удалось сохранить параметры CONTROLLED: ' + error.message, 'error'); }
+                showToast("CONTROLLED settings saved");
+            } catch (error) { showToast(() => t("Cannot save CONTROLLED settings: ") + t(error.message), 'error'); }
             finally { clearTimeout(timeout); tuningSavePending = false; button.disabled = false; }
         }
 
@@ -1434,44 +1737,46 @@
         let antennaSavePending = false;
 
         function updateAntennaStatus(data) {
-            const tuning = { native: 'Штатное управление', waiting_manual: 'Подтверждение MANUAL', waiting_rf: 'MANUAL: ожидание новой передачи',
-                waiting_antenna: 'Ожидание выбора антенны', memory_tune: 'MEM TUNE', waiting_swr: 'Проверка КСВ после MEM TUNE',
-                matched: 'MEM TUNE завершён', auto_active: 'AUTO до конца передачи', returning_manual: 'Возврат в MANUAL',
-                high_power: 'Настройка запрещена: мощность ≥100 Вт', no_fresh_data: 'Ожидание свежего КСВ',
-                error: 'Тюнер не подтвердил настройку/режим', manual_override: 'Отменено ручной командой до новой передачи' };
-            if (data.tuning_state !== undefined) document.getElementById('tuningStatus').textContent = tuning[data.tuning_state] || '--';
-            const init = { unknown: '--', waiting_meter: 'Ожидание данных', waiting_rf_off: 'Ожидание окончания передачи',
-                checking: 'Проверка', restoring: 'Возврат исходной антенны', ready: 'Готово', error: 'Ошибка проверки' };
-            const auto = { disabled: 'Запрет переключения: автоматика выключена', idle: 'Ожидание смены диапазона', pending: 'Выбор антенны',
-                selected: 'Антенна выбрана', already_selected: 'Уже выбрана', skipped_power: 'Запрет переключения: мощность ≥100 Вт',
-                invalid_power: 'Запрет переключения: нет свежей корректной мощности',
-                unassigned: 'В таблице задано «Не переключать»', uninitialized: 'Запрет переключения: антенна не определена',
-                manual_override: 'Отменено ручной командой', manual_selection: 'Пользователь переключил антенну вручную',
-                initial_band: 'Первый диапазон: исходная антенна сохранена', retrying: 'Повторный выбор антенны',
-                waiting_meter: 'Ожидание свежего измерения мощности',
-                waiting_radio: 'Ожидание полного состояния и диапазона TCI',
-                waiting_rx: 'Ожидание RX без TUNE', waiting_band: 'Ожидание стабильного диапазона TCI',
-                tuning: 'Антенна выбрана; выполняется MEM TUNE', tune_failed: 'Антенна выбрана; MEM TUNE не подтверждён',
-                tune_no_rf: 'Антенна выбрана; MEM TUNE пропущен: нет передачи',
-                tune_power_limit: 'Антенна выбрана; MEM TUNE запрещён: мощность ≥100 Вт',
-                tune_invalid_power: 'Антенна выбрана; MEM TUNE пропущен: нет свежей корректной мощности',
-                tune_band_changed: 'Антенна выбрана; MEM TUNE отменён: диапазон изменился',
-                tune_manual_override: 'Антенна выбрана; MEM TUNE отменён ручной командой',
-                waiting_tuner: 'Тюнер не подтвердил MANUAL: выбор сохранён, ожидание повторной попытки или конца передачи',
-                error: 'Тюнер не подтвердил выбор', waiting_rf_off: 'Режим неизвестен: ожидание окончания передачи' };
+            const tuning = { native: "Native control", waiting_manual: "Confirming MANUAL", waiting_rf: "MANUAL: waiting for a new transmission",
+                waiting_antenna: "Waiting for antenna selection", memory_tune: 'MEM TUNE', waiting_swr: "Checking SWR after MEM TUNE",
+                matched: "MEM TUNE completed", auto_active: "AUTO until transmission ends", returning_manual: "Returning to MANUAL",
+                high_power: "Tuning blocked: power ≥100 W", no_fresh_data: "Waiting for fresh SWR",
+                error: "Tuner did not confirm tuning/mode", manual_override: "Cancelled by manual command until the next transmission" };
+            if (data.tuning_state !== undefined) setText('tuningStatus', () => t(tuning[data.tuning_state]) || '--');
+            const init = { unknown: '--', waiting_meter: "Waiting for data", waiting_rf_off: "Waiting for transmission to end",
+                checking: "Checking", restoring: "Restoring the original antenna", ready: "Ready", error: "Check failed" };
+            const auto = { disabled: "Switching blocked: automation disabled", idle: "Waiting for a band change", pending: "Selecting antenna",
+                selected: "Antenna selected", already_selected: "Already selected", skipped_power: "Switching blocked: power ≥100 W",
+                invalid_power: "Switching blocked: no fresh valid power",
+                unassigned: "Table specifies “Do not switch”", uninitialized: "Switching blocked: antenna unknown",
+                manual_override: "Cancelled by manual command", manual_selection: "User selected the antenna manually",
+                initial_band: "First band: original antenna retained", retrying: "Retrying antenna selection",
+                waiting_meter: "Waiting for a fresh power reading",
+                waiting_radio: "Waiting for complete TCI state and band",
+                waiting_rx: "Waiting for RX without TUNE", waiting_band: "Waiting for a stable TCI band",
+                tuning: "Antenna selected; MEM TUNE in progress", tune_failed: "Antenna selected; MEM TUNE unconfirmed",
+                tune_no_rf: "Antenna selected; MEM TUNE skipped: no transmission",
+                tune_power_limit: "Antenna selected; MEM TUNE blocked: power ≥100 W",
+                tune_invalid_power: "Antenna selected; MEM TUNE skipped: no fresh valid power",
+                tune_band_changed: "Antenna selected; MEM TUNE cancelled: band changed",
+                tune_manual_override: "Antenna selected; MEM TUNE cancelled by manual command",
+                waiting_tuner: "Tuner did not confirm MANUAL: selection saved, waiting for retry or transmission end",
+                error: "Tuner did not confirm selection", waiting_rf_off: "Mode unknown: waiting for transmission to end" };
             if (data.antenna_init !== undefined)
-                document.getElementById('antennaInitStatus').textContent = init[data.antenna_init] || '--';
+                setText('antennaInitStatus', () => t(init[data.antenna_init]) || '--');
             if (data.antenna_auto !== undefined) {
-                let text = auto[data.antenna_auto] || '--';
-                if ((data.antenna_auto === 'selected' || data.antenna_auto === 'already_selected') &&
-                    antennaBands.includes(data.antenna_auto_band)) {
-                    text += ' для ' + data.antenna_auto_band;
-                    if (data.antenna_source === 'tci') text += ' · TCI';
-                    else if (data.band_held === true) text += '; нет свежих данных тюнера';
-                    else if (data.band && data.band !== data.antenna_auto_band)
-                        text += '; ожидается подтверждение диапазона ' + data.band;
-                }
-                document.getElementById('antennaAutoStatus').textContent = text;
+                setText('antennaAutoStatus', () => {
+                    let text = t(auto[data.antenna_auto]) || '--';
+                    if ((data.antenna_auto === 'selected' || data.antenna_auto === 'already_selected') &&
+                        antennaBands.includes(data.antenna_auto_band)) {
+                        text += t(' for ') + data.antenna_auto_band;
+                        if (data.antenna_source === 'tci') text += ' · TCI';
+                        else if (data.band_held === true) text += t('; no fresh tuner data');
+                        else if (data.band && data.band !== data.antenna_auto_band)
+                            text += t('; waiting for band confirmation: ') + data.band;
+                    }
+                    return text;
+                });
             }
         }
 
@@ -1488,9 +1793,9 @@
                 antennaBands.forEach((band, i) => { document.getElementById('antennaBand' + band).value = String(data.bands[i]); });
                 antennaSettingsLoaded = true;
                 document.getElementById('btnSaveAntennas').disabled = false;
-                document.getElementById('antennaSettingsStatus').textContent = 'Изменения действуют со следующей смены диапазона.';
+                setText('antennaSettingsStatus', "Changes apply at the next band change.");
             } catch (err) {
-                document.getElementById('antennaSettingsStatus').textContent = 'Не удалось загрузить таблицу. Обновите страницу.';
+                setText('antennaSettingsStatus', "Cannot load table. Reload the page.");
             } finally { clearTimeout(timeout); }
         }
 
@@ -1509,8 +1814,8 @@
                     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config), signal: controller.signal });
                 const data = await resp.json();
                 if (!resp.ok || data.result !== 'ok') throw new Error('save');
-                showToast('Таблица антенн сохранена');
-            } catch (err) { showToast('Не удалось сохранить таблицу антенн', 'error'); }
+                showToast("Antenna table saved");
+            } catch (err) { showToast("Cannot save antenna table", 'error'); }
             finally { clearTimeout(timeout); button.disabled = false; antennaSavePending = false; }
         }
 
@@ -1588,7 +1893,7 @@
                 });
                 const data = await resp.json();
                 if (data.result === 'ok') {
-                    showToast(data.restart ? 'Settings saved. Restarting...' : 'Settings saved');
+                    showToast(() => data.restart ? t('Settings saved. Restarting...') : t('Settings saved'));
                 } else {
                     showToast('Save failed', 'error');
                 }
@@ -1598,7 +1903,7 @@
         }
 
         async function resetSettings() {
-            if (!confirm('Reset all settings to defaults? This will restart the device.')) return;
+            if (!confirm(t('Reset all settings to defaults? This will restart the device.'))) return;
             try {
                 await fetch('/api/config', {
                     method: 'POST',
@@ -1611,7 +1916,8 @@
             }
         }
 
-        drawMeter();
+        bindLanguageText();
+        setLanguage(language);
         connectWS();
         // Keep setup requests sequential: two persistent WebSockets leave
         // limited HTTP slots and heap on the ESP32 without PSRAM.

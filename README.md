@@ -13,7 +13,8 @@ ESP32-based remote control interface for LDG AT-1000ProII / AT-600ProII auto-tun
     Touching the dial still switches 100/1000 W without writing flash.
   - Sunton backlight: manual brightness or smooth automatic control using the
     onboard light sensor. See [display settings](docs/display-settings.md).
-- **Web Interface**: Responsive browser UI with WebSocket live updates
+- **Web Interface**: Responsive browser UI with WebSocket live updates and Russian/English
+  switching. Language is saved in the browser, with no additional ESP32 RAM; see [language settings](docs/web-language.md).
 - **TCI**: Read the future TX frequency from ExpertSDR3 or another compatible
   TCI server and select the band antenna during RX. See [TCI setup and limits](docs/tci.md)
   ([на русском](docs/tci-ru.md)).
