@@ -119,7 +119,7 @@ public:
         resetCandidate();
     }
     Request poll(uint32_t now, uint32_t manualRevision, bool manualPending, tuner_ant_t selected,
-                 bool waitForRfOff = false) {
+                 bool waitForRfOff = false, bool waitForFreshPower = false) {
         const bool fresh = m_hasMeter && now - m_meterAt <= FreshMs;
         if (m_init == AntennaInit::Waiting || m_init == AntennaInit::WaitingRfOff) {
             m_init = (fresh && !m_zero) || (m_radioActive && !m_radioSafe) ? AntennaInit::WaitingRfOff : AntennaInit::Waiting;
@@ -161,7 +161,9 @@ public:
                 return {};
             }
             m_auto = AntennaAuto::InvalidPower;
-            if (m_radioActive) return {}; // Keep intent until actual fresh telemetry returns.
+            // A data wait has not attempted a relay operation. CONTROLLED must
+            // resume the same band choice when fresh power returns, even mid-TX.
+            if (m_radioActive || waitForFreshPower) return {};
         }
         else if (m_radioActive && !m_zero) { m_auto = AntennaAuto::WaitingRfOff; return {}; }
         else if (m_power >= 100) m_auto = AntennaAuto::HighPower;
@@ -183,6 +185,11 @@ public:
     void probeDeferred() { m_init = AntennaInit::WaitingRfOff; }
     void probeComplete(bool success) { m_init = success ? AntennaInit::Ready : AntennaInit::Error; }
     void selectionComplete(bool success) { m_busyRecoveries = 0; m_auto = success ? AntennaAuto::Selected : AntennaAuto::Error; }
+    void selectionWaitForMeter(uint32_t now) {
+        m_pending = true; m_busyRecoveries = 0;
+        m_meterRefreshRequested = true; m_meterRefreshAt = now;
+        m_auto = AntennaAuto::WaitingMeter;
+    }
     void deferRadioSelection() {
         if (!m_radioActive) return;
         m_pending = true; m_meterRefreshRequested = false;
@@ -225,6 +232,14 @@ public:
     tuner_band_t currentBand() const { return m_radioActive ? m_radioBand : m_currentBand; }
     bool usesRadio() const { return m_radioActive; }
     bool hasFreshMeter(uint32_t now) const { return m_hasMeter && now - m_meterAt <= FreshMs; }
+    bool readyForTuning(uint32_t now) const {
+        if (m_init != AntennaInit::Ready || m_pending || !hasFreshMeter(now)) return false;
+        if (!m_settings.enabled) return true; // No band-table operation to wait for.
+        // A missing pending selection is not proof that the RF band has been
+        // confirmed yet. Do not tune the old load during the three-frame debounce.
+        if (m_radioActive) return knownBand(m_radioBand) && m_radioBand == m_radioCandidate;
+        return knownBand(m_meterBand) && m_meterBand == m_currentBand;
+    }
 
 private:
     static bool validPower(double power) { return std::isfinite(power) && power >= 0; }

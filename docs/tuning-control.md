@@ -12,13 +12,30 @@ only fallback options and never select the mode. Saving options does not restart
 a transmission or repeat MEM TUNE.
 
 The UART worker establishes acknowledged MANUAL before tuning. Three consecutive
-fresh positive-power packets confirm a transmission. After antenna initialization
+fresh positive-power packets on the same known LDG band confirm a transmission;
+unknown-band RF cannot start MEM TUNE. Live TCI TX confirmation can supply the
+transmission evidence independently of LDG band decoding. After antenna initialization
 and any pending band-table selection, it issues `T` (MEM TUNE), including when
 the selected antenna is already correct. It does this again on the next
 transmission on the same band. The antenna table remains a band-change policy:
 manual antenna selection is preserved on subsequent transmissions on that band.
 A confirmed automatic change of antenna during an active transmission also arms
 one MEM TUNE for the new load.
+
+With band-table selection enabled, before MEM TUNE or SWR fallback the latest
+RF band must agree with the confirmed band used by antenna automation, or a
+stable TCI band must own the selection.
+The absence of a queued antenna command alone does not mean the band debounce
+has finished. This prevents tuning the old antenna while the new band is still
+being confirmed.
+
+In CONTROLLED, missing post-command telemetry retains an unstarted band-table
+selection beyond the initial data-wait timeout. A fresh safe packet resumes the
+same operation, so M, antenna selection, MEM TUNE and optional AUTO can complete
+within one continuous transmission. Freshness is still limited to 500 ms; held
+values never authorize a command. Manual commands, a new band/table or unsafe
+power cancel the pending intent. A written antenna command retains its existing
+bounded acknowledgement/recovery rules; a data wait does not blindly retry A.
 
 Optional **При высоком КСВ включать AUTO до конца передачи** is off by default.
 Its SWR threshold defaults to 2.0 and accepts 1.1–10.0 in steps of 0.1. After MEM

@@ -34,6 +34,7 @@ public:
     void setPtt(bool known, bool transmitting) { m_pttKnown = known; m_pttTx = transmitting; }
     void observe(const tuner_meter_t& meter, uint32_t now) {
         const bool consecutive = m_hasMeter && now - m_meterAt <= FreshMs;
+        const bool sameBand = m_hasMeter && meter.band == m_meter.band;
         const bool continuousZeroSamples = m_hasMeter && now - m_meterAt <= OffSampleGapMs;
         m_hasMeter = true; m_meterAt = now; m_meter = meter; ++m_frames;
         if (!m_settings.managed) return;
@@ -61,9 +62,14 @@ public:
         }
         if (rf && (!m_pttKnown || m_pttTx)) {
             m_zeroSeen = false;
-            if (!consecutive) m_positive = 0;
+            // RF can appear before LDG has a valid band. Confirm one band over
+            // three packets; live PTT supplies TX evidence independently of LDG.
+            const bool bandKnown = m_pttKnown || knownBand(meter.band);
+            if (!m_session && (!consecutive || (!m_pttKnown && (!sameBand || !bandKnown)))) {
+                m_positive = 0; m_startHigh = false;
+            }
             if (!m_session && meter.forward_power_watts >= 100) m_startHigh = true;
-            if (!m_session && ++m_positive >= 3) {
+            if (!m_session && bandKnown && ++m_positive >= 3) {
                 m_session = true; m_pending = !m_startHigh; m_override = false;
                 m_memoryDone = m_postMemory = m_cycleArmed = false;
                 m_powerBlocked = m_startHigh;

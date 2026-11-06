@@ -317,8 +317,7 @@ bool TunerProtocol::serviceTuning(bool manualPending, bool allowTune) {
     using Action = ldg::TuningAutomation::Action;
     if (allowTune && m_tuning.enabled()) process(); // Decode the post-A batch before deciding on T.
     const auto previous = m_tuning.state();
-    const bool ready = m_antennas.init() == ldg::AntennaInit::Ready &&
-                       !m_antennas.selectionPending() && ldg::knownAntenna(getAntenna());
+    const bool ready = m_antennas.readyForTuning(millis()) && ldg::knownAntenna(getAntenna());
     const uint32_t revision = m_manualRevision.load();
     const auto action = m_tuning.poll(millis(), getMode(), ready, manualPending, allowTune);
     if (previous != m_tuning.state()) publishSnapshot();
@@ -421,7 +420,7 @@ void TunerProtocol::serviceAntennas(bool manualPending) {
     const auto previousInit = m_antennas.init();
     const auto previousAuto = m_antennas.automatic();
     const auto request = m_antennas.poll(millis(), m_manualRevision.load(), manualPending,
-                                       getAntenna(), getMode() == MODE_UNKNOWN);
+                                       getAntenna(), getMode() == MODE_UNKNOWN, m_tuning.enabled());
     if (previousInit != m_antennas.init() || previousAuto != m_antennas.automatic()) publishSnapshot();
     if (request.action == ldg::AntennaAutomation::Action::Probe) {
         m_automaticRelays = true; m_preventiveSelection = m_antennas.usesRadio(); m_relayBlocked = false;
@@ -530,6 +529,12 @@ void TunerProtocol::selectBandAntenna(tuner_ant_t antenna, uint8_t recovery) {
     if (preventive && !trace.selectionConfirmed &&
         (m_relayBlocked || (prepared && !lowPower)) && m_manualRevision.load() == manualRevision) {
         m_antennas.deferRadioSelection();
+        trace.deferred = true;
+    } else if (m_tuning.enabled() && prepared && !trace.selectionAttempted && !fresh &&
+               m_manualRevision.load() == manualRevision && m_antennas.currentBand() == band) {
+        // M can acknowledge before its restarted stream supplies a packet.
+        // Retain the unstarted A; the next fresh sample resumes this operation.
+        m_antennas.selectionWaitForMeter(millis());
         trace.deferred = true;
     }
     if (!trace.deferred) {

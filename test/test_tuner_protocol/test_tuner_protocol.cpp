@@ -1853,8 +1853,119 @@ void test_controlled_late_intraband_mismatch_repeats_memory_then_optional_auto_w
     }
 }
 
+void test_controlled_20_to_160_waits_for_confirmed_band_and_selects_before_tuning_in_one_tx() {
+    for (bool continuous : {false,true}) {
+        HardwareSerial::written=nullptr;
+        TunerProtocol tuner; begin(tuner);
+        uint16_t forward=0, reflected=0, wireBand=1160;
+        uint8_t antenna=2;
+        unsigned memories=0, antennas=0, autos=0;
+        std::string commands;
+        bool delayedMeter=false;
+        HardwareSerial::written=[&](HardwareSerial& serial,uint8_t cmd) {
+            respondSync(serial,cmd);
+            if (cmd=='M') { commands+='M'; serial.bytes.push_back('M'); }
+            if (cmd=='A') {
+                commands+='A'; ++antennas; antenna=antenna==1?2:1;
+                serial.bytes.push_back(antenna==1?'1':'2');
+            }
+            if (cmd=='T') { commands+='T'; ++memories; serial.bytes.push_back('T'); }
+            if (cmd=='C') { commands+='C'; ++autos; serial.bytes.push_back('A'); }
+            if (cmd=='S') {
+                if (delayedMeter) {
+                    for (int i=0;i<6;++i) serial.schedule(700+i*50,frame(forward,reflected,wireBand));
+                } else for (auto b:frame(forward,reflected,wireBand)) serial.bytes.push_back(b);
+            }
+        };
+        tuner.manualCommandStarted(); TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+        tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_B,true);
+        ldg::AntennaSettings table; table.enabled=1;
+        table.bands[BAND_20M]=ANT_B; table.bands[BAND_160M]=ANT_A;
+        tuner.configureAntennas(table);
+        ldg::TuningSettings profile; profile.managed=1; profile.autoFallback=1;
+        tuner.configureTuning(profile);
+        feed(tuner,frame(0,0,wireBand)); tuner.serviceAntennas();
+        forward=150;
+        for (int i=0;i<6;++i) { testMillis+=50; feed(tuner,frame(forward,0,wireBand)); tuner.serviceAntennas(); }
+        TEST_ASSERT_EQUAL_UINT(1,memories); TEST_ASSERT_EQUAL_INT(ANT_B,tuner.getAntenna());
+        TEST_ASSERT_EQUAL_INT(BAND_20M,tuner.getState().antennaAutoBand);
+        if (!continuous) {
+            forward=0;
+            for (int i=0;i<9;++i) { testMillis+=200; feed(tuner,frame(0,0,wireBand)); tuner.serviceAntennas(); }
+        }
+        const unsigned before=memories, toggles=antennas;
+        commands.clear(); forward=150; reflected=60; wireBand=8964;
+        // Early RF carries an unknown band. Positive power alone must not send T
+        // while the band-table machine still retains 20m / ANT2.
+        for (uint16_t band : {uint16_t(0),uint16_t(0),wireBand}) {
+            testMillis+=50; feed(tuner,frame(forward,reflected,band)); tuner.serviceAntennas();
+            TEST_ASSERT_EQUAL_UINT(before,memories);
+            TEST_ASSERT_EQUAL_UINT(toggles,antennas);
+        }
+        delayedMeter=true;
+        for (int i=0;i<2;++i) { testMillis+=50; feed(tuner,frame(forward,reflected,wireBand)); tuner.serviceAntennas(); }
+        const uint32_t started=testMillis;
+        while (testMillis-started<6000 && !autos) {
+            testMillis+=25; tuner.process(); tuner.serviceAntennas();
+        }
+        TEST_ASSERT_EQUAL_INT(ANT_A,tuner.getAntenna());
+        TEST_ASSERT_EQUAL_INT(BAND_160M,tuner.getState().antennaAutoBand);
+        TEST_ASSERT_EQUAL_UINT(toggles+1,antennas);
+        TEST_ASSERT_EQUAL_UINT(before+1,memories);
+        TEST_ASSERT_EQUAL_UINT(1,autos);
+        TEST_ASSERT_EQUAL_STRING("ATC",commands.c_str());
+        TEST_ASSERT_EQUAL_INT(MODE_CONTROLLED,ldg::operatingMode(tuner.getState()));
+        TEST_ASSERT_EQUAL_INT(MODE_AUTO,tuner.getMode());
+    }
+}
+
+void test_controlled_pending_band_survives_delayed_post_manual_meter_without_another_rf_start() {
+    HardwareSerial::written=nullptr;
+    TunerProtocol tuner; begin(tuner);
+    uint16_t forward=0, reflected=0, wireBand=1160;
+    uint8_t antenna=2;
+    bool delayAfterManual=false;
+    unsigned memories=0, antennas=0, autos=0;
+    std::string commands;
+    HardwareSerial::written=[&](HardwareSerial& serial,uint8_t cmd) {
+        respondSync(serial,cmd);
+        if (cmd=='M') { commands+='M'; serial.bytes.push_back('M'); }
+        if (cmd=='A') { commands+='A'; ++antennas; antenna=antenna==1?2:1; serial.bytes.push_back(antenna==1?'1':'2'); delayAfterManual=false; }
+        if (cmd=='T') { commands+='T'; ++memories; serial.bytes.push_back('T'); }
+        if (cmd=='C') { commands+='C'; ++autos; serial.bytes.push_back('A'); }
+        if (cmd=='S') {
+            if (delayAfterManual) {
+                for (int i=0;i<6;++i) serial.schedule(2700+i*50,frame(forward,reflected,wireBand));
+            } else for (auto b:frame(forward,reflected,wireBand)) serial.bytes.push_back(b);
+        }
+    };
+    tuner.manualCommandStarted(); TEST_ASSERT_TRUE(tuner.selectAntenna(ANT_B));
+    tuner.manualCommandComplete(TUNER_CMD_SELECT_ANT_B,true);
+    ldg::AntennaSettings table; table.enabled=1; table.bands[BAND_20M]=ANT_B; table.bands[BAND_160M]=ANT_A;
+    tuner.configureAntennas(table);
+    ldg::TuningSettings profile; profile.managed=1; profile.autoFallback=1; tuner.configureTuning(profile);
+    feed(tuner,frame(0,0,wireBand)); tuner.serviceAntennas();
+    forward=150; reflected=60;
+    for (int i=0;i<8;++i) { testMillis+=50; feed(tuner,frame(forward,reflected,wireBand)); tuner.serviceAntennas(); }
+    TEST_ASSERT_EQUAL_UINT(1,memories); TEST_ASSERT_EQUAL_UINT(1,autos); TEST_ASSERT_EQUAL_INT(MODE_AUTO,tuner.getMode());
+    const unsigned toggles=antennas;
+    commands.clear(); wireBand=8964; delayAfterManual=true;
+    for (int i=0;i<3;++i) { testMillis+=50; feed(tuner,frame(forward,reflected,wireBand)); tuner.serviceAntennas(); }
+    TEST_ASSERT_EQUAL_STRING("M",commands.c_str());
+    TEST_ASSERT_EQUAL_UINT(1,memories); TEST_ASSERT_EQUAL_UINT(toggles,antennas);
+    const uint32_t started=testMillis;
+    while (testMillis-started<7000 && autos<2) {
+        testMillis+=25; tuner.process(); tuner.serviceAntennas();
+    }
+    TEST_ASSERT_EQUAL_STRING("MATC",commands.c_str());
+    TEST_ASSERT_EQUAL_INT(ANT_A,tuner.getAntenna());
+    TEST_ASSERT_EQUAL_UINT(toggles+1,antennas); TEST_ASSERT_EQUAL_UINT(2,memories); TEST_ASSERT_EQUAL_UINT(2,autos);
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_controlled_pending_band_survives_delayed_post_manual_meter_without_another_rf_start);
+    RUN_TEST(test_controlled_20_to_160_waits_for_confirmed_band_and_selects_before_tuning_in_one_tx);
     RUN_TEST(test_controlled_late_intraband_mismatch_repeats_memory_then_optional_auto_without_antenna_switches);
 
     RUN_TEST(test_three_operating_modes_are_exclusive_and_controlled_never_reaches_uart);

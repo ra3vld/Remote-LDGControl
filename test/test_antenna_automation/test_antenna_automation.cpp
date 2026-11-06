@@ -326,8 +326,44 @@ void test_table_json_requires_complete_valid_table_and_defaults_to_no_switch() {
     TEST_ASSERT_FALSE(parseAntennaSettings(doc.as<JsonVariantConst>(), value));
     TEST_ASSERT_TRUE(sameAntennaSettings(settings(), value));
 }
+void test_controlled_data_wait_keeps_unstarted_selection_and_rechecks_cancellation_guards() {
+    for (uint32_t at : {0u,0xfffff000u}) for (int scenario=0;scenario<6;++scenario) {
+        auto a=ready(); band(a,BAND_20M,40,at);
+        TEST_ASSERT_TRUE(a.poll(at+501,0,false,ANT_A,false,true).action==AntennaAutomation::Action::RefreshMeter);
+        TEST_ASSERT_TRUE(a.poll(at+2500,0,false,ANT_A,false,true).action==AntennaAutomation::Action::None);
+        TEST_ASSERT_TRUE(a.selectionPending());
+        TEST_ASSERT_TRUE(a.automatic()==AntennaAuto::InvalidPower);
+        if (scenario==1) a.manualStarted();
+        if (scenario==2) packet(a,BAND_20M,100,at+2600);
+        if (scenario==3) band(a,BAND_40M,40,at+2600);
+        if (scenario==4) { auto s=settings(); s.enabled=0; a.configure(s); }
+        if (scenario==5) a.meterRefreshFailed();
+        packet(a,BAND_20M,40,at+2700);
+        const auto request=a.poll(at+2700,0,false,ANT_A,false,true);
+        TEST_ASSERT_TRUE(request.action==(scenario==0?AntennaAutomation::Action::Select:AntennaAutomation::Action::None));
+        TEST_ASSERT_TRUE(a.poll(at+2701,0,false,ANT_A,false,true).action==AntennaAutomation::Action::None);
+    }
+}
+
+void test_disabled_band_table_does_not_block_controlled_tuning_on_radio_band_state() {
+    AntennaAutomation a; a.probeComplete(true);
+    RadioState radio; radio.connection=RadioConnection::Ready;
+    radio.rxKnown=true; radio.transmitting=true;
+    // TCI can confirm TX before supplying frequency; a disabled antenna table
+    // must not make that independent controlled-tuning path wait forever.
+    a.observeRadio(radio,0);
+    packet(a,BAND_UNKNOWN,40,100);
+    TEST_ASSERT_TRUE(a.readyForTuning(100));
+    TEST_ASSERT_FALSE(a.readyForTuning(601)); // Disabling the table never permits stale RF.
+    a.probeComplete(false);
+    packet(a,BAND_UNKNOWN,40,602);
+    TEST_ASSERT_FALSE(a.readyForTuning(602));
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_disabled_band_table_does_not_block_controlled_tuning_on_radio_band_state);
+    RUN_TEST(test_controlled_data_wait_keeps_unstarted_selection_and_rechecks_cancellation_guards);
     RUN_TEST(test_startup_requires_actual_fresh_zero_and_only_runs_once);
     RUN_TEST(test_first_band_uses_table_with_normal_power_and_manual_guards);
     RUN_TEST(test_first_band_waits_for_startup_check_without_losing_its_selection);

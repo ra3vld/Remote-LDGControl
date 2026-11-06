@@ -321,8 +321,28 @@ void test_failed_repeat_cycle_requires_another_match_and_rise_before_retrying() 
     }
 }
 
+void test_rf_start_waits_for_one_known_band_but_live_ptt_can_confirm_unknown_ldg_band() {
+    for (bool ptt : {false,true}) {
+        TuningAutomation a; a.configure(managed()); a.setPtt(ptt,true);
+        tuner_meter_t meter{}; meter.forward_power_raw=100; meter.forward_power_watts=40; meter.swr=2.5;
+        for (unsigned i=1;i<=3;++i) {
+            a.observe(meter,i*100);
+            const auto action=poll(a,i*100);
+            TEST_ASSERT_TRUE(action==(ptt&&i==3?Action::MemoryTune:Action::None));
+        }
+        if (ptt) continue;
+        meter.band=BAND_20M; a.observe(meter,400); TEST_ASSERT_TRUE(poll(a,400)==Action::None);
+        meter.band=BAND_160M;
+        for (unsigned i=1;i<=3;++i) {
+            a.observe(meter,400+i*100);
+            TEST_ASSERT_TRUE(poll(a,400+i*100)==(i==3?Action::MemoryTune:Action::None));
+        }
+    }
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_rf_start_waits_for_one_known_band_but_live_ptt_can_confirm_unknown_ldg_band);
     RUN_TEST(test_failed_repeat_cycle_requires_another_match_and_rise_before_retrying);
     RUN_TEST(test_new_swr_rises_repeat_complete_cycles_in_one_tx_and_constant_mismatch_does_not_loop);
     RUN_TEST(test_idle_zero_batches_end_rf_session_but_missing_packets_never_do);
