@@ -1,11 +1,57 @@
 # Building and maintaining the firmware
 
-Use PlatformIO with the framework pinned in `platformio.ini`, and Node.js 18+
-for web assets. CI uses Node.js 24. Install the locked host dependencies:
+Use Python 3.10+, the pioarduino Core pinned in `requirements-platformio.txt`,
+the framework pinned in `platformio.ini`, and Node.js 18+ for web assets.
+CI uses Node.js 24. Install the locked host dependencies:
 
 ```sh
+python -m pip install -r requirements-platformio.txt
+pio --version
 npm ci --ignore-scripts --no-audit --no-fund
 ```
+
+The expected Core version is **6.2.0**. Run the commands in the Python
+environment used by your IDE or CLI.
+
+## Windows: VS Code
+
+Install [Node.js LTS with npm](https://nodejs.org/en/download) first (CI uses
+Node.js 24). After installation, close all VS Code windows and reopen the
+project so the extension receives the updated PATH.
+
+Open PowerShell in the project root. Install the pinned Core into the same
+environment that the extension uses, rather than a separate system Python:
+
+```powershell
+node --version
+npm.cmd --version
+& "$env:USERPROFILE\.platformio\penv\Scripts\python.exe" -m pip install --force-reinstall -r .\requirements-platformio.txt
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" --version
+npm.cmd ci --ignore-scripts --no-audit --no-fund
+```
+
+Confirm that the version is **6.2.0**, then restart VS Code. The extension's
+Build and Upload actions use that environment. If a custom Core location is
+configured, use its Python and executable paths instead.
+
+### IncompatiblePlatform with 6.2.0-post.1
+
+The pinned Espressif32 platform `55.03.312-1` rejects Core `6.2.0-post.1` even
+though its requirement is `>=6.2.0`. The version check treats the converted
+`post.1` suffix as a prerelease. This is the upstream
+[pioarduino version-check issue](https://github.com/pioarduino/platform-espressif32/issues/563).
+Reinstall exact **6.2.0** using the command above. An unrestricted Core upgrade
+can select the incompatible post release again. Keep the pinned platform URL
+and Arduino framework version in `platformio.ini`.
+
+### WinError 2 in build_web.py
+
+This build hook launches Node.js to generate the browser assets. If Windows
+cannot find `node.exe`, install Node.js LTS and reopen VS Code. The hook also
+searches the standard Windows installer directories when PATH is stale.
+Check `node --version`, then run `npm.cmd ci --ignore-scripts --no-audit --no-fund`
+in the project root before retrying Build or Upload. Missing `acorn`, `postcss`
+or `terser` means the npm dependencies have not been installed successfully.
 
 ## Build targets
 

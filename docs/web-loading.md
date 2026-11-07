@@ -60,6 +60,10 @@ Install Node.js 18 or newer (CI uses 24) and run once:
 npm ci --ignore-scripts --no-audit --no-fund
 ```
 
+On Windows, install Node.js with npm, reopen VS Code and use `npm.cmd` in
+PowerShell. See [Windows setup](development.md#windows-vs-code) for commands
+and build-hook error messages.
+
 The PlatformIO pre-hook builds assets into each environment's private
 `.pio/build/<environment>/web-assets/` and selects that directory for LittleFS.
 Use the normal firmware/buildfs targets. Do not directly upload the source
