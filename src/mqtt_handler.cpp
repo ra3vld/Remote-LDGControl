@@ -2,6 +2,8 @@
 #include "config_manager.h"
 #include <new>
 #include <esp_mac.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
 #ifdef ARDUINO_ARCH_ESP32
 #include <esp_heap_caps.h>
 #endif
@@ -47,6 +49,7 @@ void MqttHandler::recoverOperation(ldg::MqttError operation, const char* topic) 
 MqttHandler::~MqttHandler() {
     delete m_session;
     delete m_client;
+    delete m_tlsClient;
 }
 
 bool MqttHandler::begin(WiFiClient& wifiClient, mqtt_command_handler_t cmdHandler,
@@ -64,6 +67,8 @@ bool MqttHandler::configure() {
     if (m_client) disconnect();
     delete m_session; m_session = nullptr;
     delete m_client; m_client = nullptr;
+    delete m_tlsClient; m_tlsClient = nullptr;
+    m_clockRequested = false;
     portENTER_CRITICAL(&m_statusMux);
     m_status = ldg::MqttStatus{};
     m_status.lastAttemptMs = millis() - ldg::MQTT_RECONNECT_MS;
@@ -90,7 +95,16 @@ bool MqttHandler::configure() {
     }
 
     m_wifiClient->setTimeout(1); // Arduino ESP32 uses seconds, including TCP connect timeout.
-    m_client = new (std::nothrow) PubSubClient(*m_wifiClient);
+    // Port 8883 always uses verified TLS. Allocate it only for TLS brokers;
+    // local MQTT on 1883 keeps its existing transport and RAM footprint.
+    if (cfg.mqttPort == 8883) {
+        m_tlsClient = new (std::nothrow) NetworkClientSecure;
+        if (!m_tlsClient) { setConnectionState(ldg::MqttConnection::Error); reportError(ldg::MqttError::Memory); return false; }
+        m_tlsClient->useBuiltinCACertBundle();
+        m_tlsClient->setHandshakeTimeout(3);
+        m_tlsClient->setTimeout(1);
+        m_client = new (std::nothrow) PubSubClient(*m_tlsClient);
+    } else m_client = new (std::nothrow) PubSubClient(*m_wifiClient);
     if (!m_client) {
         setConnectionState(ldg::MqttConnection::Error);
         reportError(ldg::MqttError::Memory);
@@ -129,6 +143,19 @@ bool MqttHandler::configure() {
 
 bool MqttHandler::connect() {
     const DeviceConfig& cfg = configManager.get();
+    if (m_tlsClient) {
+        if (!m_clockRequested) { configTime(0, 0, NTP_SERVER1, NTP_SERVER2); m_clockRequested = true; }
+        // Never send credentials before certificate dates can be checked.
+        // Retry without blocking the control/display task and never fall back.
+        if (time(nullptr) < 1704067200) {
+            portENTER_CRITICAL(&m_statusMux);
+            m_status.lastAttemptMs = millis();
+            portEXIT_CRITICAL(&m_statusMux);
+            reportError(ldg::MqttError::TlsClock);
+            setConnectionState(ldg::MqttConnection::Disconnected);
+            return false;
+        }
+    }
     const std::string clientId = std::string(MQTT_CLIENT_PREFIX) + "-" + m_identity.mac;
     const std::string statusTopic = m_identity.base + "/status";
     const char* user = cfg.mqttUsername[0] ? cfg.mqttUsername : nullptr;

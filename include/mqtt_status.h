@@ -11,7 +11,7 @@ namespace ldg {
 static constexpr uint32_t MQTT_RECONNECT_MS = 5000;
 
 enum class MqttConnection { Disabled, WaitingWifi, Connecting, Connected, Disconnected, Error };
-enum class MqttError { None, Identity, Memory, Connect, ConnectionLost, WifiLost, Publish, Subscribe, PacketSize };
+enum class MqttError { None, Identity, Memory, TlsClock, Connect, ConnectionLost, WifiLost, Publish, Subscribe, PacketSize };
 
 inline const char* mqttConnectionName(MqttConnection state) {
     switch (state) {
@@ -41,7 +41,7 @@ inline const char* mqttClientStateMessage(int code) {
     switch (code) {
         case -4: return "Broker response / keepalive timeout";
         case -3: return "Network connection lost";
-        case -2: return "TCP connection failed (check broker address, DNS, port, and network)";
+        case -2: return "TCP/TLS connection failed (check address, DNS, port, clock, certificate, and network)";
         case -1: return "Client disconnected";
         case 0: return "Connected";
         case 1: return "Broker rejected MQTT protocol version";
@@ -56,6 +56,7 @@ inline const char* mqttClientStateMessage(int code) {
 inline const char* mqttErrorMessage(MqttError error) {
     switch (error) {
         case MqttError::Identity: return "Cannot generate MQTT identity from MAC address";
+        case MqttError::TlsClock: return "TLS: waiting for clock synchronization (NTP)";
         case MqttError::Memory: return "Not enough memory to initialize MQTT";
         case MqttError::Connect: return "Connection failed";
         case MqttError::ConnectionLost: return "Connection lost";

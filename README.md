@@ -803,3 +803,7 @@ Hardware designs: [CC BY-SA 4.0](LICENSE-HARDWARE)
 - Protocol reverse engineering: Efpophis and contributors ([LDGControl](https://github.com/Efpophis/LDGControl))
 - Meter power formula: Community-contributed (see LDGControl source)
 - Band detection thresholds: Ardugnome (LDGControl, November 2022)
+
+### Managed MQTT / rotator.r3v.ru
+
+Register an LDG device in the cabinet using its Wi-Fi MAC (12 lowercase hex digits). Copy the generated host, port **8883**, username and password into MQTT settings. Client ID is `ldg-tuner-<mac>` and is generated automatically. Port 8883 selects TLS with the compact ISRG Root X1/X2 CA bundle (Let’s Encrypt) and hostname/certificate verification; NTP must synchronize before credentials are sent. There is no plaintext fallback. Other ports retain the existing plaintext MQTT behavior. Disable HA Discovery for this broker. The cabinet binds the LDG profile to the registered MAC automatically; MQTT API 2 provides source tokens, expiring commands and duplicate protection. Firmware and LittleFS must be updated together for the new setting hint.

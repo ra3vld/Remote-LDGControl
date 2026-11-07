@@ -295,5 +295,7 @@
   "Cannot load visuals. Numeric readings and controls remain available.": "Не удалось загрузить визуализацию. Числовые показания и управление доступны.",
   "Loading visuals…": "Загрузка визуализации…",
   "Cannot load configuration. Reload the page.": "Не удалось загрузить конфигурацию. Обновите страницу.",
-  "Critical settings ready": "Критичные настройки загружены"
+  "Critical settings ready": "Критичные настройки загружены",
+  "8883: verified TLS (NTP required). Other ports: plain MQTT.": "8883: TLS с проверкой сертификата (нужно время NTP). Другие порты: обычный MQTT.",
+  "Device ID (MAC)": "ID устройства (MAC)"
 }

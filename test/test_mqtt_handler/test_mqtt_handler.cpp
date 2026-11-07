@@ -4,8 +4,14 @@
 
 // Exercise the production handler against a controllable network/transport.
 // Native tests do not otherwise compile ESP32 sources.
+#include <time.h>
+static time_t testWallClock=1800000000;
+static time_t mqttTestTime(time_t*) { return testWallClock; }
+#define time mqttTestTime
 #include "../../src/mqtt_handler.cpp"
+#undef time
 
+unsigned NetworkClientSecure::created=0, NetworkClientSecure::destroyed=0, NetworkClientSecure::bundles=0;
 uint32_t testMillis = 0;
 FakeSerial Serial;
 FakeWiFi WiFi;
@@ -15,6 +21,7 @@ bool PubSubClient::bufferOk = true;
 
 void setUp() {
     testMillis = 5000;
+    testWallClock = 1800000000;
     Serial.output.clear();
     WiFi = FakeWiFi{};
     configManager.config = DeviceConfig{};
@@ -24,6 +31,39 @@ void tearDown() {}
 static tuner_state_t state() { return {}; }
 static tuner_state_t observedState;
 static tuner_state_t observed() { return observedState; }
+
+void test_tls_waits_for_clock_before_any_mqtt_connect() {
+    WiFiClient wifi; MqttHandler mqtt;
+    configManager.config.mqttPort=8883;
+    testWallClock=0;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi,nullptr,state));
+    mqtt.loop();
+    TEST_ASSERT_EQUAL(0,PubSubClient::instance->connectCalls);
+    TEST_ASSERT_TRUE(mqtt.getStatus().lastError==ldg::MqttError::TlsClock);
+    testWallClock=1800000000; testMillis+=5000; mqtt.loop();
+    TEST_ASSERT_EQUAL(1,PubSubClient::instance->connectCalls);
+    TEST_ASSERT_TRUE(mqtt.isConnected());
+}
+
+void test_tls_transport_is_verified_and_released_on_reconfigure() {
+    const auto created=NetworkClientSecure::created, destroyed=NetworkClientSecure::destroyed, bundles=NetworkClientSecure::bundles;
+    WiFiClient wifi;
+    {
+        MqttHandler mqtt;
+        configManager.config.mqttPort=8883;
+        TEST_ASSERT_TRUE(mqtt.begin(wifi, nullptr, state));
+        TEST_ASSERT_EQUAL(created+1,NetworkClientSecure::created);
+        TEST_ASSERT_EQUAL(bundles+1,NetworkClientSecure::bundles);
+        PubSubClient::instance->connectOk=false;
+        mqtt.loop();
+        TEST_ASSERT_EQUAL(created+1,NetworkClientSecure::created); // failed TLS never allocates a plaintext fallback
+        configManager.config.mqttPort=1883;
+        mqtt.requestReconfigure(); mqtt.loop();
+        TEST_ASSERT_EQUAL(destroyed+1,NetworkClientSecure::destroyed);
+        TEST_ASSERT_EQUAL(created+1,NetworkClientSecure::created);
+    }
+    TEST_ASSERT_EQUAL(destroyed+1,NetworkClientSecure::destroyed);
+}
 
 void test_identity_is_available_before_wifi_starts() {
     WiFiClient wifi;
@@ -244,6 +284,8 @@ void test_mqtt_initially_disabled_can_be_enabled_without_reboot() {
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_tls_waits_for_clock_before_any_mqtt_connect);
+    RUN_TEST(test_tls_transport_is_verified_and_released_on_reconfigure);
     RUN_TEST(test_identity_is_available_before_wifi_starts);
     RUN_TEST(test_disabled_and_initialization_error_are_distinct);
     RUN_TEST(test_readings_observed_offline_survive_reconnect_and_session_reconfiguration);

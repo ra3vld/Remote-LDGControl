@@ -110,6 +110,7 @@
                     <div class="form-group">
                         <label data-i18n>Port</label>
                         <input type="number" id="mqttPort" value="1883">
+                        <small data-i18n>8883: verified TLS (NTP required). Other ports: plain MQTT.</small>
                     </div>
                 </div>
                 <div class="form-row">
@@ -125,6 +126,10 @@
                 <div class="form-group">
                     <label style="display:flex;align-items:center;gap:0.5rem">
                         <input type="checkbox" id="mqttDiscoveryEnabled" checked style="width:auto"><span data-i18n>Home Assistant auto discovery</span></label>
+                </div>
+                <div class="form-group">
+                    <label for="mqttDeviceId" data-i18n>Device ID (MAC)</label>
+                    <input type="text" id="mqttDeviceId" readonly onclick="this.select()">
                 </div>
                 <div class="form-group">
                     <label data-i18n>Device topic (generated from MAC)</label>

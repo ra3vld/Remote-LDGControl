@@ -166,6 +166,7 @@ function applySettingsForm(data) {
                 if (data.mqttUsername) document.getElementById('mqttUser').value = data.mqttUsername;
                 document.getElementById('mqttDiscoveryEnabled').checked = data.mqttDiscoveryEnabled !== false;
                 document.getElementById('mqttBaseTopic').value = data.mqttBaseTopic || '';
+                document.getElementById('mqttDeviceId').value = (data.mqttBaseTopic || '').split('/').pop() || '';
                 if (data.webUsername) document.getElementById('webUser').value = data.webUsername;
                 if (data.meterPsuVoltage) document.getElementById('psuVoltage').value = data.meterPsuVoltage;
                 if (data.ant1Name) document.getElementById('ant1Name').value = data.ant1Name;

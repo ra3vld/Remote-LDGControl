@@ -4,6 +4,7 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <atomic>
+class NetworkClientSecure;
 #include "mqtt_session.h"
 #include "mqtt_status.h"
 
@@ -39,6 +40,8 @@ private:
 
     PubSubClient* m_client = nullptr;
     WiFiClient* m_wifiClient = nullptr;
+    NetworkClientSecure* m_tlsClient = nullptr;
+    bool m_clockRequested = false;
     mqtt_command_handler_t m_commandHandler = nullptr;
     // PubSubClient retains the hostname pointer passed to setServer().
     std::string m_broker;
