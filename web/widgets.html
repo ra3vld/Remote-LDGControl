@@ -9,6 +9,8 @@
                     </select>
                     <button type="button" onclick="clearHistory()" data-i18n>Clear history</button>
                 </div>
+                <label class="history-recording"><input type="checkbox" id="historyTxOnly" onchange="setHistoryTxOnly(this.checked)"> <span data-i18n>Record charts only while transmitting</span></label>
+                <p class="history-note" data-i18n>TX-only uses cumulative transmit time (TCI TRX/TUNE, or RF power without TCI). Changing this option clears history.</p>
                 <p class="history-note" data-i18n>History is kept only in this page's memory for up to 30 minutes. Reloading clears it. Gaps mean no data; a held band is marked “last”.</p>
                 <div class="history-readout" id="historyReadout">
                     <span id="historyFwd" class="history-fwd">FWD: --</span>
@@ -17,6 +19,7 @@
                     <span id="historyMode">--</span>
                     <span id="historyAntenna">--</span>
                     <span id="historyBand">--</span>
+                    <span id="historyTciBand">--</span>
                 </div>
                 <div class="history-card">
                     <h3><span data-i18n>Power, W</span><span class="history-fwd" data-i18n>FWD · Forward</span><span class="history-ref" data-i18n>REF · Reflected</span></h3>

@@ -15,9 +15,12 @@ The UART worker establishes acknowledged MANUAL before tuning. Three consecutive
 fresh positive-power packets on the same known LDG band confirm a transmission;
 unknown-band RF cannot start MEM TUNE. Live TCI TX confirmation can supply the
 transmission evidence independently of LDG band decoding. After antenna initialization
-and any pending band-table selection, it issues `T` (MEM TUNE), including when
-the selected antenna is already correct. It does this again on the next
-transmission on the same band. The antenna table remains a band-change policy:
+and any pending band-table selection, it checks three consecutive fresh SWR
+readings. Below the configured threshold it keeps the existing match without
+`T` (MEM TUNE), including on subsequent transmissions at an unchanged frequency.
+At or above the threshold it issues `T`; unknown/invalid SWR waits for fresh
+evidence. This starting SWR gate applies with AUTO fallback either on or off.
+The antenna table remains a band-change policy:
 manual antenna selection is preserved on subsequent transmissions on that band.
 A confirmed automatic change of antenna during an active transmission also arms
 one MEM TUNE for the new load.
@@ -77,8 +80,9 @@ from a new transmission.
 
 An explicit command from the display, browser or Home Assistant cancels unstarted
 managed work for the current transmission. A started UART operation finishes
-before the queued command. The next new transmission reasserts MANUAL and arms
-MEM TUNE. Explicit MANUAL/AUTO mode commands exit CONTROLLED immediately and send
+before the queued command. The next new transmission reasserts MANUAL and checks
+the starting SWR before arming MEM TUNE. Explicit MANUAL/AUTO mode commands exit
+CONTROLLED immediately and send
 the corresponding LDG command; no deferred AUTO restoration overrides MANUAL.
 
 `GET/POST /api/tuning-config` requires normal web authentication:

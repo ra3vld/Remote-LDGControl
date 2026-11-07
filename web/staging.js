@@ -127,6 +127,7 @@ async function loadVisuals() {
 
 function installVisuals(api) {
     visualModule = api;
+    document.getElementById('historyTxOnly').checked = historyTxOnly;
     document.getElementById('meterCanvas').hidden = false;
     document.getElementById('meterLoading').hidden = true;
     document.getElementById('visualLoadStatus').hidden = true;

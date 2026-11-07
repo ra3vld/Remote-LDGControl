@@ -23,7 +23,7 @@ public:
             return true; // Saving options does not create a new RF session.
         }
         m_session = m_pending = m_monitorSwr = m_autoActive = m_override = m_memoryDone = false;
-        m_postMemory = m_cycleArmed = false;
+        m_postMemory = m_cycleArmed = m_checkStartSwr = false;
         m_swrSamples = m_lowSwrSamples = 0;
         m_needManual = value.managed;
         m_modeAttempted = m_autoAttempted = false;
@@ -45,7 +45,9 @@ public:
         // Idle telemetry may arrive in batches after S. Only new zero packets
         // advance RF-off evidence; a disconnected stream cannot end a session.
         if (!continuousZeroSamples) m_zeroSeen = false;
-        if (m_monitorSwr) {
+        // Confirm the starting match as well as later SWR rises. A PTT edge
+        // alone is not a reason to disturb an already matched load.
+        if (m_monitorSwr || !m_session || m_checkStartSwr) {
             const bool usableSwr = rf && meter.forward_power_watts < 100 &&
                 (!m_pttKnown || m_pttTx) && std::isfinite(meter.swr) && meter.swr >= 1;
             if (usableSwr) m_swrAt = now;
@@ -71,6 +73,7 @@ public:
             if (!m_session && meter.forward_power_watts >= 100) m_startHigh = true;
             if (!m_session && bandKnown && ++m_positive >= 3) {
                 m_session = true; m_pending = !m_startHigh; m_override = false;
+                m_checkStartSwr = true;
                 m_memoryDone = m_postMemory = m_cycleArmed = false;
                 m_powerBlocked = m_startHigh;
                 m_autoAttempted = m_modeAttempted = false; m_needManual = true;
@@ -113,6 +116,17 @@ public:
         if (m_pending && allowTune) {
             if (!antennaReady) { m_state = TuningState::WaitingAntenna; return Action::None; }
             if (!lowRf || mode != MODE_MANUAL) return Action::None;
+            if (m_checkStartSwr) {
+                if (m_lowSwrSamples >= 3) {
+                    m_pending = m_checkStartSwr = false;
+                    m_monitorSwr = m_cycleArmed = true;
+                    m_afterFrames = m_frames;
+                    m_state = TuningState::Matched;
+                    return Action::None;
+                }
+                if (m_swrSamples < 3) { m_state = TuningState::WaitingSwr; return Action::None; }
+                m_checkStartSwr = false;
+            }
             m_pending = false; m_state = TuningState::MemoryTune; m_afterFrames = m_frames;
             return Action::MemoryTune;
         }
@@ -161,7 +175,7 @@ public:
             }
             else {
                 m_pending = false;
-                m_monitorSwr = m_memoryDone && m_session && !m_override && !m_powerBlocked;
+                m_monitorSwr = m_session && !m_checkStartSwr && !m_override && !m_powerBlocked;
                 if (m_monitorSwr) m_needManual = false; // Another genuine SWR rise may retry, not a timer.
                 m_autoActive = false;
                 m_swrSamples = m_lowSwrSamples = 0;
@@ -183,6 +197,7 @@ public:
     }
     void antennaSelected() {
         if (enabled() && m_session && !m_override && !m_powerBlocked) {
+            m_checkStartSwr = false; // A confirmed load change retains its guarded memory cycle.
             m_pending = true; m_monitorSwr = m_autoActive = m_memoryDone = false; m_autoAttempted = false;
             m_postMemory = m_cycleArmed = false;
             m_state = TuningState::WaitingAntenna;
@@ -210,7 +225,7 @@ private:
     TuningState m_state = TuningState::Native;
     tuner_meter_t m_meter{};
     bool m_hasMeter = false, m_session = false, m_pending = false, m_monitorSwr = false;
-    bool m_memoryDone = false, m_postMemory = false, m_cycleArmed = false;
+    bool m_memoryDone = false, m_postMemory = false, m_cycleArmed = false, m_checkStartSwr = false;
     bool m_needManual = false, m_modeAttempted = false, m_autoAttempted = false, m_autoActive = false;
     bool m_override = false, m_zeroSeen = false, m_pttKnown = false, m_pttTx = false;
     bool m_powerBlocked = false, m_startHigh = false;

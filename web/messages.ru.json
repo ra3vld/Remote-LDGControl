@@ -106,7 +106,6 @@
   "Loading table…": "Загрузка таблицы…",
   "CONTROLLED settings": "Параметры CONTROLLED",
   "Use the mode button on the main screen: MANUAL → AUTO → CONTROLLED → MANUAL. These settings apply only in CONTROLLED.": "Выбирается кнопкой режима на главном экране: MANUAL → AUTO → CONTROLLED → MANUAL. Эти параметры действуют только в CONTROLLED.",
-  "At each transmission start below 100 W, the controller runs MEM TUNE after selecting the antenna. SWR is monitored throughout transmission: if it stabilizes above the threshold again after returning to normal, MEM TUNE runs again, followed by AUTO if enabled. Persistently high SWR does not trigger repeated tuning. The antenna table applies on the first band detection or a band change; manual selection on the same band is retained. Without TCI, a new transmission is detected after 1.5 s of confirmed zero power. Missing data does not count as a pause.": "При каждом начале передачи ниже 100 Вт контроллер запускает MEM TUNE после выбора антенны. КСВ проверяется всю передачу: если после нормализации он снова устойчиво достигает порога, выполняется новый MEM TUNE и, при включённой опции, AUTO. При постоянно высоком КСВ настройка по кругу не повторяется. Таблица антенн применяется при первом определении или смене диапазона; ручной выбор на том же диапазоне сохраняется. Без TCI новая передача определяется после 1,5 с подтверждённой нулевой мощности. Отсутствие данных паузой не считается.",
   "Enable AUTO until transmission ends if SWR remains high": "При высоком КСВ включать AUTO до конца передачи",
   "Retuning SWR threshold (1.1–10.0)": "Порог КСВ для донастройки (1,1–10,0)",
   "Save CONTROLLED settings": "Сохранить параметры CONTROLLED",
@@ -297,5 +296,9 @@
   "Cannot load configuration. Reload the page.": "Не удалось загрузить конфигурацию. Обновите страницу.",
   "Critical settings ready": "Критичные настройки загружены",
   "8883: verified TLS (NTP required). Other ports: plain MQTT.": "8883: TLS с проверкой сертификата (нужно время NTP). Другие порты: обычный MQTT.",
-  "Device ID (MAC)": "ID устройства (MAC)"
+  "Device ID (MAC)": "ID устройства (MAC)",
+  "TCI band": "Диапазон TCI",
+  "Record charts only while transmitting": "Писать график только во время передачи",
+  "TX-only uses cumulative transmit time (TCI TRX/TUNE, or RF power without TCI). Changing this option clears history.": "С галочкой интервал считается по суммарному времени передачи (TRX/TUNE по TCI, без TCI — по мощности). Переключение очищает историю.",
+  "At transmission start below 100 W, three fresh SWR readings below the threshold keep the current match without MEM TUNE. Three readings at or above the threshold start MEM TUNE, followed by AUTO if enabled. SWR is monitored throughout transmission; a new confirmed rise can repeat this cycle. Persistently high SWR does not trigger repeated tuning. A confirmed automatic antenna change still arms MEM TUNE. Without TCI, a new transmission is detected after 1.5 s of confirmed zero power. Missing data does not count as a pause.": "В начале передачи ниже 100 Вт три свежих показания КСВ ниже порога сохраняют текущую настройку без MEM TUNE. Три показания на уровне порога или выше запускают MEM TUNE и, при включённой опции, AUTO. КСВ контролируется всю передачу; новый подтверждённый рост может повторить этот цикл. Постоянно высокий КСВ не запускает настройку по кругу. Подтверждённая автоматическая смена антенны по-прежнему запускает MEM TUNE. Без TCI новая передача определяется после 1,5 с подтверждённой нулевой мощности. Отсутствие данных паузой не считается."
 }

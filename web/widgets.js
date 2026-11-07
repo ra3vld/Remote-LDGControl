@@ -274,6 +274,14 @@ function scheduleHistoryDraw() {
         }
 
 function historyClock(at) {
+            if (historyTxOnly) {
+                const seconds = Math.max(0, Math.floor(at / 1000));
+                return String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0');
+            }
+            return historyWallClock(at);
+        }
+
+function historyWallClock(at) {
             return new Date(at).toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-GB', { hour12: false });
         }
 
@@ -282,19 +290,21 @@ function drawHistory() {
             historyTimer = null;
             historyDrawPending = false;
             if (!historyVisible || document.hidden) return;
-            const end = Date.now(), start = end - historyWindow;
-            pruneHistory(end);
+            const recordedEnd = historyTxOnly ? historyElapsed : Date.now();
+            const end = historyTxOnly ? Math.max(historyWindow, recordedEnd) : recordedEnd, start = end - historyWindow;
+            pruneHistory(recordedEnd);
             historyView = { start, end };
             const samples = historySamples.filter(sample => sample.at >= start - historyGap);
-            const at = historyCursor === null ? end : Math.max(start, Math.min(end, historyCursor));
+            const at = historyCursor === null ? recordedEnd : Math.max(start, Math.min(end, historyCursor));
             const selected = historyAt(at);
             for (const [id, key, label] of [['historyFwd', 'fwd', 'FWD'], ['historyRef', 'ref', 'REF'],
                 ['historySwr', 'swr', t('SWR')], ['historyMode', 'mode', t('Mode')],
-                ['historyAntenna', 'antenna', t('Antenna')], ['historyBand', 'band', t('Band')]]) {
+                ['historyAntenna', 'antenna', t('Antenna')], ['historyBand', 'band', t('Band')],
+                ['historyTciBand', 'tciBand', t('TCI band')]]) {
                 document.getElementById(id).textContent = label + ': ' + historyLabel(selected, key);
             }
             document.getElementById('historyTime').textContent = historySamples.length
-                ? historyClock(at) + (selected ? '' : ' · ' + t('No data at this time')) : t('Waiting for history data…');
+                ? historyClock(at) + (historyTxOnly && selected ? ' TX · ' + historyWallClock(selected.wall) : '') + (selected ? '' : ' · ' + t('No data at this time')) : t('Waiting for history data…');
 
             for (const id of ['historyPower', 'historySWR', 'historyStates']) {
                 const element = document.getElementById(id);
@@ -323,12 +333,12 @@ function drawHistory() {
                 pen.beginPath(); pen.rect(left, top, right - left, bottom - top); pen.clip();
                 let axis = null;
                 if (id === 'historyStates') {
-                    const rows = ['mode', 'antenna', 'band'], rowHeight = (bottom - top) / 3;
+                    const rows = ['mode', 'antenna', 'band', 'tciBand'], rowHeight = (bottom - top) / rows.length;
                     rows.forEach((key, row) => {
                         const runs = [];
                         samples.forEach((sample, i) => {
                             if (sample[key] === null) return;
-                            const until = Math.min(end, sample.at + historyGap, samples[i + 1]?.at ?? end);
+                            const until = Math.min(recordedEnd, sample.at + historyGap, samples[i + 1]?.at ?? recordedEnd);
                             if (until <= start) return;
                             const label = historyLabel(sample, key);
                             const previous = runs[runs.length - 1];
@@ -337,7 +347,7 @@ function drawHistory() {
                         });
                         for (const run of runs) {
                             const x1 = Math.max(left, x(run.start)), x2 = x(run.end), y = top + row * rowHeight + 2;
-                            const index = key === 'band' ? antennaBands.indexOf(run.sample.band) : run.sample[key];
+                            const index = ['band', 'tciBand'].includes(key) ? antennaBands.indexOf(run.sample[key]) : run.sample[key];
                             pen.fillStyle = historyColors[index % historyColors.length];
                             if (key === 'band' && run.sample.held) pen.fillStyle = '#854d0e';
                             pen.fillRect(x1, y, Math.max(x2 - x1, 1), rowHeight - 4);
@@ -369,7 +379,7 @@ function drawHistory() {
                         for (const sample of samples) {
                             if (sample[key] === null) { previous = null; continue; }
                             const px = x(sample.at), py = y(sample[key]);
-                            if (!previous || sample.at - previous.at > historyGap) pen.moveTo(px, py);
+                            if (!previous || sample.breaks?.[key] || sample.at - previous.at > historyGap || (historyTxOnly && sample.segment !== previous.segment)) pen.moveTo(px, py);
                             else pen.lineTo(px, py);
                             // Isolated measurements remain visible as dots.
                             pen.fillRect(px - 1, py - 1, 2, 2);
@@ -389,8 +399,8 @@ function drawHistory() {
                 }
                 if (id === 'historyStates') {
                     pen.fillStyle = '#9ca3af'; pen.textAlign = 'right';
-                    [t('Mode'), t('Antenna'), t('Band')].forEach((label, row) => {
-                        pen.fillText(label, left - 8, top + (row + 0.5) * (bottom - top) / 3 + 4);
+                    [t('Mode'), t('Antenna'), t('Band'), 'TCI'].forEach((label, row) => {
+                        pen.fillText(label, left - 8, top + (row + 0.5) * (bottom - top) / 4 + 4);
                     });
                 }
                 if (historyCursor !== null) {

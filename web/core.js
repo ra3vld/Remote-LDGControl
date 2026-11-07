@@ -312,7 +312,11 @@ const historySamples = [];
 
 const historyRetention = 30 * 60 * 1000;
 
-const historyLimit = 12000;
+// At most eight real snapshots per 250 ms bucket: first/last and the
+// extrema of all three measurements. Capacity covers the full 30 minutes
+// regardless of transport rate, including both partial boundary buckets.
+const historyBucketMs = 250;
+const historyLimit = (historyRetention / historyBucketMs + 2) * 8;
 
 const historyGap = 5000;
 
@@ -324,6 +328,8 @@ let historyVisible = true;
 
 let historyCursor = null;
 
+let historyTxOnly = false, historyElapsed = 0, historySegment = 0, historyPrevious = null;
+
 function pruneHistory(now) {
             let count = 0;
             while (count < historySamples.length && historySamples[count].at < now - historyRetention) count++;
@@ -332,18 +338,73 @@ function pruneHistory(now) {
         }
 
 function appendHistory(data) {
-            if (!['fwd_power', 'ref_power', 'swr', 'mode', 'antenna', 'band'].some(key => Object.hasOwn(data, key))) return;
+            if (!['fwd_power', 'ref_power', 'swr', 'mode', 'antenna', 'band', 'radio'].some(key => Object.hasOwn(data, key))) return;
             const now = Date.now();
-            // A wall-clock correction must not leave the time series unsorted.
-            if (historySamples.length && now < historySamples[historySamples.length - 1].at) historySamples.length = 0;
+            if (historyPrevious && now < historyPrevious.wall) clearHistory();
+            const radio = data.radio;
+            const tciReady = radio?.provider === 'tci' && radio.state === 'ready' &&
+                Number.isFinite(radio.age_ms) && radio.age_ms >= 0 && radio.age_ms <= 3000;
+            const tx = tciReady && (radio.rx_tx === 'tx' || radio.tuning === true) ? true
+                : tciReady && radio.rx_tx === 'rx' && radio.tuning === false ? false
+                : Number.isFinite(data.fwd_power) && data.fwd_power > 0;
+            const previous = historyPrevious;
+            const continuous = previous && now - previous.wall <= historyGap;
+            if (historyTxOnly && previous?.tx && continuous) historyElapsed += now - previous.wall;
+            if (!continuous || !previous?.tx) historySegment++;
+            historyPrevious = { wall: now, tx };
+            // Finish the last observed TX interval at its RX edge, then freeze.
+            // Do not insert an RX zero or bridge separate transmissions.
+            if (historyTxOnly && !tx) {
+                if (previous?.tx && continuous && historySamples.length) {
+                    storeHistory({ ...historySamples.at(-1), at: historyElapsed, wall: now });
+                }
+                scheduleHistoryDraw();
+                return;
+            }
             const power = value => Number.isFinite(value) && value >= 0 ? value : null;
-            historySamples.push({ at: now, fwd: power(data.fwd_power), ref: power(data.ref_power),
+            storeHistory({ at: historyTxOnly ? historyElapsed : now, wall: now, segment: historySegment,
+                fwd: power(data.fwd_power), ref: power(data.ref_power),
                 swr: Number.isFinite(data.swr) && data.swr >= 1 ? data.swr : null,
                 mode: Number.isInteger(data.mode) && data.mode >= 1 && data.mode <= 4 ? data.mode : null,
                 antenna: data.antenna === 1 || data.antenna === 2 ? data.antenna : null,
-                band: antennaBands.includes(data.band) ? data.band : null, held: data.band_held === true });
-            pruneHistory(now);
+                band: antennaBands.includes(data.band) ? data.band : null, held: data.band_held === true,
+                tciBand: tciReady && Number.isSafeInteger(radio.tx_frequency_hz) && radio.tx_frequency_hz > 0 &&
+                    antennaBands.includes(radio.band) ? radio.band : null });
             scheduleHistoryDraw();
+        }
+
+function storeHistory(sample) {
+            historySamples.push(sample);
+            const bucket = Math.floor(sample.at / historyBucketMs) * historyBucketMs;
+            let first = historySamples.length - 1;
+            while (first > 0 && historySamples[first - 1].at >= bucket) first--;
+            if (historySamples.length - first > 8) {
+                const points = historySamples.slice(first), keep = new Set([0, points.length - 1]);
+                for (const key of ['fwd', 'ref', 'swr']) {
+                    let low = -1, high = -1;
+                    points.forEach((point, index) => {
+                        if (point[key] === null) return;
+                        if (low < 0 || point[key] < points[low][key]) low = index;
+                        if (high < 0 || point[key] > points[high][key]) high = index;
+                    });
+                    if (low >= 0) { keep.add(low); keep.add(high); }
+                }
+                const compacted = [], gaps = { fwd: false, ref: false, swr: false };
+                points.forEach((point, index) => {
+                    for (const key of Object.keys(gaps)) gaps[key] ||= point[key] === null || point.breaks?.[key] === true;
+                    if (!keep.has(index)) return;
+                    compacted.push({ ...point, breaks: { ...gaps } });
+                    for (const key of Object.keys(gaps)) gaps[key] = false;
+                });
+                historySamples.splice(first, points.length, ...compacted);
+            }
+            pruneHistory(sample.at);
+        }
+
+function setHistoryTxOnly(enabled) {
+            if (historyTxOnly === Boolean(enabled)) return;
+            historyTxOnly = Boolean(enabled);
+            clearHistory();
         }
 
 function setHistoryWindow(seconds) {
@@ -356,6 +417,7 @@ function setHistoryWindow(seconds) {
 
 function clearHistory() {
             historySamples.length = 0;
+            historyPrevious = null; historyElapsed = 0; historySegment = 0;
             historyCursor = null;
             scheduleHistoryDraw();
         }
@@ -365,10 +427,12 @@ function historyLabel(sample, key) {
             if (key === 'mode') return historyModes[sample.mode];
             if (key === 'antenna') return 'ANT ' + sample.antenna;
             if (key === 'band') return sample.band + (sample.held ? t(' (last)') : '');
+            if (key === 'tciBand') return sample.tciBand;
             return sample[key].toFixed(key === 'swr' ? 2 : 1) + (key === 'swr' ? ':1' : t(' W'));
         }
 
 function historyAt(at) {
+            if (historyTxOnly && at > historyElapsed) return null;
             // Use the preceding snapshot, never a later value from the future.
             let low = 0, high = historySamples.length;
             while (low < high) {

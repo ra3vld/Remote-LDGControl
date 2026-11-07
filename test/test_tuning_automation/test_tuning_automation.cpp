@@ -12,7 +12,7 @@ void tearDown() {}
 static TuningSettings managed(bool fallback = false) {
     TuningSettings s; s.managed = 1; s.autoFallback = fallback; return s;
 }
-static void sample(TuningAutomation& a, uint32_t at, double watts = 40, double swr = 1.5) {
+static void sample(TuningAutomation& a, uint32_t at, double watts = 40, double swr = 3.5) {
     tuner_meter_t meter{}; meter.forward_power_raw = watts > 0 ? 100 : 0;
     meter.forward_power_watts = watts; meter.swr = swr; meter.band = BAND_40M;
     a.observe(meter, at);
@@ -66,7 +66,7 @@ void test_default_native_and_strict_persistent_settings() {
     TEST_ASSERT_TRUE(parseTuningSettings(doc.as<JsonVariantConst>(),loaded));
     TEST_ASSERT_TRUE(sameTuningSettings(value,loaded));
 }
-void test_each_new_transmission_gets_exactly_one_memory_tune() {
+void test_each_mismatched_transmission_gets_exactly_one_memory_tune() {
     for (uint32_t at : {0u,0xfffffff0u}) {
         TuningAutomation a; a.configure(managed());
         sample(a,at,0); TEST_ASSERT_TRUE(poll(a,at,MODE_UNKNOWN)==Action::Manual);
@@ -101,10 +101,11 @@ void test_waits_for_manual_antenna_fresh_power_and_queue_priority() {
     TEST_ASSERT_TRUE(poll(a,0,MODE_UNKNOWN)==Action::Manual); a.modeComplete(Action::Manual,true);
     TEST_ASSERT_TRUE(poll(a,0,MODE_MANUAL,false)==Action::None);
     TEST_ASSERT_TRUE(poll(a,501)==Action::None);
-    sample(a,502); TEST_ASSERT_TRUE(poll(a,502,MODE_MANUAL,true,false,false)==Action::None);
-    TEST_ASSERT_TRUE(poll(a,502)==Action::MemoryTune);
-    a.memoryComplete(true,502); a.manualStarted(); a.antennaSelected();
-    TEST_ASSERT_TRUE(poll(a,502)==Action::None);
+    sample(a,502); sample(a,503); sample(a,504);
+    TEST_ASSERT_TRUE(poll(a,504,MODE_MANUAL,true,false,false)==Action::None);
+    TEST_ASSERT_TRUE(poll(a,504)==Action::MemoryTune);
+    a.memoryComplete(true,504); a.manualStarted(); a.antennaSelected();
+    TEST_ASSERT_TRUE(poll(a,504)==Action::None);
     TEST_ASSERT_TRUE(a.state()==TuningState::ManualOverride);
 }
 void test_high_power_consumes_session_and_invalid_frames_cannot_authorize_tuning() {
@@ -171,7 +172,8 @@ void test_saving_controlled_options_does_not_restart_memory_or_change_operating_
     settings.swrTenths = 30; a.configure(settings);
     TEST_ASSERT_TRUE(poll(a,3)==Action::None); // Old threshold counters cannot enable AUTO.
     TEST_ASSERT_TRUE(a.enabled());
-    start(a,4); TEST_ASSERT_TRUE(poll(a,4)==Action::None); // No extra MEM TUNE on save.
+    for (int i=0;i<3;++i) sample(a,4,40,1.5);
+    TEST_ASSERT_TRUE(poll(a,4)==Action::None); // No extra MEM TUNE on save.
     JsonDocument options; deserializeJson(options,R"({"auto_fallback":false,"swr_threshold":2.0})");
     TEST_ASSERT_TRUE(parseTuningSettings(options.as<JsonVariantConst>(),settings));
     TEST_ASSERT_EQUAL_UINT(1,settings.managed);
@@ -340,8 +342,50 @@ void test_rf_start_waits_for_one_known_band_but_live_ptt_can_confirm_unknown_ldg
     }
 }
 
+void test_matched_transmissions_skip_memory_but_new_mismatch_still_tunes() {
+    for (bool tci : {false, true}) for (uint32_t base : {0u, 0xfffff000u}) {
+        TuningAutomation a; a.configure(managed(true));
+        uint32_t at = base;
+        for (int tx = 0; tx < 4; ++tx) {
+            a.setPtt(tci, true);
+            for (int i = 0; i < 10; ++i) {
+                at += 100; sample(a, at, 40, 1.0);
+                TEST_ASSERT_TRUE(poll(a, at) == Action::None);
+            }
+            TEST_ASSERT_TRUE(a.state() == TuningState::Matched);
+            a.setPtt(tci, false);
+            for (int i = 0; i < 5; ++i) { at += 500; sample(a, at, 0); }
+            TEST_ASSERT_TRUE(poll(a, at) == Action::None);
+        }
+        a.setPtt(tci, true);
+        for (int i = 1; i <= 3; ++i) {
+            at += 100; sample(a, at, 40, 2.5);
+            TEST_ASSERT_TRUE(poll(a, at) == (i == 3 ? Action::MemoryTune : Action::None));
+        }
+        a.memoryComplete(true, at);
+        for (int i = 1; i <= 3; ++i) {
+            at += 100; sample(a, at, 40, 2.5);
+            TEST_ASSERT_TRUE(poll(a, at) == (i == 3 ? Action::Auto : Action::None));
+        }
+    }
+}
+void test_matched_start_still_supervises_late_swr_rises_and_invalid_start_waits() {
+    TuningAutomation a; a.configure(managed());
+    for (int i = 1; i <= 3; ++i) sample(a, i * 100, 40, NAN);
+    TEST_ASSERT_TRUE(poll(a, 300) == Action::None);
+    for (int i = 4; i <= 6; ++i) sample(a, i * 100, 40, 1.0);
+    TEST_ASSERT_TRUE(poll(a, 600) == Action::None);
+    TEST_ASSERT_TRUE(a.state() == TuningState::Matched);
+    for (int i = 7; i <= 9; ++i) {
+        sample(a, i * 100, 40, 2.5);
+        TEST_ASSERT_TRUE(poll(a, i * 100) == (i == 9 ? Action::MemoryTune : Action::None));
+    }
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_matched_transmissions_skip_memory_but_new_mismatch_still_tunes);
+    RUN_TEST(test_matched_start_still_supervises_late_swr_rises_and_invalid_start_waits);
     RUN_TEST(test_rf_start_waits_for_one_known_band_but_live_ptt_can_confirm_unknown_ldg_band);
     RUN_TEST(test_failed_repeat_cycle_requires_another_match_and_rise_before_retrying);
     RUN_TEST(test_new_swr_rises_repeat_complete_cycles_in_one_tx_and_constant_mismatch_does_not_loop);
@@ -353,7 +397,7 @@ int main() {
 
     RUN_TEST(test_saving_controlled_options_does_not_restart_memory_or_change_operating_mode);
     RUN_TEST(test_default_native_and_strict_persistent_settings);
-    RUN_TEST(test_each_new_transmission_gets_exactly_one_memory_tune);
+    RUN_TEST(test_each_mismatched_transmission_gets_exactly_one_memory_tune);
     RUN_TEST(test_known_tci_tx_preserves_session_through_ssb_silence);
     RUN_TEST(test_waits_for_manual_antenna_fresh_power_and_queue_priority);
     RUN_TEST(test_high_power_consumes_session_and_invalid_frames_cannot_authorize_tuning);

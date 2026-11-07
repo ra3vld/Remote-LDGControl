@@ -71,7 +71,8 @@ const { html, serveAsset } = require('./web_assets.cjs');
                     ref_power: i > 110 ? 0 : 2 + Math.sin(i / 8),
                     swr: i > 110 || (i >= 70 && i < 80) ? null : 1.3 + i / 200,
                     mode: i < 35 ? 1 : i < 85 ? 2 : 4, antenna: i < 60 ? 1 : 2,
-                    band: i < 60 ? '40m' : '20m', band_held: i > 110
+                    band: i < 60 ? '40m' : '20m', band_held: i > 110,
+                    radio: { provider: 'tci', state: 'ready', age_ms: 10, tx_frequency_hz: 3650000, band: '80m', rx_tx: 'tx', tuning: false }
                 }) });
             }
             Date.now = () => end;
@@ -83,6 +84,7 @@ const { html, serveAsset } = require('./web_assets.cjs');
         assert.equal(await page.locator('#historyMode').textContent(), 'Режим: CONTROLLED');
         assert.equal(await page.locator('#historyAntenna').textContent(), 'Антенна: ANT 2');
         assert.equal(await page.locator('#historyBand').textContent(), 'Диапазон: 20m (последний)');
+        assert.equal(await page.locator('#historyTciBand').textContent(), 'Диапазон TCI: 80m');
         const paths = await page.evaluate(() => historyStrokes.filter(stroke =>
             ['#4ade80', '#fb923c', '#60a5fa'].includes(stroke.color)));
         for (const color of ['#4ade80', '#fb923c', '#60a5fa']) {
@@ -128,6 +130,46 @@ const { html, serveAsset } = require('./web_assets.cjs');
         assert.equal(await page.evaluate(() => historySamples.length), recorded, 'Language changes preserve history');
         assert.equal(requests.length, networkCount, 'Chart controls, inspection and rendering send no requests');
         assert.equal(requests.filter(request => request.method !== 'GET').length, 0);
+
+        await page.locator('#historyTxOnly').check();
+        assert.equal(await page.evaluate(() => historySamples.length), 0);
+        await page.evaluate(() => {
+            const base = Date.now();
+            for (let cycle = 0; cycle < 3; cycle++) for (let sec = 0; sec <= 10; sec++) {
+                Date.now = () => base + cycle * 130000 + sec * 1000;
+                testSocket.onmessage({ data: JSON.stringify({
+                    fwd_power: sec === 10 ? 0 : 40, ref_power: 0, swr: sec === 10 ? null : 1,
+                    band: '160m', mode: 4, antenna: 1,
+                    radio: { provider: 'tci', state: 'ready', age_ms: 0, rx_tx: 'rx', tuning: sec < 10,
+                        band: '80m', tx_frequency_hz: 3650000 }
+                }) });
+            }
+            Date.now = () => base + 500000;
+            historyStrokes.length = 0;
+            drawHistory();
+        });
+        assert.equal(await page.evaluate(() => historyElapsed), 30000, 'RX pauses do not advance TX axis');
+        assert.match(await page.locator('#historyTime').textContent(), /^00:30 TX/);
+        assert.equal(await page.evaluate(() => historySamples.every(point => point.fwd === 40)), true);
+        assert.equal(await page.locator('#historyTciBand').textContent(), 'TCI band: 80m');
+        const txPath = await page.evaluate(() => historyStrokes.find(stroke => stroke.color === '#4ade80'));
+        assert.equal(txPath.points.filter(point => point[0] === 'moveTo').length, 3,
+            'Separate transmissions never join into one curve');
+        const frozen = await page.evaluate(() => historySamples.length);
+        await page.evaluate(() => { drawHistory(); setLanguage('ru'); });
+        await page.evaluate(() => drawHistory());
+        assert.equal(await page.getByLabel('Писать график только во время передачи').isChecked(), true);
+        assert.equal(await page.evaluate(() => historySamples.length), frozen);
+        for (const width of [320, 1280]) {
+            await page.setViewportSize({ width, height: 1000 });
+            await page.evaluate(() => drawHistory());
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+            if (process.env.HISTORY_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.HISTORY_SCREENSHOTS,
+                'charts-tx-' + width + '.png'), fullPage: true });
+        }
+        assert.equal(requests.length, networkCount, 'TX-only controls also send no requests');
+        await page.locator('#historyTxOnly').uncheck();
+        await page.evaluate(() => { setLanguage('en'); testSocket.onmessage({ data: JSON.stringify({ fwd_power: 40, swr: 1 }) }); });
 
         // No stale plateau after a transport outage, even without a close event.
         await page.evaluate(() => { const end = Date.now(); Date.now = () => end + 6000; drawHistory(); });
