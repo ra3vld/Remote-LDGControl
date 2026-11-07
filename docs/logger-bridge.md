@@ -51,6 +51,5 @@ only displays radio state and submits explicit user commands. It never feeds
 MQTT history back into RF interlocks or band-selection decisions. Remote-unit
 radio snapshots retain their original age plus link age.
 
-The current implementation supplies TCI. OmniRig is a reserved provider in the
-same contract; it requires its own LDG integration and acceptance test. No
-OmniRig driver or extra network service is installed by this feature.
+The implemented radio provider is TCI. `omnirig` is reserved in the contract;
+an OmniRig driver is not included.

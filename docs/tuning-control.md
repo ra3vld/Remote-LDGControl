@@ -6,8 +6,8 @@ connected to LDG. Temporary physical AUTO during a transmission keeps the
 application mode CONTROLLED. Selecting MANUAL or AUTO exits CONTROLLED.
 
 CONTROLLED is disabled by default. The selected CONTROLLED profile and its
-options are stored in a separate versioned NVS blob; existing credentials,
-antenna tables and calibration retain their layouts. The web settings contain
+options are saved independently of network credentials, antenna tables and
+calibration. The web settings contain
 only fallback options and never select the mode. Saving options does not restart
 a transmission or repeat MEM TUNE.
 
@@ -100,8 +100,7 @@ Authenticated mode commands are `POST /api/command/manual`, `/api/command/auto`
 and `/api/command/controlled`; MQTT accepts the corresponding command names and
 publishes a Controlled mode button in HA discovery. Mode selection uses the
 normal UART command queue, including remote forwarding. Persistence must succeed
-before the policy or UART mode changes. CONTROLLED is application command 0x83;
-the LDG receives `M`, never 0x83.
+before the policy or UART mode changes. The LDG starts in acknowledged MANUAL while the controller manages tuning.
 
 `/api/status` and WebSocket telemetry report `mode: 4` for CONTROLLED and the
 physical acknowledged mode separately in `tuner_mode`. Existing numeric modes
@@ -110,7 +109,3 @@ physical acknowledged mode separately in `tuner_mode`. Existing numeric modes
 flag and `tuning_state` carries operation progress; remote forwarding preserves
 both the application mode and physical state. A lost physical mode ACK is shown
 as an error/unknown physical mode, not a confirmed MANUAL.
-
-Validation uses a pure session/SWR policy suite, wire-level UART simulations,
-production LVGL rendering and browser-script tests. Hardware timing and actual
-RF tuning require a separate deployment and on-air acceptance test.

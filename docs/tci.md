@@ -4,9 +4,8 @@ English | [Русский](tci-ru.md)
 
 The ESP32 connected to the LDG tuner can read a TCI server directly over the
 LAN. No PC bridge is needed. The implementation uses the common TCI 1.9–2.1
-commands and does not restrict device or server names. The physical acceptance
-target is **SunSDR2 DX / ExpertSDR3**; other compliant servers require their own
-acceptance test. OmniRig integration is deferred.
+commands, including ExpertSDR3 with SunSDR2 DX. The radio connection is TCI;
+an OmniRig driver is not included.
 
 ## Setup
 
@@ -104,28 +103,5 @@ topic; see [MQTT API 2](logger-bridge.md). It does not drive band automation.
 
 `radio.free_heap`, `largest_block` and `stack_free` report bytes of internal
 free heap, largest free internal block and TCI-task stack high-water headroom.
-The network task runs on core 0, with a 6 KiB stack, an 8 KiB WebSocket frame
-limit and a 1024-byte ASCII command limit. It does not call LVGL or tuner UART.
 
-## Validation and physical acceptance
-
-Automated checks:
-
-```sh
-pio test -e native -e native-display
-node tests/test_radio_web.cjs
-pio run -e esp32-3248s035c -e esp32-display -e esp32-remote
-pio run -e esp32-3248s035c -e esp32-display -e esp32-remote -t buildfs
-```
-
-For SunSDR2 DX, record ExpertSDR3 version, controller firmware ID and settings.
-With RF off, change between two assigned bands and verify the **physical**
-antenna indication plus returned UART ACKs before PTT. Repeat with split
-across bands, XIT near a band edge, receiver 1, manual override, TX during
-preparation and zero/missing LDG telemetry. Restart ExpertSDR3 and disconnect
-the network to check fallback and a fresh synchronization after reconnect.
-Leave TCI unreachable while operating touch/web controls and observe task
-headroom and largest free block during a sustained run. Passing software tests
-or an antenna ACK alone does not establish physical relay acceptance.
-
-Protocol reference: [Expert Electronics TCI](https://github.com/ExpertSDR3/TCI).
+[TCI protocol](https://github.com/ExpertSDR3/TCI)

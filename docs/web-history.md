@@ -36,21 +36,11 @@ Selections appear after live telemetry confirms them.
 All collection, validation, storage and rendering for these charts run in the
 browser. No chart samples go into localStorage, IndexedDB, ESP32 RAM, NVS or
 device files. Browser memory covers 30 minutes of the selected time basis.
-A 250 ms bucket keeps at most eight actual snapshots: first, last and the
-min/max of FWD, REF and SWR. Typical 20 Hz telemetry fits in full; unusually
-fast input is compacted without losing measurement extrema. Capacity is
-57,616 snapshots including partial boundary buckets, so the point limit
-cannot shorten the 30 minute window. Drawing runs only while Control is visible;
+Fast input is compacted while preserving FWD, REF and SWR extrema.
+Drawing runs only while Control is visible;
 hidden browser tabs can throttle their own incoming updates and timers.
 
 History collection is in the inline browser core; drawing is in the optional
 `web/widgets.js` module. Samples collect before it loads. If drawing cannot load,
 numeric readings and controls remain available; retrying drawing preserves history.
-The ESP32 serves generated assets through its existing 512-byte file buffer.
 See [asset build and loading](web-loading.md) for gzip, build and installation.
-
-Build test assets with `npm run build:web` before validation.
-Validation: `node tests/test_history_web.cjs`. Real DOM, Canvas, pointer/touch,
-responsive layout, reload and network checks: `tests/test_history_browser.cjs`
-with Playwright available through `NODE_PATH` and, if needed,
-`CHROMIUM_EXECUTABLE=/usr/bin/chromium`.

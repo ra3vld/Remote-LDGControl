@@ -14,15 +14,8 @@ antenna names are preserved. Protocol mode names such as AUTO, MANUAL and
 CONTROLLED retain their standard spelling. Unrecognized diagnostic text is
 displayed verbatim.
 
-## ESP32 memory budget
 
-The feature adds **0 bytes of ESP32 application RAM**, below the 200-byte limit.
-All language state, translation strings and rendering execute in the browser.
-Translations live in `web/messages.ru.json`, generated into the inline core and
-an optional language module in LittleFS. The firmware streams these prebuilt
-assets through its existing 512-byte stack buffer; there is no language API,
-NVS setting or additional language state on the ESP32. This is an architectural
-RAM bound, not a measured runtime heap result.
+Language selection and translation run in the browser. The preference is not
+stored in controller settings and does not change other browsers.
 
-See [asset build and loading](web-loading.md) for `npm ci`, the PlatformIO build
-hook, gzip, module caching and application/LittleFS installation requirements.
+See [web asset build and loading](web-loading.md) for installation.
