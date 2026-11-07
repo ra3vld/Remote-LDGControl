@@ -54,15 +54,18 @@ history. Refreshing/closing the page still discards history.
 - `web/messages.ru.json`, `style.css`: translations and styles.
 - `scripts/build_web.cjs`: safe minification, hash/SRI generation and gzip level 9.
 
-Install Node.js 18 or newer (CI uses 24) and run once:
+PlatformIO prepares the host dependencies automatically before generating the
+assets. On Windows it also downloads a verified portable Node.js if a suitable
+Node/npm installation is unavailable. Press Build or Upload; no npm terminal
+commands are required. See [automatic setup](development.md#automatic-web-tool-setup)
+for caching, network access and supported Windows architectures.
+
+For direct use of the web tools outside PlatformIO (development/tests), install
+Node.js 18+ with npm (CI uses 24), then run:
 
 ```sh
 npm ci --ignore-scripts --no-audit --no-fund
 ```
-
-On Windows, install Node.js with npm, reopen VS Code and use `npm.cmd` in
-PowerShell. See [Windows setup](development.md#windows-vs-code) for commands
-and build-hook error messages.
 
 The PlatformIO pre-hook builds assets into each environment's private
 `.pio/build/<environment>/web-assets/` and selects that directory for LittleFS.

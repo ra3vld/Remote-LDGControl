@@ -108,21 +108,25 @@ and LittleFS images**; the web interface is stored in LittleFS.
 git clone https://github.com/ra3vld/Remote-LDGControl.git
 cd Remote-LDGControl
 python -m pip install -r requirements-platformio.txt
-npm ci --ignore-scripts --no-audit --no-fund
 pio run -e esp32-3248s035c
 pio run -e esp32-3248s035c -t upload --upload-port /dev/ttyUSB0
 pio run -e esp32-3248s035c -t uploadfs --upload-port /dev/ttyUSB0
 ```
 
-Install Python 3.10+ and [Node.js LTS with npm](https://nodejs.org/en/download)
-first (minimum Node.js 18; CI uses 24). This project pins the
-pioarduino Core to **6.2.0** in `requirements-platformio.txt`. In VS Code,
-install it into the extension's Python environment; see
-[Windows setup and Core version errors](docs/development.md#windows-vs-code).
+Install Python 3.10+ first. This project pins the pioarduino Core to **6.2.0**
+in `requirements-platformio.txt`. In VS Code, install it into the extension's
+Python environment; see [Windows setup](docs/development.md#windows-vs-code).
 Replace the environment and serial port for your board; Windows ports use
 names such as `COM3`.
-After installing Node.js on Windows, close and reopen VS Code before building.
-In PowerShell use `npm.cmd ci --ignore-scripts --no-audit --no-fund`.
+
+**On Windows, press Build or Upload:** the build finds a suitable Node.js with
+npm, or downloads a verified portable Node.js 24.19.0 into `.pio/web-tools`.
+It installs the locked npm dependencies automatically. No `node --version`,
+`npm --version` or `npm ci` commands are needed. Tools and dependencies are
+reused on later builds; initial setup requires internet access.
+On Linux/macOS, install Node.js 18+ with npm first; npm dependencies are still
+prepared automatically. The system PATH is not modified.
+
 The build installs its pinned Arduino-ESP32 framework and generates web assets.
 After updating, reload the browser page to load the matching interface.
 

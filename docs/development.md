@@ -2,7 +2,8 @@
 
 Use Python 3.10+, the pioarduino Core pinned in `requirements-platformio.txt`,
 the framework pinned in `platformio.ini`, and Node.js 18+ for web assets.
-CI uses Node.js 24. Install the locked host dependencies:
+CI uses Node.js 24. For direct web-tool development and browser tests, install
+the host dependencies:
 
 ```sh
 python -m pip install -r requirements-platformio.txt
@@ -15,24 +16,37 @@ environment used by your IDE or CLI.
 
 ## Windows: VS Code
 
-Install [Node.js LTS with npm](https://nodejs.org/en/download) first (CI uses
-Node.js 24). After installation, close all VS Code windows and reopen the
-project so the extension receives the updated PATH.
-
-Open PowerShell in the project root. Install the pinned Core into the same
-environment that the extension uses, rather than a separate system Python:
+Install the pinned Core into the Python environment used by your IDE. If the
+extension uses the standard location, run from the project root:
 
 ```powershell
-node --version
-npm.cmd --version
 & "$env:USERPROFILE\.platformio\penv\Scripts\python.exe" -m pip install --force-reinstall -r .\requirements-platformio.txt
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" --version
-npm.cmd ci --ignore-scripts --no-audit --no-fund
 ```
 
-Confirm that the version is **6.2.0**, then restart VS Code. The extension's
-Build and Upload actions use that environment. If a custom Core location is
+Confirm Core **6.2.0**, then restart VS Code. If a custom Core location is
 configured, use its Python and executable paths instead.
+
+### Automatic web-tool setup
+
+Press **Build** or **Upload**. The hook finds Node.js 18+ and npm in PATH or
+standard Windows install directories. If either is missing or Node.js is too
+old, it downloads portable **Node.js 24.19.0** for Windows x64/ARM64 from
+[nodejs.org](https://nodejs.org/download/release/v24.19.0/). The archive is checked
+against its pinned SHA-256 before extraction into `.pio/web-tools`.
+No administrator rights, system installation or PATH changes are needed.
+
+The hook runs npm's JavaScript entry directly to avoid PowerShell execution
+policy and `npm.cmd` lookup issues. It installs the versions from
+`package-lock.json` with `--include=dev --ignore-scripts --no-audit --no-fund`.
+Dependency setup repeats only when the manifest/lock, runtime or platform
+changes, or required modules are missing. Simultaneous Build/Upload tasks share
+a setup lock. Failed setup does not create a success stamp and can be retried.
+
+First setup needs internet access. Subsequent builds reuse the local runtime
+and `node_modules`. Deleting `.pio/web-tools` clears the setup cache; deleting
+`node_modules` causes automatic dependency installation on the next build.
+Manual Node/npm version checks and `npm ci` are not part of this workflow.
 
 ### IncompatiblePlatform with 6.2.0-post.1
 
@@ -44,14 +58,13 @@ Reinstall exact **6.2.0** using the command above. An unrestricted Core upgrade
 can select the incompatible post release again. Keep the pinned platform URL
 and Arduino framework version in `platformio.ini`.
 
-### WinError 2 in build_web.py
+### Web-tool setup errors
 
-This build hook launches Node.js to generate the browser assets. If Windows
-cannot find `node.exe`, install Node.js LTS and reopen VS Code. The hook also
-searches the standard Windows installer directories when PATH is stale.
-Check `node --version`, then run `npm.cmd ci --ignore-scripts --no-audit --no-fund`
-in the project root before retrying Build or Upload. Missing `acorn`, `postcss`
-or `terser` means the npm dependencies have not been installed successfully.
+An older checkout can report `WinError 2` from `build_web.py` when `node.exe`
+is absent. Update the project to use automatic setup. If downloading Node.js or
+installing npm dependencies fails, the build prints the failed step. Restore
+access to `nodejs.org` / the configured npm registry and retry Build. Existing
+system Node/npm installations can also be used without downloading a runtime.
 
 ## Build targets
 
