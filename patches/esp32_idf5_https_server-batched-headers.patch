@@ -1,0 +1,31 @@
+--- a/src/HTTPResponse.cpp
++++ b/src/HTTPResponse.cpp
+@@ -1,18 +1,14 @@
+ void HTTPResponse::printHeader() {
+   if (!_headerWritten) {
+-    HTTPS_LOGD("Printing headers");
+-
+-    // Status line, like: "HTTP/1.1 200 OK\r\n"
+-    std::string statusLine = "HTTP/1.1 " + intToString(_statusCode) + " " + _statusText + "\r\n";
+-    printInternal(statusLine, true);
+-
+-    // Each header, like: "Host: myEsp32\r\n"
+-    std::vector<HTTPHeader *> * headers = _headers.getAll();
+-    for(std::vector<HTTPHeader*>::iterator header = headers->begin(); header != headers->end(); ++header) {
+-      printInternal((*header)->print()+"\r\n", true);
+-    }
+-    printInternal("\r\n", true);
+-
+-    _headerWritten=true;
++    // An unbuffered response without a length is delimited by EOF.
++    // Upgrade responses switch protocols and must preserve their headers.
++    if (_statusCode != 101 && !isResponseBuffered() && getHeader("Content-Length").empty())
++      setHeader("Connection", "close");
++    // One header block avoids a Wi-Fi/TCP allocation for every short line.
++    std::string headers = "HTTP/1.1 " + intToString(_statusCode) + " " + _statusText + "\r\n";
++    for (auto* header : *_headers.getAll()) headers += header->print() + "\r\n";
++    headers += "\r\n";
++    _headerWritten = true;
++    if (writeBytesInternal(headers.data(), headers.size(), true) != headers.size()) _isError = true;
+   }
+ }

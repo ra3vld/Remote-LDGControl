@@ -20,10 +20,13 @@ WRITE = r'''
 using byte=uint8_t;
 #define MSG_DONTWAIT 64
 #define STATE_ERROR 1
+unsigned aborted=0;void abortHttpTransport(int){++aborted;}
 uint32_t ticks=0; unsigned calls=0; int scenario=0;
+size_t httpSendAllowance(int){return scenario==8 && ticks<50?0:2;}
 const uint32_t MALLOC_CAP_INTERNAL=0x800,MALLOC_CAP_8BIT=4;
 struct Esp {size_t getFreeHeap(){return 73768;}}ESP; // Includes unusable IRAM.
 size_t heap_caps_get_free_size(uint32_t caps){assert(caps==0x804);return scenario==7 || (scenario==6 && ticks<50)?8192:40000;}
+size_t heap_caps_get_largest_free_block(uint32_t caps){return 40000;}
 std::vector<byte> wire;
 uint32_t millis(){return ticks;}
 void delay(unsigned n){ticks+=n;}
@@ -44,12 +47,12 @@ struct HTTPConnection {
 #include "src/HTTPConnection.cpp"
 int main(){
  byte data[]={1,2,3,4,5};
- for(auto clock:{0u,0xfffffff0u})for(scenario=0;scenario<8;++scenario){
-  ticks=clock;calls=0;wire.clear();HTTPConnection c;
+ for(auto clock:{0u,0xfffffff0u})for(scenario=0;scenario<9;++scenario){
+  ticks=clock;calls=aborted=0;wire.clear();HTTPConnection c;
   auto result=c.writeBuffer(data,5);
   if(scenario==1 || scenario==2 || scenario==5 || scenario==7){
-   assert(result==0 && c.stopped && c._connectionState==STATE_ERROR);
-   assert(uint32_t(ticks-clock)<=1000);unsigned done=calls;
+   assert(result==0 && c.stopped && c._connectionState==STATE_ERROR && aborted==1);
+   assert(uint32_t(ticks-clock)<=4000);unsigned done=calls;
    assert(c.writeBuffer(data,5)==0 && calls==done);
   }else{assert(result==5 && !c.stopped);assert(wire==std::vector<byte>(data,data+5));}
  }
@@ -143,11 +146,11 @@ struct HTTPServer{HTTPConnection* _connections[1]{};int _socket=1,_defaultHeader
 int main(){
  using namespace httpsserver;
  for(int scenario=0;scenario<4;++scenario){
-  ESP.heap=scenario==1?16000:40000;ESP.block=scenario==2?8000:30000;allocationFails=scenario==3;
+  ESP.heap=scenario==1?16000:40000;ESP.block=scenario==2?3000:30000;allocationFails=scenario==3;
   allocated=rejected=closed=0;HTTPServer server;
   int result=server.createConnection(0);
   if(scenario==0){assert(result==9 && allocated==1 && !rejected);delete server._connections[0];}
-  else assert(result==-1 && !allocated && rejected==1 && closed==1 && !server._connections[0]);
+  else assert(result==-1 && !allocated && rejected==0 && closed==0 && !server._connections[0]);
  }
 }
 '''
@@ -184,6 +187,7 @@ class TransportBoundsTests(unittest.TestCase):
             (root/'src/HTTPServer.hpp').write_text('')
             (root/'src/HTTPResponse.hpp').write_text('')
             (root/'src/esp_heap_caps.h').write_text('')
+            (root/'src/http_transport_memory.h').write_text('')
             (root/'src/mbedtls').mkdir()
             for name in ['base64.h','sha1.h']:(root/'src/mbedtls'/name).write_text('')
             (root/'main.cpp').write_text(harness)
@@ -201,7 +205,7 @@ class TransportBoundsTests(unittest.TestCase):
         self.execute('ws_input.cpp','WebsocketHandler.cpp','esp32_idf5_https_server-ws-bounded-input.patch',INPUT)
     def test_rejected_upgrade_does_not_allocate_handler(self):
         self.execute('http_upgrade.cpp','HTTPConnection.cpp','esp32_idf5_https_server-ws-upgrade-result.patch',UPGRADE)
-    def test_low_memory_rejects_connections_without_reboot(self):
+    def test_low_memory_defers_connections_without_reboot(self):
         self.execute('http_connection_memory.cpp','HTTPServer.cpp','esp32_idf5_https_server-connection-memory.patch',MEMORY)
     def test_failed_optional_response_cache_uses_unbuffered_output(self):
         self.execute('http_response_memory.cpp','HTTPResponse.cpp','esp32_idf5_https_server-response-memory.patch',RESPONSE_MEMORY)

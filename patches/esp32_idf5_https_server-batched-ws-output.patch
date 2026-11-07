@@ -1,0 +1,34 @@
+--- a/src/WebsocketHandler.cpp
++++ b/src/WebsocketHandler.cpp
+@@ -1,21 +1,14 @@
+ void WebsocketHandler::send(std::string data, uint8_t sendType) {
+-  HTTPS_LOGD(">> Websocket.send(): length=%d", data.length());
+-  WebsocketFrame frame;
+-  frame.fin    = 1;
+-  frame.rsv1   = 0;
+-  frame.rsv2   = 0;
+-  frame.rsv3   = 0;
+-  frame.opCode = sendType==SEND_TYPE_TEXT?OPCODE_TEXT:OPCODE_BINARY;
+-  frame.mask   = 0;
+-  if (data.length() < 126) {
+-    frame.len = data.length();
+-    _con->writeBuffer((uint8_t *)&frame, sizeof(frame));
+-  } else {
+-    frame.len = 126;
+-    _con->writeBuffer((uint8_t *)&frame, sizeof(frame));
+-    uint16_t net_len = htons((uint16_t)data.length());
+-    _con->writeBuffer((uint8_t *)&net_len, sizeof(uint16_t));  // Convert to network byte order from host byte order
++  // One transport write per frame. Separate 2-byte header/length writes
++  // each reserve a full TCP pbuf and can leave a frame split across ACK waits.
++  WebsocketFrame frame{};
++  frame.fin = 1;
++  frame.opCode = sendType == SEND_TYPE_TEXT ? OPCODE_TEXT : OPCODE_BINARY;
++  frame.len = data.length() < 126 ? data.length() : 126;
++  if (data.length() >= 126) {
++    const uint16_t length = htons((uint16_t)data.length());
++    data.insert(0, (const char*)&length, sizeof(length));
+   }
++  data.insert(0, (const char*)&frame, sizeof(frame));
+   _con->writeBuffer((uint8_t*)data.data(), data.length());
+-  HTTPS_LOGD("<< Websocket.send()");
+ } // Websocket::send

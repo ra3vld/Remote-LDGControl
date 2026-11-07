@@ -11,7 +11,7 @@ namespace ldg {
 static constexpr uint32_t MQTT_RECONNECT_MS = 5000;
 
 enum class MqttConnection { Disabled, WaitingWifi, Connecting, Connected, Disconnected, Error };
-enum class MqttError { None, Identity, Memory, TlsClock, Connect, ConnectionLost, WifiLost, Publish, Subscribe, PacketSize };
+enum class MqttError { None, Identity, Memory, TlsClock, TlsMemory, TlsCa, Connect, ConnectionLost, WifiLost, Publish, Subscribe, PacketSize };
 
 inline const char* mqttConnectionName(MqttConnection state) {
     switch (state) {
@@ -57,6 +57,8 @@ inline const char* mqttErrorMessage(MqttError error) {
     switch (error) {
         case MqttError::Identity: return "Cannot generate MQTT identity from MAC address";
         case MqttError::TlsClock: return "TLS: waiting for clock synchronization (NTP)";
+        case MqttError::TlsMemory: return "TLS: waiting for internal memory headroom";
+        case MqttError::TlsCa: return "TLS: invalid trusted CA bundle";
         case MqttError::Memory: return "Not enough memory to initialize MQTT";
         case MqttError::Connect: return "Connection failed";
         case MqttError::ConnectionLost: return "Connection lost";

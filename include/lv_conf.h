@@ -7,9 +7,13 @@
 #define LV_COLOR_DEPTH 16
 
 // Memory settings
-// Full rendering tests peak below 25 KiB even on a 64-bit host. Leave
-// internal RAM for Wi-Fi/HTTP/MQTT on the Sunton board without PSRAM.
+// Keep room for temporary drawing allocations above the 32-bit LCD's roughly
+// 10 KiB steady use. Host objects have wider pointers and need the larger pool.
+#if defined(__SIZEOF_POINTER__) && __SIZEOF_POINTER__ > 4
 #define LV_MEM_SIZE (32U * 1024U)
+#else
+#define LV_MEM_SIZE (16U * 1024U)
+#endif
 #define LV_MEM_CUSTOM 0
 
 // Tick interface

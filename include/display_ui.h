@@ -51,12 +51,17 @@ private:
     lv_obj_t* m_scaleLabel;
     lv_obj_t* m_fwdPowerLabel = nullptr;
     lv_obj_t* m_refPowerLabel = nullptr;
+    lv_obj_t* m_fwdTitleLabel = nullptr;
+    lv_obj_t* m_refTitleLabel = nullptr;
+    lv_obj_t* m_titleLabel = nullptr;
+    lv_obj_t* m_radioStatusLabel = nullptr;
+    lv_obj_t* m_wifiLabel = nullptr;
     lv_obj_t* m_modeLabel;
     lv_obj_t* m_ssidLabel;
     lv_obj_t* m_ipLabel;
     lv_obj_t* m_antennaInitLabel = nullptr;
     bool m_radioVisible = false;
-    char m_radioText[112]{};
+    char m_radioText[32]{};
     ldg::AntennaInit m_antennaInit = ldg::AntennaInit::Unknown;
     ldg::AntennaAuto m_antennaAuto = ldg::AntennaAuto::Disabled;
     ldg::TuningState m_tuningState = ldg::TuningState::Native;
@@ -105,7 +110,7 @@ private:
     uint32_t m_faceVersion = 0, m_previousFaceVersion = 0;
     float m_previousForward = 0, m_previousReflected = 0, m_previousSwr = NAN;
     char m_previousSwrText[16] = "--";
-    char m_previousForwardText[32] = "FWD --", m_previousReflectedText[32] = "REF --";
+    char m_previousForwardText[32] = "-- W", m_previousReflectedText[32] = "-- W";
     struct Diagnostics {
         uint32_t frames = 0, frameMs = 0, maxFrameMs = 0, pixels = 0;
         uint32_t flushUs = 0, drawUs = 0, faceBuildUs = 0, faceBytes = 0;
@@ -124,7 +129,9 @@ private:
     void setupTouch();
     void readTouch(lv_indev_drv_t* drv, lv_indev_data_t* data);
     void updateOrientation();
+    void layoutScreen();
     void layoutNetworkInfo();
+    static void drawScreenDividers(lv_event_t* e);
 
     // Button events
     static void btnMemTuneEvent(lv_event_t* e);

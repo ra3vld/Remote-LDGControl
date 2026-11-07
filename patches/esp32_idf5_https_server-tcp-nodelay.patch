@@ -1,0 +1,14 @@
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -4,1 +4,2 @@
+ #include "mbedtls/sha1.h"
++#include <lwip/tcp.h>
+@@ -48,3 +49,8 @@
+     if (_socket >= 0) {
++      // Meter frames and request headers are short, latency-sensitive writes.
++      // Do not hold them behind Nagle's ACK wait on a reused connection.
++      const int noDelay = 1;
++      setsockopt(_socket, IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(noDelay));
++
+       HTTPS_LOGI("New connection. Socket FID=%d", _socket);
+       _connectionState = STATE_INITIAL;

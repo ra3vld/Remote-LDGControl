@@ -9,6 +9,7 @@
 #include "mqtt_protocol.h"
 #include <WiFi.h>
 #include <Wire.h>
+#include "../../src/display_fonts.cpp"
 #include "../../src/display_ui.cpp"
 uint32_t testMillis=0;
 extern "C" uint32_t display_test_millis(void) { return testMillis; }
@@ -30,6 +31,22 @@ static lv_obj_t* label(lv_obj_t* parent,const char* text) {
     }
     return nullptr;
 }
+static unsigned countLabels(lv_obj_t* parent,const char* text) {
+    unsigned count=lv_obj_check_type(parent,&lv_label_class) && !strcmp(lv_label_get_text(parent),text) ? 1 : 0;
+    for(uint32_t i=0;i<lv_obj_get_child_cnt(parent);++i) count+=countLabels(lv_obj_get_child(parent,i),text);
+    return count;
+}
+static void assertFlushAvoidsControls(const TFT_eSPI::Flush& flush) {
+    for (uint32_t i=0;i<lv_obj_get_child_cnt(lv_scr_act());++i) {
+        auto* child=lv_obj_get_child(lv_scr_act(),i);
+        if (!lv_obj_check_type(child,&lv_btn_class)) continue;
+        lv_area_t bounds; lv_obj_get_coords(child,&bounds);
+        const bool intersects=flush.x<=bounds.x2 && flush.x+flush.w>bounds.x1 &&
+            flush.y<=bounds.y2 && flush.y+flush.h>bounds.y1;
+        if(intersects) std::printf("RF flush %d,%d %dx%d overlaps %d,%d..%d,%d\n",flush.x,flush.y,flush.w,flush.h,bounds.x1,bounds.y1,bounds.x2,bounds.y2);
+        TEST_ASSERT_FALSE_MESSAGE(intersects,"RF updates must not redraw control buttons");
+    }
+}
 void setUp() {
     testMillis=0; lastCommand=0; scale.set(1000);
     configManager.config.displayOrientation=0;
@@ -44,6 +61,8 @@ void setUp() {
 void tearDown() {
     lv_mem_monitor_t memory;
     lv_mem_monitor(&memory);
+    if (std::getenv("LDG_MEMORY_TRACE")) std::printf("LVGL max used %u; free %u; largest %u\n",
+        unsigned(memory.max_used),unsigned(memory.free_size),unsigned(memory.free_biggest_size));
     TEST_ASSERT_LESS_THAN_UINT(LV_MEM_SIZE - 4096, memory.max_used);
     // Keep one LVGL allocator lifetime for the suite. lv_deinit() recreates the
     // pool without resetting its high-water counters in LVGL 8; repeated init
@@ -62,20 +81,19 @@ void test_scale_label_is_visible_and_matches_the_dial() {
     TEST_ASSERT_GREATER_OR_EQUAL_INT(0,area.y1);
     TEST_ASSERT_LESS_THAN_INT(320,area.y2);
     const auto lowPixels=TFT_eSPI::instance->pixels;
-    ldg::MeterGeometry geometry; geometry.resize(300,280);
+    ldg::MeterGeometry geometry; geometry.resize(300,215);
     const auto tip100=geometry.forwardNeedle(0.25f);
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00ff00).full,lowPixels[tip100.y*480+tip100.x]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x64cfff).full,lowPixels[(tip100.y+42)*480+tip100.x]);
     scale.set(1000); render();
     TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"1000W"));
     TEST_ASSERT_TRUE(lowPixels!=TFT_eSPI::instance->pixels);
     const auto tip1000=geometry.forwardNeedle(0.025f);
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00ff00).full,TFT_eSPI::instance->pixels[tip1000.y*480+tip1000.x]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x64cfff).full,TFT_eSPI::instance->pixels[(tip1000.y+42)*480+tip1000.x]);
     scale.set(100); render();
     TEST_ASSERT_EQUAL_MEMORY(lowPixels.data(),TFT_eSPI::instance->pixels.data(),lowPixels.size()*sizeof(uint16_t));
 }
 void test_digital_power_is_visible_for_both_scales_and_distinguishes_zero_from_missing() {
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "FWD --"));
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "REF --"));
+    TEST_ASSERT_EQUAL_UINT(2,countLabels(lv_scr_act(),"-- W"));
     tuner_state_t state;
     state.meterValid = true;
     state.meter.forward_power_watts = 40;
@@ -83,35 +101,32 @@ void test_digital_power_is_visible_for_both_scales_and_distinguishes_zero_from_m
     state.meter.swr = 1.4;
     for (uint16_t watts : {100, 1000}) {
         scale.set(watts); ui->updateState(state); render();
-        auto* forward = label(lv_scr_act(), "FWD 40.0W");
-        auto* reflected = label(lv_scr_act(), "REF 1.2W");
+        auto* forward = label(lv_scr_act(), "40.0 W");
+        auto* reflected = label(lv_scr_act(), "1.25 W");
         TEST_ASSERT_NOT_NULL(forward);
         TEST_ASSERT_NOT_NULL(reflected);
         lv_area_t f, r; lv_obj_get_coords(forward, &f); lv_obj_get_coords(reflected, &r);
         TEST_ASSERT_GREATER_THAN_INT(0, r.x1);
-        TEST_ASSERT_LESS_THAN_INT(f.x1, r.x2);
-        TEST_ASSERT_LESS_THAN_INT(300, f.x2);
-        TEST_ASSERT_LESS_THAN_INT(280, f.y2);
-        TEST_ASSERT_LESS_THAN_INT(280, r.y2);
+        TEST_ASSERT_GREATER_THAN_INT(f.x2, r.x1);
+        TEST_ASSERT_LESS_THAN_INT(314, r.x2);
+        TEST_ASSERT_LESS_THAN_INT(297, f.y2);
+        TEST_ASSERT_LESS_THAN_INT(297, r.y2);
         bool painted = false;
         for (int y = f.y1; y <= f.y2; ++y) for (int x = f.x1; x <= f.x2; ++x)
-            painted |= TFT_eSPI::instance->pixels[y * 480 + x] == lv_color_hex(0x22c55e).full;
+            painted |= TFT_eSPI::instance->pixels[y * 480 + x] == lv_color_hex(0xeff5ff).full;
         TEST_ASSERT_TRUE(painted);
     }
     state.meterValid = false;
     ui->updateState(state); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "FWD --"));
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "REF --"));
+    TEST_ASSERT_EQUAL_UINT(2,countLabels(lv_scr_act(),"-- W"));
     state.meterValid = true;
     state.meter.forward_power_watts = state.meter.reflected_power_watts = 0;
     ui->updateState(state); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "FWD 0.0W"));
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "REF 0.0W"));
+    TEST_ASSERT_EQUAL_UINT(2,countLabels(lv_scr_act(),"0.0 W"));
     state.meter.forward_power_watts = NAN;
     state.meter.reflected_power_watts = -1;
     ui->updateState(state); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "FWD --"));
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "REF --"));
+    TEST_ASSERT_EQUAL_UINT(2,countLabels(lv_scr_act(),"-- W"));
 }
 void test_lcd_keeps_last_band_without_treating_expired_power_as_live() {
     tuner_state_t state;
@@ -119,24 +134,24 @@ void test_lcd_keeps_last_band_without_treating_expired_power_as_live() {
     state.meter.band = state.lastBand = BAND_30M;
     state.meter.forward_power_watts = 40;
     ui->updateState(state); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "Band: 30m"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "30m"));
     state.meterValid = false;
     ui->updateState(state); render();
-    auto* held = label(lv_scr_act(), "Band: 30m (last)");
+    auto* held = label(lv_scr_act(), "30m last");
     TEST_ASSERT_NOT_NULL(held);
     lv_area_t area; lv_obj_get_coords(held, &area);
-    TEST_ASSERT_LESS_THAN_INT(240, area.x2);
+    TEST_ASSERT_LESS_THAN_INT(273, area.x2);
     TEST_ASSERT_LESS_THAN_INT(320, area.y2);
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "FWD --"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "-- W"));
     state.meterValid = true;
     state.meter.band = BAND_UNKNOWN;
     ui->updateState(state); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "Band: 30m (last)"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "30m last"));
     state.meter.band = state.lastBand = BAND_40M;
     ui->updateState(state); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "Band: 40m"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(), "40m"));
     ui->updateState(tuner_state_t{}); render();
-    TEST_ASSERT_NULL(label(lv_scr_act(), "Band: 40m"));
+    TEST_ASSERT_NULL(label(lv_scr_act(), "40m"));
 }
 void test_full_and_incremental_meter_draws_produce_the_same_pixels() {
     tuner_state_t state; state.meterValid=true; state.meter.forward_power_watts=25;
@@ -153,7 +168,7 @@ void test_meter_update_does_not_redraw_the_controls() {
     TEST_ASSERT_GREATER_THAN_UINT(0,TFT_eSPI::instance->flushes.size());
     unsigned pixels=0;
     for(const auto& flush:TFT_eSPI::instance->flushes) {
-        TEST_ASSERT_LESS_OR_EQUAL_INT(310,flush.x+flush.w);
+        assertFlushAvoidsControls(flush);
         pixels+=flush.w*flush.h;
     }
     std::printf("Meter update: %u pixels transferred vs 84000 for a complete dial\n",pixels);
@@ -180,10 +195,10 @@ void test_custom_log_scale_matches_needle_power_and_partial_repaints() {
     state.meter.forward_power_watts=60; state.meter.reflected_power_watts=6; state.meter.swr=1.5;
     scale.set(600,true); ui->updateState(state); render();
     TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"600W LOG"));
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"FWD 60.0W"));
-    ldg::MeterGeometry geometry; geometry.resize(300,280,true);
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"60.0 W"));
+    ldg::MeterGeometry geometry; geometry.resize(300,215,true);
     const auto tip=geometry.forwardNeedle(ldg::meterFraction(60,600,true));
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00ff00).full,TFT_eSPI::instance->pixels[tip.y*480+tip.x]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x64cfff).full,TFT_eSPI::instance->pixels[(tip.y+42)*480+tip.x]);
     for (const uint16_t maximum : {1,50,600,1000}) for (const bool log : {false,true}) {
         scale.set(maximum,log); render();
         for (const float ratio : {0.f,0.01f,0.1f,0.8f,1.f,0.f}) {
@@ -207,10 +222,10 @@ void test_fast_telemetry_bursts_render_only_the_latest_sample_without_full_scree
         ui->updateState(state);
     }
     render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"FWD 30.0W"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"30.0 W"));
     unsigned pixels=0;
     for (const auto& flush:TFT_eSPI::instance->flushes) {
-        TEST_ASSERT_LESS_OR_EQUAL_INT(310,flush.x+flush.w);
+        assertFlushAvoidsControls(flush);
         pixels+=flush.w*flush.h;
     }
     std::printf("100 queued RF samples: %u transferred pixels; full screen is 153600\n",pixels);
@@ -269,7 +284,7 @@ void test_animated_needle_settles_to_latest_data_without_changing_digital_measur
     ui->testRenderer(true,true);
     tuner_state_t state;state.meterValid=true;state.meter.forward_power_watts=1000;state.meter.swr=1;
     ui->updateState(state);render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"FWD 1000.0W"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"1000.0 W"));
     auto first=TFT_eSPI::instance->pixels;
     render();TEST_ASSERT_TRUE(first!=TFT_eSPI::instance->pixels);
     state.meter.forward_power_watts=40;ui->updateState(state);
@@ -281,8 +296,8 @@ void test_animated_needle_settles_to_latest_data_without_changing_digital_measur
 void test_dial_moves_with_its_widget_instead_of_using_screen_coordinates() {
     auto* meter=lv_obj_get_child(lv_scr_act(),0);
     lv_obj_set_pos(meter,7,9); render();
-    const int x=270+7,y=260+9;
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00aa00).full,TFT_eSPI::instance->pixels[y*480+x]);
+    const int x=237+7,y=195+9;
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x64cfff).full,TFT_eSPI::instance->pixels[y*480+x]);
 }
 void test_lcd_pivots_and_needle_ends_use_the_reduced_dial_radius() {
     tuner_state_t state;
@@ -290,14 +305,14 @@ void test_lcd_pivots_and_needle_ends_use_the_reduced_dial_radius() {
     state.meter.forward_power_watts = state.meter.reflected_power_watts = 1000;
     ui->updateState(state); render();
     const auto& pixels = TFT_eSPI::instance->pixels;
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00aa00).full, pixels[260*480+270]);
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xaa0000).full, pixels[260*480+30]);
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00ff00).full, pixels[20*480+270]);
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xff0000).full, pixels[20*480+30]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x64cfff).full, pixels[237*480+237]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xf0b85c).full, pixels[237*480+63]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x64cfff).full, pixels[63*480+237]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xf0b85c).full, pixels[63*480+63]);
     state.meter.forward_power_watts = state.meter.reflected_power_watts = 0;
     ui->updateState(state); render();
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x00aa00).full, pixels[260*480+270]);
-    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xaa0000).full, pixels[260*480+30]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0x64cfff).full, pixels[237*480+237]);
+    TEST_ASSERT_EQUAL_HEX16(lv_color_hex(0xf0b85c).full, pixels[237*480+63]);
 }
 void test_mode_button_cycles_manual_auto_controlled() {
     ui->updateStatus(MODE_AUTO,ANT_A); render();
@@ -307,10 +322,10 @@ void test_mode_button_cycles_manual_auto_controlled() {
     TEST_ASSERT_EQUAL_UINT8(TUNER_CMD_CONTROLLED_MODE,lastCommand);
     ui->updateStatus(MODE_CONTROLLED,ANT_A,ANT_A,MODE_MANUAL); render();
     auto* manual=label(lv_scr_act(),"SET MANUAL"); TEST_ASSERT_NOT_NULL(manual);
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"Mode: CONTROLLED"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"CONTROLLED"));
     tuner_state_t temporary; temporary.tuningManaged = true; temporary.mode = MODE_AUTO;
     ui->updateState(temporary); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"Mode: CONTROLLED"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"CONTROLLED"));
     TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"SET MANUAL"));
     lv_event_send(lv_obj_get_parent(manual),LV_EVENT_CLICKED,nullptr);
     TEST_ASSERT_EQUAL_UINT8(TUNER_CMD_MANUAL_MODE,lastCommand);
@@ -387,7 +402,7 @@ void test_antenna_initialization_status_is_visible_and_changes_without_recreatin
         TEST_ASSERT_NOT_NULL(status);
         lv_area_t area; lv_obj_get_coords(status, &area);
         TEST_ASSERT_LESS_THAN_INT(320, area.y2);
-        TEST_ASSERT_LESS_THAN_INT(300, area.x2);
+        TEST_ASSERT_LESS_THAN_INT(320, area.x2);
         TEST_ASSERT_TRUE(screen == lv_scr_act());
     }
 }
@@ -443,12 +458,14 @@ void test_tci_frequency_and_connection_fit_above_ip_and_wait_reason_is_visible()
     state.antennaInit = ldg::AntennaInit::Ready;
     state.antennaAuto = ldg::AntennaAuto::WaitingRx;
     ui->updateState(state); render();
-    auto* radio = label(lv_scr_act(),"TCI RX 14.074000 20m\nready / TCI");
+    auto* radio = label(lv_scr_act(),"14.074000");
     TEST_ASSERT_NOT_NULL(radio);
     TEST_ASSERT_FALSE(lv_obj_has_flag(radio,LV_OBJ_FLAG_HIDDEN));
     lv_area_t area; lv_obj_get_coords(radio,&area);
     TEST_ASSERT_LESS_THAN_INT(480,area.x2);
-    TEST_ASSERT_LESS_THAN_INT(22,area.y2);
+    TEST_ASSERT_LESS_THAN_INT(37,area.y2);
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"TCI RX\nready/TCI"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"20m"));
     TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"ANT: Ready; TCI: waiting RX (no tune)"));
     const char* capture = getenv("LDG_TCI_LCD_PPM");
     if (capture) {
@@ -463,10 +480,10 @@ void test_tci_frequency_and_connection_fit_above_ip_and_wait_reason_is_visible()
     state.radio.connection = ldg::RadioConnection::Disconnected;
     state.radio.frequencyValid = state.radio.rxKnown = false; state.antennaFromRadio = false;
     ui->updateState(state); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"TCI ? --\ndisconnected / LDG"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"TCI ?\ndisconnected"));
     ui->updateState(tuner_state_t{}); render();
-    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"SSID: Test WiFi"));
-    TEST_ASSERT_NULL(label(lv_scr_act(),"TCI ? --\ndisconnected / LDG"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"Test WiFi"));
+    TEST_ASSERT_NULL(label(lv_scr_act(),"TCI ?\ndisconnected"));
 }
 
 void test_managed_tuning_progress_updates_without_rebuilding_screen() {
@@ -518,8 +535,101 @@ void test_orientation_reuses_display_buffer_and_keeps_every_control_on_screen() 
     }
 }
 
+static void captureRedesign(const char* name) {
+    const char* directory = std::getenv("LDG_REDESIGN_SNAPSHOTS");
+    if (!directory) return;
+    char path[512]; std::snprintf(path, sizeof(path), "%s/%s.ppm", directory, name);
+    auto* file = std::fopen(path, "wb"); TEST_ASSERT_NOT_NULL(file);
+    auto* tft = TFT_eSPI::instance;
+    std::fprintf(file, "P6\n%d %d\n255\n", tft->width(), tft->height());
+    for (int y=0; y<tft->height(); ++y) for (int x=0; x<tft->width(); ++x) {
+        int column=(tft->madctl&0x20) ? y : x, row=(tft->madctl&0x20) ? x : y;
+        if(tft->madctl&0x40) column=319-column;
+        if(tft->madctl&0x80) row=479-row;
+        const uint16_t color=tft->pixels[column*480+row];
+        const uint8_t rgb[]={uint8_t(((color>>11)&31)*255/31),uint8_t(((color>>5)&63)*255/63),uint8_t((color&31)*255/31)};
+        std::fwrite(rgb,1,3,file);
+    }
+    std::fclose(file);
+}
+
+void test_redesign_states_keep_warnings_and_long_names_readable() {
+    tuner_state_t state;
+    state.mode=MODE_AUTO; state.antenna=state.lastAntenna=ANT_A;
+    state.antennaInit=ldg::AntennaInit::Ready;
+    state.radio.connection=ldg::RadioConnection::Ready;
+    state.radio.frequencyValid=state.radio.rxKnown=true;
+    state.radio.txFrequencyHz=7100000;
+    state.meterValid=true; state.meter.band=state.lastBand=BAND_40M;
+    state.meter.forward_power_watts=40; state.meter.reflected_power_watts=1.11; state.meter.swr=1.4;
+    scale.set(100); ui->updateState(state); render(); captureRedesign("landscape");
+    state.meter.swr=3.2; state.meter.reflected_power_watts=11;
+    ui->updateState(state); render(); captureRedesign("high-swr");
+    const auto changed=TFT_eSPI::instance->pixels;
+    lv_obj_invalidate(lv_scr_act()); render();
+    TEST_ASSERT_EQUAL_MEMORY(changed.data(),TFT_eSPI::instance->pixels.data(),changed.size()*sizeof(uint16_t));
+    state.meterValid=false; state.antenna=ANT_UNKNOWN;
+    state.radio.connection=ldg::RadioConnection::Disconnected; state.radio.frequencyValid=false;
+    ui->updateState(state); render(); captureRedesign("offline");
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"-- W"));
+    TEST_ASSERT_NOT_NULL(label(lv_scr_act(),"ANT: last 1 (unconfirmed)"));
+    ldg::CommandFeedback feedback;
+    const auto request=feedback.start('F'); ui->updateCommandFeedback(feedback.snapshot()); render();
+    TEST_ASSERT_TRUE(lv_obj_has_flag(label(lv_scr_act(),"ANT: last 1 (unconfirmed)"),LV_OBJ_FLAG_HIDDEN));
+    TEST_ASSERT_FALSE(lv_obj_has_flag(label(lv_scr_act(),"FULL TUNE: waiting..."),LV_OBJ_FLAG_HIDDEN));
+    captureRedesign("pending");
+    feedback.finish(request,false); ui->updateCommandFeedback(feedback.snapshot()); render();
+    testMillis+=4000; render();
+    TEST_ASSERT_FALSE(lv_obj_has_flag(label(lv_scr_act(),"ANT: last 1 (unconfirmed)"),LV_OBJ_FLAG_HIDDEN));
+    strcpy(configManager.config.ant1Name,"Long antenna name");
+    strcpy(configManager.config.ant2Name,"Вертикальная");
+    state.meterValid=true; state.antenna=ANT_A;
+    state.meter.swr=1.4; state.meter.reflected_power_watts=1.11;
+    ui->updateState(state); testMillis+=1000; render(); captureRedesign("long-names");
+    state.radio.connection=ldg::RadioConnection::Ready; state.radio.frequencyValid=true;
+    configManager.config.displayOrientation=1;
+    ui->updateState(state); render(); captureRedesign("portrait");
+}
+
+static lv_point_t pointerPoint{};
+static bool pointerPressed=false;
+void test_relocated_buttons_and_meter_receive_pointer_input_in_all_orientations() {
+    lv_indev_drv_t driver;
+    lv_indev_drv_init(&driver);
+    driver.type=LV_INDEV_TYPE_POINTER;
+    driver.read_cb=[](lv_indev_drv_t*,lv_indev_data_t* data) {
+        data->point=pointerPoint;
+        data->state=pointerPressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+    };
+    auto* input=lv_indev_drv_register(&driver);
+    const auto click=[](lv_obj_t* object) {
+        lv_area_t area; lv_obj_get_coords(object,&area);
+        pointerPoint={lv_coord_t((area.x1+area.x2)/2),lv_coord_t((area.y1+area.y2)/2)};
+        pointerPressed=false; render(); pointerPressed=true; render(); pointerPressed=false; render();
+    };
+    for(unsigned orientation=0;orientation<16;++orientation) {
+        configManager.config.displayOrientation=orientation; render();
+        ui->updateStatus(MODE_MANUAL,ANT_A); render();
+        for(auto item:{std::make_pair("MEM TUNE",int(TUNER_CMD_MEM_TUNE)),std::make_pair("FULL TUNE",int(TUNER_CMD_FULL_TUNE)),
+                       std::make_pair("ANT 1",int(TUNER_CMD_SELECT_ANT_A)),std::make_pair("ANT 2",int(TUNER_CMD_SELECT_ANT_B)),
+                       std::make_pair("BYPASS ON",int(TUNER_CMD_BYPASS)),std::make_pair("SET AUTO",int(TUNER_CMD_AUTO_MODE))}) {
+            auto* text=label(lv_scr_act(),item.first); TEST_ASSERT_NOT_NULL(text);
+            lastCommand=0; click(lv_obj_get_parent(text));
+            TEST_ASSERT_EQUAL_UINT8(item.second,lastCommand);
+        }
+        ui->setCommandPending(true); lastCommand=0;
+        click(lv_obj_get_parent(label(lv_scr_act(),"MEM TUNE")));
+        TEST_ASSERT_EQUAL_UINT8(0,lastCommand); ui->setCommandPending(false);
+        scale.set(100); render(); click(lv_obj_get_child(lv_scr_act(),0));
+        TEST_ASSERT_EQUAL_UINT16(1000,scale.snapshot().watts);
+    }
+    lv_indev_delete(input);
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_redesign_states_keep_warnings_and_long_names_readable);
+    RUN_TEST(test_relocated_buttons_and_meter_receive_pointer_input_in_all_orientations);
     RUN_TEST(test_managed_tuning_progress_updates_without_rebuilding_screen);
     RUN_TEST(test_tci_frequency_and_connection_fit_above_ip_and_wait_reason_is_visible);
     RUN_TEST(test_orientation_reuses_display_buffer_and_keeps_every_control_on_screen);

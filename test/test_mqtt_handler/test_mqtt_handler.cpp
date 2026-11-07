@@ -8,24 +8,40 @@
 static time_t testWallClock=1800000000;
 static time_t mqttTestTime(time_t*) { return testWallClock; }
 #define time mqttTestTime
+#define ARDUINO_ARCH_ESP32
+#define LDG_MQTT_HEAP_TESTING
+static unsigned testTlsRecordInput=16384;
+extern "C" unsigned ldg_tls_in_content_len() { return testTlsRecordInput; }
+extern "C" unsigned ldg_tls_out_content_len() { return 4096; }
 #include "../../src/mqtt_handler.cpp"
+#undef LDG_MQTT_HEAP_TESTING
+#undef ARDUINO_ARCH_ESP32
 #undef time
 
-unsigned NetworkClientSecure::created=0, NetworkClientSecure::destroyed=0, NetworkClientSecure::bundles=0;
+unsigned NetworkClientSecure::created=0, NetworkClientSecure::destroyed=0, NetworkClientSecure::bundles=0, NetworkClientSecure::handshakeTimeout=0;
+std::string NetworkClientSecure::certificate;
 uint32_t testMillis = 0;
 FakeSerial Serial;
 FakeWiFi WiFi;
 FakeConfigManager configManager;
 PubSubClient* PubSubClient::instance = nullptr;
 bool PubSubClient::bufferOk = true;
+size_t testHeapFree=100000, testHeapLargest=90000;
+int testCaResult=0;
+asm(".pushsection .rodata\n"
+    ".global _binary_x509_crt_bundle_start\n_binary_x509_crt_bundle_start:\n.byte 0,0,0,0\n"
+    ".global _binary_x509_crt_bundle_end\n_binary_x509_crt_bundle_end:\n.popsection\n");
 
 void setUp() {
+    testTlsRecordInput=16384;
     testMillis = 5000;
     testWallClock = 1800000000;
     Serial.output.clear();
     WiFi = FakeWiFi{};
     configManager.config = DeviceConfig{};
     PubSubClient::bufferOk = true;
+    testHeapFree=100000; testHeapLargest=90000;
+    testCaResult=0;
 }
 void tearDown() {}
 static tuner_state_t state() { return {}; }
@@ -54,6 +70,7 @@ void test_tls_transport_is_verified_and_released_on_reconfigure() {
         TEST_ASSERT_TRUE(mqtt.begin(wifi, nullptr, state));
         TEST_ASSERT_EQUAL(created+1,NetworkClientSecure::created);
         TEST_ASSERT_EQUAL(bundles+1,NetworkClientSecure::bundles);
+        TEST_ASSERT_GREATER_OR_EQUAL_UINT(30,NetworkClientSecure::handshakeTimeout); // ECC chain verification exceeds 15 seconds on the ESP32.
         PubSubClient::instance->connectOk=false;
         mqtt.loop();
         TEST_ASSERT_EQUAL(created+1,NetworkClientSecure::created); // failed TLS never allocates a plaintext fallback
@@ -63,6 +80,65 @@ void test_tls_transport_is_verified_and_released_on_reconfigure() {
         TEST_ASSERT_EQUAL(created+1,NetworkClientSecure::created);
     }
     TEST_ASSERT_EQUAL(destroyed+1,NetworkClientSecure::destroyed);
+}
+
+void test_tls_defers_low_or_fragmented_heap_and_retries_when_memory_recovers() {
+    WiFiClient wifi; MqttHandler mqtt;
+    configManager.config.mqttPort=8883;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi,nullptr,state));
+    testHeapFree=50000; testHeapLargest=45000;
+    mqtt.loop();
+    TEST_ASSERT_EQUAL(0,PubSubClient::instance->connectCalls);
+    TEST_ASSERT_TRUE(mqtt.getStatus().lastError==ldg::MqttError::TlsMemory);
+    TEST_ASSERT_EQUAL(0,mqtt.getStatus().attempts);
+    testHeapFree=80000; testHeapLargest=16000; testMillis+=5000;
+    mqtt.loop();
+    TEST_ASSERT_EQUAL(0,PubSubClient::instance->connectCalls);
+    testHeapLargest=60000; testMillis+=5000; mqtt.loop();
+    TEST_ASSERT_EQUAL(1,PubSubClient::instance->connectCalls);
+    TEST_ASSERT_TRUE(mqtt.isConnected());
+    TEST_ASSERT_FALSE(mqtt.getStatus().errorActive);
+}
+
+void test_managed_broker_uses_direct_x2_anchor_and_other_brokers_keep_bundle() {
+    WiFiClient wifi; MqttHandler mqtt;
+    configManager.config.mqttPort=8883;
+    std::strcpy(configManager.config.mqttBroker,"RoTaToR.R3V.RU");
+    NetworkClientSecure::certificate.clear();
+    const auto bundles=NetworkClientSecure::bundles;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi,nullptr,state));
+    TEST_ASSERT_EQUAL_STRING(ldg::managedMqttCa,NetworkClientSecure::certificate.c_str());
+    TEST_ASSERT_EQUAL(bundles,NetworkClientSecure::bundles);
+    testHeapFree=55*1024;testHeapLargest=40*1024;
+    mqtt.loop();TEST_ASSERT_TRUE(mqtt.isConnected());
+    std::strcpy(configManager.config.mqttBroker,"other-broker");
+    mqtt.requestReconfigure();mqtt.loop();
+    TEST_ASSERT_EQUAL(bundles+1,NetworkClientSecure::bundles);
+    TEST_ASSERT_FALSE(mqtt.isConnected());
+    TEST_ASSERT_TRUE(mqtt.getStatus().lastError==ldg::MqttError::TlsMemory);
+}
+
+void test_compact_tls_waits_for_its_record_and_working_memory_budget() {
+    WiFiClient wifi; MqttHandler mqtt;
+    configManager.config.mqttPort=8883;
+    std::strcpy(configManager.config.mqttBroker,"rotator.r3v.ru");
+    testTlsRecordInput=4096;testHeapFree=43000;testHeapLargest=20000;
+    TEST_ASSERT_TRUE(mqtt.begin(wifi,nullptr,state));mqtt.loop();
+    TEST_ASSERT_EQUAL(0,PubSubClient::instance->connectCalls);
+    testHeapFree=48000;testHeapLargest=7000;testMillis+=5000;mqtt.loop();
+    TEST_ASSERT_EQUAL(0,PubSubClient::instance->connectCalls);
+    testHeapLargest=9000;testMillis+=5000;mqtt.loop();
+    TEST_ASSERT_TRUE(mqtt.isConnected());
+}
+
+void test_invalid_ca_bundle_blocks_tls_initialization_and_credentials() {
+    WiFiClient wifi; MqttHandler mqtt;
+    configManager.config.mqttPort=8883; testCaResult=0x102;
+    const auto created=NetworkClientSecure::created;
+    TEST_ASSERT_FALSE(mqtt.begin(wifi,nullptr,state)); mqtt.loop();
+    TEST_ASSERT_EQUAL(created,NetworkClientSecure::created);
+    TEST_ASSERT_TRUE(mqtt.getStatus().lastError==ldg::MqttError::TlsCa);
+    TEST_ASSERT_EQUAL(0,mqtt.getStatus().attempts);
 }
 
 void test_identity_is_available_before_wifi_starts() {
@@ -286,6 +362,10 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_tls_waits_for_clock_before_any_mqtt_connect);
     RUN_TEST(test_tls_transport_is_verified_and_released_on_reconfigure);
+    RUN_TEST(test_tls_defers_low_or_fragmented_heap_and_retries_when_memory_recovers);
+    RUN_TEST(test_managed_broker_uses_direct_x2_anchor_and_other_brokers_keep_bundle);
+    RUN_TEST(test_compact_tls_waits_for_its_record_and_working_memory_budget);
+    RUN_TEST(test_invalid_ca_bundle_blocks_tls_initialization_and_credentials);
     RUN_TEST(test_identity_is_available_before_wifi_starts);
     RUN_TEST(test_disabled_and_initialization_error_are_distinct);
     RUN_TEST(test_readings_observed_offline_survive_reconnect_and_session_reconfiguration);

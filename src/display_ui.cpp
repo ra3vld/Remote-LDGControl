@@ -1,6 +1,7 @@
 #ifdef WITH_DISPLAY
 
 #include "display_ui.h"
+#include "display_fonts.h"
 #ifdef ARDUINO_ARCH_ESP32
 #include <esp_heap_caps.h>
 #endif
@@ -14,6 +15,19 @@
 #include <src/draw/sw/lv_draw_sw.h>
 
 DisplayUI* DisplayUI::s_instance = nullptr;
+
+namespace {
+// Shared visual language with the G5500 panel. Keep measurement colors stable.
+constexpr uint32_t background = 0x0a111c, foreground = 0xeff5ff, muted = 0x8fabc3;
+constexpr uint32_t forwardColor = 0x64cfff, reflectedColor = 0xf0b85c;
+constexpr uint32_t positive = 0x63dfb5, warning = 0xf0b85c, danger = 0xff6b6b;
+constexpr uint32_t border = 0x294156, surface = 0x101e2b, modeSurface = 0x183329;
+
+lv_area_t swrArea(const lv_area_t& bounds) {
+    const int center = (bounds.x1 + bounds.x2) / 2;
+    return {lv_coord_t(center-60), lv_coord_t(bounds.y1), lv_coord_t(center+60), lv_coord_t(bounds.y1+39)};
+}
+}
 
 #ifdef TOUCH_GT911
 #include "gt911_touch.h"
@@ -104,164 +118,113 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     disp_drv.monitor_cb = displayMonitor;
     disp_drv.draw_buf = &draw_buf;
     lv_disp_drv_register(&disp_drv);
+#ifdef BOARD_ESP32_3248S035C
+    // This board has no PSRAM. Repaint the same vector face instead of
+    // retaining its ~8 KiB cache and 4800-byte delta scratch beside TLS/Wi-Fi.
+    m_faceAllowed = false;
+    m_deltaAllowed = false;
+#else
     m_deltaScratch = static_cast<lv_color_t*>(std::malloc(drawBufferPixels * sizeof(lv_color_t)));
+#endif
 
     setupTouch();
 
     m_scr = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(m_scr, lv_color_hex(0x0a0a1a), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(m_scr, lv_color_hex(background), LV_PART_MAIN);
+    lv_obj_set_style_text_color(m_scr, lv_color_hex(foreground), LV_PART_MAIN);
+    lv_obj_set_style_text_font(m_scr, &ldg_font_14, LV_PART_MAIN);
     lv_obj_set_style_border_width(m_scr, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(m_scr, 0, LV_PART_MAIN);
     lv_obj_clear_flag(m_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(m_scr, drawScreenDividers, LV_EVENT_DRAW_MAIN, nullptr);
     lv_scr_load(m_scr);
 
-    // ============================================================
-    // Leave a complete footer row below the dial inside the 320 px display.
-    // ============================================================
     m_meter = lv_obj_create(m_scr);
-    lv_obj_set_size(m_meter, 300, 280);
-    lv_obj_set_pos(m_meter, 0, 0);
-    lv_obj_set_style_bg_color(m_meter, lv_color_hex(0x111122), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(m_meter, lv_color_hex(background), LV_PART_MAIN);
     lv_obj_set_style_border_width(m_meter, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(m_meter, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(m_meter, 0, LV_PART_MAIN);
     lv_obj_clear_flag(m_meter, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(m_meter, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(m_meter, drawMeterEvent, LV_EVENT_DRAW_POST, NULL);
     lv_obj_add_event_cb(m_meter, meterTapEvent, LV_EVENT_CLICKED, NULL);
 
-    // Band label
-    m_bandLabel = lv_label_create(m_scr);
-    lv_label_set_text(m_bandLabel, "Band: --");
-    lv_obj_set_style_text_color(m_bandLabel, lv_color_hex(0x00ff00), LV_PART_MAIN);
-    lv_obj_set_style_text_font(m_bandLabel, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align_to(m_bandLabel, m_meter, LV_ALIGN_OUT_BOTTOM_LEFT, 10, 5);
-
-    // Scale label
-    m_scaleLabel = lv_label_create(m_scr);
-    lv_label_set_text(m_scaleLabel, "1000W");
-    lv_obj_set_style_text_color(m_scaleLabel, lv_color_hex(0x888888), LV_PART_MAIN);
-    lv_obj_set_style_text_font(m_scaleLabel, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_align_to(m_scaleLabel, m_meter, LV_ALIGN_OUT_BOTTOM_RIGHT, -10, 5);
-
-    // Digital readings fit below the pivots, above the band/scale footer.
-    auto powerLabel = [&](int x, const char* text, uint32_t color) {
-        lv_obj_t* label = lv_label_create(m_scr);
+    const auto makeLabel = [&](const char* text, const lv_font_t* font, uint32_t color) {
+        auto* label = lv_label_create(m_scr);
         lv_label_set_text(label, text);
-        lv_obj_set_pos(label, x, 264);
-        lv_obj_set_width(label, 138);
-        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_font(label, font, LV_PART_MAIN);
         lv_obj_set_style_text_color(label, lv_color_hex(color), LV_PART_MAIN);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
         return label;
     };
-    // Match the browser and needle pivots: reflected left, forward right.
-    m_refPowerLabel = powerLabel(8, "REF --", 0xef4444);
-    m_fwdPowerLabel = powerLabel(156, "FWD --", 0x22c55e);
-    m_antennaInitLabel = lv_label_create(m_scr);
-    lv_obj_set_pos(m_antennaInitLabel, 8, 305);
-    lv_obj_set_width(m_antennaInitLabel, 290);
-    lv_obj_set_style_text_font(m_antennaInitLabel, &lv_font_montserrat_10, LV_PART_MAIN);
-    lv_label_set_long_mode(m_antennaInitLabel, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(m_antennaInitLabel, "");
+    m_titleLabel = makeLabel("LDG", &ldg_font_14, foreground);
+    m_bandLabel = makeLabel("--", &ldg_font_10, muted);
+    m_scaleLabel = makeLabel("1000W", &ldg_font_10, muted);
+    lv_obj_set_style_text_align(m_scaleLabel, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    m_fwdTitleLabel = makeLabel("FWD", &ldg_font_10, muted);
+    m_refTitleLabel = makeLabel("REF", &ldg_font_10, muted);
+    m_fwdPowerLabel = makeLabel("-- W", &ldg_font_24, foreground);
+    m_refPowerLabel = makeLabel("-- W", &ldg_font_24, foreground);
+    m_ssidLabel = makeLabel(WiFi.SSID().c_str(), &ldg_font_14, muted);
+    m_radioStatusLabel = makeLabel("", &ldg_font_10, muted);
+    m_wifiLabel = makeLabel("Wi-Fi", &ldg_font_10, muted);
+    m_ipLabel = makeLabel(WiFi.localIP().toString().c_str(), &ldg_font_10, muted);
+    lv_obj_set_style_text_align(m_ipLabel, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    m_modeLabel = makeLabel("--", &ldg_font_10, positive);
+    lv_obj_set_style_text_align(m_modeLabel, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(m_modeLabel, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(m_modeLabel, lv_color_hex(modeSurface), LV_PART_MAIN);
+    lv_obj_set_style_border_width(m_modeLabel, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(m_modeLabel, lv_color_hex(border), LV_PART_MAIN);
+    lv_obj_set_style_radius(m_modeLabel, 7, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(m_modeLabel, 5, LV_PART_MAIN);
+    m_antennaInitLabel = makeLabel("", &ldg_font_10, muted);
 
-    // ============================================================
-    // RIGHT PANEL: Info + buttons (~150px wide)
-    // ============================================================
-    int rightX = 310;
-
-    // SSID
-    m_ssidLabel = lv_label_create(m_scr);
-    lv_label_set_text_fmt(m_ssidLabel, "SSID: %s", WiFi.SSID().c_str());
-    lv_obj_set_style_text_color(m_ssidLabel, lv_color_hex(0x666666), LV_PART_MAIN);
-    lv_obj_set_style_text_font(m_ssidLabel, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(m_ssidLabel, LV_ALIGN_TOP_RIGHT, -5, 5);
-
-    // IP
-    m_ipLabel = lv_label_create(m_scr);
-    lv_label_set_text_fmt(m_ipLabel, "IP: %s", WiFi.localIP().toString().c_str());
-    lv_obj_set_style_text_color(m_ipLabel, lv_color_hex(0x666666), LV_PART_MAIN);
-    lv_obj_set_style_text_font(m_ipLabel, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(m_ipLabel, LV_ALIGN_TOP_RIGHT, -5, 22);
-
-    // Mode
-    m_modeLabel = lv_label_create(m_scr);
-    lv_label_set_text(m_modeLabel, "Mode: --");
-    lv_obj_set_style_text_color(m_modeLabel, lv_color_hex(0xffffff), LV_PART_MAIN);
-    lv_obj_set_style_text_font(m_modeLabel, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(m_modeLabel, LV_ALIGN_TOP_RIGHT, -5, 45);
-
-    // Buttons — full-width single-line buttons for tuning commands
-    int btnX = rightX + 5;
-    int btnW = 140;
-    int btnH = 36;
-    int btnGap = 5;
-
-    auto makeBtn = [&](lv_obj_t** out, const char* label, int x, int y, int w, int h,
-                       lv_color_t bg, lv_color_t pressed) {
-        *out = lv_btn_create(m_scr);
-        lv_obj_set_size(*out, w, h);
-        lv_obj_set_pos(*out, x, y);
-        lv_obj_set_style_bg_color(*out, bg, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(*out, pressed, LV_PART_MAIN | LV_STATE_PRESSED);
-        lv_obj_set_style_radius(*out, 4, LV_PART_MAIN);
-        lv_obj_t* lbl = lv_label_create(*out);
-        lv_label_set_text(lbl, label);
-        lv_obj_center(lbl);
+    const auto makeBtn = [&](const char* text, uint32_t fill) {
+        auto* button = lv_btn_create(m_scr);
+        lv_obj_remove_style_all(button);
+        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(button, lv_color_hex(fill), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(button, lv_color_hex(0x365779), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(button, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(button, lv_color_hex(border), LV_PART_MAIN);
+        lv_obj_set_style_radius(button, 9, LV_PART_MAIN);
+        lv_obj_set_style_text_font(button, &ldg_font_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(button, lv_color_hex(foreground), LV_PART_MAIN);
+        lv_obj_set_style_text_color(button, lv_color_hex(muted), LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(button, lv_color_hex(surface), LV_STATE_DISABLED);
+        lv_obj_set_style_border_color(button, lv_color_hex(border), LV_STATE_DISABLED);
+        lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+        auto* label = lv_label_create(button);
+        lv_label_set_text(label, text);
+        lv_obj_center(label);
+        return button;
     };
-
-    // Buttons start just below the Mode label (y=45 + ~18px font height + 4px gap)
-    const int btnY0 = 67;
-
-    makeBtn(&m_btnMemTune,  "MEM TUNE",  btnX, btnY0,              btnW, btnH,
-            lv_color_hex(0xcc3333), lv_color_hex(0xff4444));
-    makeBtn(&m_btnFullTune, "FULL TUNE", btnX, btnY0 + btnH + btnGap, btnW, btnH,
-            lv_color_hex(0xcc3333), lv_color_hex(0xff4444));
-
-    // ANT buttons — side-by-side, nearly square, two-line (identifier + configurable name)
-    // Width = (btnW - gap) / 2 = 67 each; height = 67 for near-square
-    const int antW = (btnW - btnGap) / 2;   // 67
-    const int antH = antW;                   // 67 — square
-    const int antY = btnY0 + 2 * (btnH + btnGap);
+    m_btnMemTune = makeBtn("MEM TUNE", surface);
+    m_btnFullTune = makeBtn("FULL TUNE", surface);
+    m_btnAnt1 = makeBtn("ANT 1", surface);
+    m_btnAnt2 = makeBtn("ANT 2", surface);
     const DeviceConfig& cfg = configManager.get();
-
-    auto makeAntBtn = [&](lv_obj_t** btn, lv_obj_t** nameLabel,
-                          const char* idText, const char* name, int x) {
-        *btn = lv_btn_create(m_scr);
-        lv_obj_set_size(*btn, antW, antH);
-        lv_obj_set_pos(*btn, x, antY);
-        lv_obj_set_style_bg_color(*btn, lv_color_hex(0x2a2a3a), LV_PART_MAIN);
-        lv_obj_set_style_radius(*btn, 4, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(*btn, 2, LV_PART_MAIN);
-
-        lv_obj_t* id = lv_label_create(*btn);
-        lv_label_set_text(id, idText);
-        lv_obj_set_style_text_font(id, &lv_font_montserrat_14, LV_PART_MAIN);
-        lv_obj_align(id, LV_ALIGN_TOP_MID, 0, 4);
-
-        *nameLabel = lv_label_create(*btn);
-        lv_label_set_text(*nameLabel, name);
-        lv_obj_set_style_text_font(*nameLabel, &lv_font_montserrat_10, LV_PART_MAIN);
-        lv_obj_set_style_text_color(*nameLabel, lv_color_hex(0xaaaaaa), LV_PART_MAIN);
-        lv_label_set_long_mode(*nameLabel, LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(*nameLabel, antW - 4);
-        lv_obj_set_style_text_align(*nameLabel, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_obj_align(*nameLabel, LV_ALIGN_BOTTOM_MID, 0, -4);
+    const auto antennaName = [](lv_obj_t* button, const char* name) {
+        lv_obj_align(lv_obj_get_child(button, 0), LV_ALIGN_TOP_MID, 0, 7);
+        auto* label = lv_label_create(button);
+        lv_label_set_text(label, name);
+        lv_obj_set_style_text_font(label, &ldg_font_10, LV_PART_MAIN);
+        lv_obj_set_style_text_color(label, lv_color_hex(muted), LV_PART_MAIN);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+        lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -7);
+        return label;
     };
-
-    makeAntBtn(&m_btnAnt1, &m_ant1NameLabel, "ANT 1", cfg.ant1Name, btnX);
-    makeAntBtn(&m_btnAnt2, &m_ant2NameLabel, "ANT 2", cfg.ant2Name, btnX + antW + btnGap);
-
-    makeBtn(&m_btnBypass, "BYPASS ON", btnX, antY + antH + btnGap, btnW, btnH,
-            lv_color_hex(0xcc8800), lv_color_hex(0xffaa00));
+    m_ant1NameLabel = antennaName(m_btnAnt1, cfg.ant1Name);
+    m_ant2NameLabel = antennaName(m_btnAnt2, cfg.ant2Name);
+    m_btnBypass = makeBtn("BYPASS ON", surface);
     m_bypassButtonLabel = lv_obj_get_child(m_btnBypass, 0);
-    makeBtn(&m_btnAuto,   "SET MANUAL", btnX, antY + antH + btnGap + btnH + btnGap, btnW, btnH,
-            lv_color_hex(0x2255aa), lv_color_hex(0x3366cc));
+    m_btnAuto = makeBtn("SET MANUAL", modeSurface);
+    lv_obj_set_style_text_color(m_btnAuto, lv_color_hex(positive), LV_PART_MAIN);
     m_modeButtonLabel = lv_obj_get_child(m_btnAuto, 0);
-    m_commandLabel = lv_label_create(m_scr);
-    lv_obj_set_pos(m_commandLabel, btnX, 303);
-    lv_obj_set_width(m_commandLabel, 150);
-    lv_obj_set_style_text_font(m_commandLabel, &lv_font_montserrat_10, LV_PART_MAIN);
-    lv_label_set_long_mode(m_commandLabel, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(m_commandLabel, "");
+    m_commandLabel = makeLabel("", &ldg_font_10, muted);
+    lv_obj_add_flag(m_commandLabel, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_add_event_cb(m_btnMemTune,  btnMemTuneEvent,  LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(m_btnFullTune, btnFullTuneEvent, LV_EVENT_CLICKED, NULL);
@@ -271,6 +234,7 @@ bool DisplayUI::begin(bool (*commandHandler)(uint8_t), ldg::MeterScale* meterSca
     lv_obj_add_event_cb(m_btnAuto,     btnAutoEvent,     LV_EVENT_CLICKED, NULL);
     updateMeterScale();
     updateOrientation();
+    layoutScreen();
 
 #ifdef BOARD_ESP32_3248S035C
     lv_refr_now(NULL);
@@ -300,6 +264,8 @@ void DisplayUI::loop() {
     }
     if (m_feedbackFinished && millis() - m_feedbackAt >= 4000) {
         lv_label_set_text(m_commandLabel, "");
+        lv_obj_add_flag(m_commandLabel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(m_antennaInitLabel, LV_OBJ_FLAG_HIDDEN);
         m_feedbackFinished = false;
     }
     if (millis() - m_lastNamesUpdate >= 1000) {
@@ -343,28 +309,37 @@ void DisplayUI::updateState(const tuner_state_t& state) {
         const bool enabled = radio.connection != ldg::RadioConnection::Disabled;
         if (enabled != m_radioVisible) {
             m_radioVisible = enabled;
-            lv_obj_set_style_text_font(m_ssidLabel, enabled ? &lv_font_montserrat_10 : &lv_font_montserrat_14, LV_PART_MAIN);
-            lv_obj_set_style_text_color(m_ssidLabel, lv_color_hex(enabled ? 0x66ccff : 0x666666), LV_PART_MAIN);
-            lv_obj_set_width(m_ssidLabel, enabled ? 172 : LV_SIZE_CONTENT);
-            if (enabled) {
-                lv_label_set_long_mode(m_ssidLabel, LV_LABEL_LONG_CLIP);
-            }
-            else {
-                lv_label_set_text_fmt(m_ssidLabel, "SSID: %s", WiFi.SSID().c_str());
-                lv_obj_align(m_ssidLabel, LV_ALIGN_TOP_RIGHT, -5, 5);
+            if (!enabled) {
+                lv_label_set_text(m_ssidLabel, WiFi.SSID().c_str());
+                lv_label_set_text(m_radioStatusLabel, "");
                 m_radioText[0] = 0;
             }
-            layoutNetworkInfo();
         }
         char text[sizeof(m_radioText)];
-        const char* trx = radio.transmitting ? "TX" : radio.rxKnown ? "RX" : "?";
         if (radio.frequencyValid)
-            snprintf(text, sizeof(text), "TCI %s %llu.%06llu %s\n%s / %s", trx,
-                     (unsigned long long)(radio.txFrequencyHz / 1000000), (unsigned long long)(radio.txFrequencyHz % 1000000),
-                     ldg::radioBandName(radio.txFrequencyHz), ldg::radioConnectionName(radio.connection), state.antennaFromRadio ? "TCI" : "LDG");
-        else snprintf(text, sizeof(text), "TCI %s --\n%s / %s", trx, ldg::radioConnectionName(radio.connection), state.antennaFromRadio ? "TCI" : "LDG");
-        if (enabled && strcmp(text, m_radioText)) { strcpy(m_radioText, text); lv_label_set_text(m_ssidLabel, text); }
+            snprintf(text, sizeof(text), "%llu.%06llu", (unsigned long long)(radio.txFrequencyHz / 1000000),
+                     (unsigned long long)(radio.txFrequencyHz % 1000000));
+        else snprintf(text, sizeof(text), "-- MHz");
+        if (enabled) {
+            const char* trx = radio.transmitting ? "TX" : radio.rxKnown ? "RX" : "?";
+            char status[64];
+            snprintf(status, sizeof(status), "TCI %s\n%s%s", trx,
+                     ldg::radioConnectionName(radio.connection),
+                     radio.connection == ldg::RadioConnection::Ready ? (state.antennaFromRadio ? "/TCI" : "/LDG") : "");
+            if (strcmp(lv_label_get_text(m_radioStatusLabel), status)) lv_label_set_text(m_radioStatusLabel, status);
+            lv_obj_set_style_text_color(m_radioStatusLabel, lv_color_hex(
+                radio.connection == ldg::RadioConnection::Ready ? positive :
+                radio.connection == ldg::RadioConnection::Disconnected ? danger : warning), LV_PART_MAIN);
+            if (strcmp(text, m_radioText)) { strcpy(m_radioText, text); lv_label_set_text(m_ssidLabel, text); }
+        }
     }
+    char band[32];
+    if (m_radioVisible && state.radio.frequencyValid)
+        snprintf(band, sizeof(band), "%s", ldg::radioBandName(state.radio.txFrequencyHz));
+    else
+        snprintf(band, sizeof(band), "%s%s", TunerProtocol::bandToString(ldg::lastKnownBand(state)),
+                 ldg::bandIsHeld(state) ? " last" : "");
+    if (strcmp(lv_label_get_text(m_bandLabel), band)) lv_label_set_text(m_bandLabel, band);
     const auto lastAntenna = ldg::lastKnownAntenna(state);
     const bool unconfirmed = state.antenna == ANT_UNKNOWN && ldg::knownAntenna(lastAntenna);
     if (m_tuningState != state.tuningState || m_antennaInit != state.antennaInit || m_antennaAuto != state.antennaAuto ||
@@ -429,7 +404,7 @@ void DisplayUI::updateState(const tuner_state_t& state) {
         else if (reason) lv_label_set_text_fmt(m_antennaInitLabel, "ANT: Ready; %s", reason);
         else lv_label_set_text(m_antennaInitLabel, text);
         lv_obj_set_style_text_color(m_antennaInitLabel,
-            lv_color_hex(unconfirmed ? 0xfbbf24 : state.antennaInit == ldg::AntennaInit::Error ? 0xff5555 : 0x888888), LV_PART_MAIN);
+            lv_color_hex(unconfirmed ? warning : state.antennaInit == ldg::AntennaInit::Error ? danger : muted), LV_PART_MAIN);
     }
     tuner_meter_t meter = state.meter;
     if (!state.meterValid) {
@@ -457,11 +432,13 @@ void DisplayUI::updateCommandFeedback(const ldg::CommandFeedback::Snapshot& feed
     if (feedback.token == m_feedbackToken) return;
     m_feedbackToken = feedback.token;
     m_feedbackAt = millis();
+    lv_obj_clear_flag(m_commandLabel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(m_antennaInitLabel, LV_OBJ_FLAG_HIDDEN);
     const bool pending = feedback.phase == ldg::CommandFeedback::Phase::Pending;
     const bool success = feedback.phase == ldg::CommandFeedback::Phase::Success;
     m_feedbackFinished = !pending;
     lv_obj_set_style_text_color(m_commandLabel,
-        lv_color_hex(pending ? 0xaaaaaa : success ? 0x22c55e : 0xef4444), LV_PART_MAIN);
+        lv_color_hex(pending ? muted : success ? positive : danger), LV_PART_MAIN);
     lv_label_set_text_fmt(m_commandLabel, "%s: %s", ldg::commandLabel(feedback.command),
         pending ? "waiting..." : success ? "OK" : "not confirmed");
 }
@@ -472,16 +449,16 @@ void DisplayUI::updateMeter(const tuner_meter_t* meter, bool bandHeld) {
     const float forward = forwardValid ? float(meter->forward_power_watts) : 0;
     const float reflected = reflectedValid ? float(meter->reflected_power_watts) : 0;
     const float swr = float(meter->swr);
-    auto updatePowerText = [](lv_obj_t* label, const char* prefix, float value, bool valid) {
+    auto updatePowerText = [](lv_obj_t* label, float value, bool valid) {
         char text[32];
-        if (valid) snprintf(text, sizeof(text), "%s %.1fW", prefix, double(value));
-        else snprintf(text, sizeof(text), "%s --", prefix);
+        if (valid) snprintf(text, sizeof(text), value > 0 && value < 10 ? "%.2f W" : "%.1f W", double(value));
+        else snprintf(text, sizeof(text), "-- W");
         if (strcmp(lv_label_get_text(label), text)) lv_label_set_text(label, text);
     };
     if (forward != m_fwdPower || forwardValid != m_fwdValid)
-        updatePowerText(m_fwdPowerLabel, "FWD", forward, forwardValid);
+        updatePowerText(m_fwdPowerLabel, forward, forwardValid);
     if (reflected != m_refPower || reflectedValid != m_refValid)
-        updatePowerText(m_refPowerLabel, "REF", reflected, reflectedValid);
+        updatePowerText(m_refPowerLabel, reflected, reflectedValid);
     m_fwdPower = forward;
     m_refPower = reflected;
     m_fwdValid = forwardValid;
@@ -493,7 +470,7 @@ void DisplayUI::updateMeter(const tuner_meter_t* meter, bool bandHeld) {
     if (!forwardValid || !m_smoothing) m_forwardMotion.snap(forwardTarget, millis());
     if (!reflectedValid || !m_smoothing) m_reflectedMotion.snap(reflectedTarget, millis());
     char swrText[16];
-    if (std::isfinite(swr)) snprintf(swrText, sizeof(swrText), "%.1f:1", double(swr));
+    if (std::isfinite(swr)) snprintf(swrText, sizeof(swrText), "%.2f", double(swr));
     else snprintf(swrText, sizeof(swrText), "--");
     auto swrColor = [](float value) { return !std::isfinite(value) ? 0 : value > 2 ? 3 : value > 1.5f ? 2 : 1; };
     const bool swrChanged = strcmp(swrText, m_swrText) || swrColor(swr) != swrColor(m_swr);
@@ -502,18 +479,15 @@ void DisplayUI::updateMeter(const tuner_meter_t* meter, bool bandHeld) {
         strcpy(m_swrText, swrText);
         lv_area_t bounds;
         lv_obj_get_coords(m_meter, &bounds);
-        const int cx = lv_obj_get_width(m_meter) / 2;
-        const int cy = lv_obj_get_height(m_meter) - 20;
-        const int y = cy - (cy - 20) / 2;
-        lv_area_t text = {lv_coord_t(bounds.x1 + cx - 50), lv_coord_t(bounds.y1 + y - 14),
-                          lv_coord_t(bounds.x1 + cx + 50), lv_coord_t(bounds.y1 + y + 14)};
+        const auto text = swrArea(bounds);
         lv_obj_invalidate_area(m_meter, &text);
     }
     if (meter->band != m_band || bandHeld != m_bandHeld) {
         m_band = meter->band;
         m_bandHeld = bandHeld;
-        lv_label_set_text_fmt(m_bandLabel, "Band: %s%s", TunerProtocol::bandToString(m_band),
-                              bandHeld ? " (last)" : "");
+        if (!m_radioVisible)
+            lv_label_set_text_fmt(m_bandLabel, "%s%s", TunerProtocol::bandToString(m_band),
+                                  bandHeld ? " last" : "");
     }
 }
 
@@ -552,9 +526,11 @@ void DisplayUI::invalidateNeedle(ldg::MeterGeometry::Point pivot,
 void DisplayUI::updateNetworkInfo() {
     m_previousValid = false;
     if (m_ssidLabel && !m_radioVisible)
-        lv_label_set_text_fmt(m_ssidLabel, "SSID: %s", WiFi.SSID().c_str());
+        lv_label_set_text(m_ssidLabel, WiFi.SSID().c_str());
     if (m_ipLabel)
-        lv_label_set_text_fmt(m_ipLabel, "IP: %s", WiFi.localIP().toString().c_str());
+        lv_label_set_text(m_ipLabel, WiFi.localIP().toString().c_str());
+    if (m_wifiLabel) lv_obj_set_style_text_color(m_wifiLabel,
+        lv_color_hex(WiFi.status() == WL_CONNECTED ? muted : danger), LV_PART_MAIN);
 }
 
 void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t last, tuner_mode_t physical) {
@@ -562,12 +538,14 @@ void DisplayUI::updateStatus(tuner_mode_t mode, tuner_ant_t antenna, tuner_ant_t
     if (ldg::knownAntenna(antenna)) last = antenna;
     if (mode != m_activeMode) {
         m_activeMode = mode;
+        lv_obj_set_style_text_color(m_modeLabel, lv_color_hex(mode == MODE_AUTO ? positive :
+            mode == MODE_CONTROLLED ? forwardColor : mode == MODE_UNKNOWN ? muted : warning), LV_PART_MAIN);
         switch (mode) {
-            case MODE_AUTO:    lv_label_set_text(m_modeLabel, "Mode: AUTO"); break;
-            case MODE_MANUAL:  lv_label_set_text(m_modeLabel, "Mode: MANUAL"); break;
-            case MODE_BYPASS:  lv_label_set_text(m_modeLabel, "Mode: BYPASS"); break;
-            case MODE_CONTROLLED: lv_label_set_text(m_modeLabel, "Mode: CONTROLLED"); break;
-            default:           lv_label_set_text(m_modeLabel, "Mode: --"); break;
+            case MODE_AUTO:    lv_label_set_text(m_modeLabel, "AUTO"); break;
+            case MODE_MANUAL:  lv_label_set_text(m_modeLabel, "MANUAL"); break;
+            case MODE_BYPASS:  lv_label_set_text(m_modeLabel, "BYPASS"); break;
+            case MODE_CONTROLLED: lv_label_set_text(m_modeLabel, "CONTROLLED"); break;
+            default:           lv_label_set_text(m_modeLabel, "--"); break;
         }
         lv_label_set_text(m_modeButtonLabel, mode == MODE_MANUAL ? "SET AUTO" : mode == MODE_AUTO ? "CONTROLLED" : "SET MANUAL");
     }
@@ -587,13 +565,15 @@ void DisplayUI::updateAntButtons() {
     lv_label_set_text(m_ant1NameLabel, cfg.ant1Name);
     lv_label_set_text(m_ant2NameLabel, cfg.ant2Name);
 
-    lv_color_t activeColor   = lv_color_hex(0x2255aa);
-    lv_color_t inactiveColor = lv_color_hex(0x2a2a3a);
-    lv_color_t uncertainColor = lv_color_hex(0x806020);
-    lv_obj_set_style_bg_color(m_btnAnt1,
-        m_activeAnt == ANT_A ? activeColor : m_activeAnt == ANT_UNKNOWN && m_lastAnt == ANT_A ? uncertainColor : inactiveColor, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(m_btnAnt2,
-        m_activeAnt == ANT_B ? activeColor : m_activeAnt == ANT_UNKNOWN && m_lastAnt == ANT_B ? uncertainColor : inactiveColor, LV_PART_MAIN);
+    for (auto* button : {m_btnAnt1, m_btnAnt2}) {
+        const auto antenna = button == m_btnAnt1 ? ANT_A : ANT_B;
+        const bool selected = m_activeAnt == antenna;
+        const bool uncertain = m_activeAnt == ANT_UNKNOWN && m_lastAnt == antenna;
+        const auto accent = selected ? forwardColor : uncertain ? warning : border;
+        lv_obj_set_style_bg_color(button, lv_color_hex(selected ? 0x122f43 : uncertain ? 0x302113 : surface), LV_PART_MAIN);
+        lv_obj_set_style_border_color(button, lv_color_hex(accent), LV_PART_MAIN);
+        lv_obj_set_style_text_color(button, lv_color_hex(selected || uncertain ? accent : foreground), LV_PART_MAIN);
+    }
 }
 
 void DisplayUI::setupTouch() {
@@ -651,18 +631,65 @@ void DisplayUI::readTouch(lv_indev_drv_t* drv, lv_indev_data_t* data) {
 }
 
 void DisplayUI::layoutNetworkInfo() {
-    if (!(m_tft->getRotation() & 1)) {
-        lv_obj_set_width(m_ssidLabel, 172);
-        lv_label_set_long_mode(m_ssidLabel, LV_LABEL_LONG_CLIP);
-        lv_obj_align(m_ssidLabel, LV_ALIGN_TOP_LEFT, 4, 0);
-        lv_obj_align(m_ipLabel, LV_ALIGN_TOP_RIGHT, -4, 0);
-        lv_obj_align(m_modeLabel, LV_ALIGN_TOP_RIGHT, -4, 18);
-    } else {
-        lv_obj_set_width(m_ssidLabel, m_radioVisible ? 172 : LV_SIZE_CONTENT);
-        lv_obj_align(m_ssidLabel, m_radioVisible ? LV_ALIGN_TOP_LEFT : LV_ALIGN_TOP_RIGHT,
-                     m_radioVisible ? 305 : -5, m_radioVisible ? 0 : 5);
-        lv_obj_align(m_ipLabel, LV_ALIGN_TOP_RIGHT, -5, 22);
-        lv_obj_align(m_modeLabel, LV_ALIGN_TOP_RIGHT, -5, 45);
+    const bool portrait = !(m_tft->getRotation() & 1);
+    lv_obj_set_pos(m_titleLabel, 14, 10);
+    lv_obj_set_size(m_titleLabel, 42, 20);
+    lv_obj_set_pos(m_ssidLabel, 64, 10);
+    lv_obj_set_size(m_ssidLabel, portrait ? 150 : 145, 22);
+    lv_obj_set_pos(m_bandLabel, portrait ? 222 : 214, portrait ? 29 : 12);
+    lv_obj_set_size(m_bandLabel, portrait ? 88 : 55, 14);
+    lv_obj_set_pos(m_radioStatusLabel, portrait ? 64 : 358, portrait ? 28 : 5);
+    lv_obj_set_size(m_radioStatusLabel, portrait ? 150 : 74, portrait ? 26 : 28);
+    lv_obj_set_pos(m_wifiLabel, portrait ? 271 : 436, portrait ? 43 : 13);
+    lv_obj_set_size(m_wifiLabel, 40, 14);
+    lv_obj_set_pos(m_modeLabel, portrait ? 225 : 273, 7);
+    lv_obj_set_size(m_modeLabel, portrait ? 83 : 76, 26);
+    lv_obj_set_pos(m_ipLabel, portrait ? 176 : 330, portrait ? 345 : 301);
+    lv_obj_set_size(m_ipLabel, 136, 14);
+}
+
+void DisplayUI::layoutScreen() {
+    const bool portrait = !(m_tft->getRotation() & 1);
+    const auto place = [](lv_obj_t* object, int x, int y, int width, int height) {
+        lv_obj_set_pos(object, x, y);
+        lv_obj_set_size(object, width, height);
+    };
+    place(m_meter, portrait ? 10 : 0, portrait ? 60 : 42, 300, 215);
+    place(m_fwdTitleLabel, portrait ? 24 : 14, portrait ? 282 : 254, 130, 14);
+    place(m_refTitleLabel, portrait ? 174 : 164, portrait ? 282 : 254, 130, 14);
+    // LVGL expands label invalidation beyond its bounds for glyph overhang.
+    // Leave that margin clear of the command column during RF updates.
+    place(m_fwdPowerLabel, portrait ? 24 : 14, portrait ? 297 : 268, 136, 29);
+    place(m_refPowerLabel, portrait ? 174 : 164, portrait ? 297 : 268, 128, 29);
+    place(m_scaleLabel, portrait ? 105 : 95, portrait ? 232 : 214, 110, 16);
+    place(m_antennaInitLabel, 14, portrait ? 329 : 301, portrait ? 298 : 304, 14);
+    place(m_commandLabel, 14, portrait ? 329 : 301, portrait ? 298 : 304, 14);
+    place(m_btnMemTune, portrait ? 8 : 314, portrait ? 366 : 48, portrait ? 148 : 152, 40);
+    place(m_btnFullTune, portrait ? 164 : 314, portrait ? 366 : 96, portrait ? 148 : 152, 40);
+    place(m_btnAnt1, portrait ? 8 : 314, portrait ? 410 : 144, portrait ? 148 : 72, portrait ? 36 : 54);
+    place(m_btnAnt2, portrait ? 164 : 394, portrait ? 410 : 144, portrait ? 148 : 72, portrait ? 36 : 54);
+    for (auto* button : {m_btnAnt1, m_btnAnt2}) {
+        lv_obj_align(lv_obj_get_child(button, 0), LV_ALIGN_TOP_MID, 0, portrait ? 1 : 7);
+        auto* name = lv_obj_get_child(button, 1);
+        lv_obj_set_width(name, portrait ? 136 : 64);
+        lv_obj_align(name, LV_ALIGN_BOTTOM_MID, 0, portrait ? -1 : -7);
+    }
+    place(m_btnBypass, portrait ? 8 : 314, portrait ? 450 : 206, portrait ? 148 : 152, portrait ? 28 : 36);
+    place(m_btnAuto, portrait ? 164 : 314, portrait ? 450 : 250, portrait ? 148 : 152, portrait ? 28 : 36);
+    layoutNetworkInfo();
+    m_previousValid = false;
+    lv_obj_invalidate(m_scr);
+}
+
+void DisplayUI::drawScreenDividers(lv_event_t* e) {
+    auto* context = lv_event_get_draw_ctx(e);
+    const bool portrait = lv_obj_get_width(lv_event_get_target(e)) < 480;
+    lv_draw_line_dsc_t line;
+    lv_draw_line_dsc_init(&line);
+    line.color = lv_color_hex(border);
+    for (const int y : {portrait ? 58 : 37, portrait ? 325 : 297}) {
+        const lv_point_t left{14, lv_coord_t(y)}, right{lv_coord_t(portrait ? 306 : 466), lv_coord_t(y)};
+        lv_draw_line(context, &line, &left, &right);
     }
 }
 
@@ -688,31 +715,7 @@ void DisplayUI::updateOrientation() {
     display->driver->hor_res = m_tft->width();
     display->driver->ver_res = m_tft->height();
     lv_disp_drv_update(display, display->driver);
-    const bool portrait = !(requested & 1);
-    const auto place = [](lv_obj_t* object, int x, int y, int width, int height) {
-        lv_obj_set_pos(object, x, y);
-        lv_obj_set_size(object, width, height);
-    };
-    lv_obj_set_pos(m_meter, portrait ? 10 : 0, portrait ? 36 : 0);
-    lv_obj_set_pos(m_refPowerLabel, portrait ? 18 : 8, portrait ? 300 : 264);
-    lv_obj_set_pos(m_fwdPowerLabel, portrait ? 166 : 156, portrait ? 300 : 264);
-    lv_obj_align_to(m_bandLabel, m_meter, LV_ALIGN_OUT_BOTTOM_LEFT, 10, 5);
-    lv_obj_align_to(m_scaleLabel, m_meter, LV_ALIGN_OUT_BOTTOM_RIGHT, -10, 5);
-    lv_obj_set_pos(m_antennaInitLabel, 8, portrait ? 340 : 305);
-    lv_obj_set_width(m_antennaInitLabel, portrait ? 304 : 290);
-    lv_obj_set_pos(m_commandLabel, portrait ? 8 : 315, portrait ? 352 : 303);
-    lv_obj_set_width(m_commandLabel, portrait ? 304 : 150);
-    place(m_btnMemTune, portrait ? 8 : 315, portrait ? 366 : 67, portrait ? 148 : 140, portrait ? 34 : 36);
-    place(m_btnFullTune, portrait ? 164 : 315, portrait ? 366 : 108, portrait ? 148 : 140, portrait ? 34 : 36);
-    place(m_btnAnt1, portrait ? 8 : 315, portrait ? 404 : 149, portrait ? 148 : 67, portrait ? 34 : 67);
-    place(m_btnAnt2, portrait ? 164 : 387, portrait ? 404 : 149, portrait ? 148 : 67, portrait ? 34 : 67);
-    lv_obj_set_width(m_ant1NameLabel, portrait ? 144 : 63);
-    lv_obj_set_width(m_ant2NameLabel, portrait ? 144 : 63);
-    place(m_btnBypass, portrait ? 8 : 315, portrait ? 442 : 221, portrait ? 148 : 140, portrait ? 34 : 36);
-    place(m_btnAuto, portrait ? 164 : 315, portrait ? 442 : 262, portrait ? 148 : 140, portrait ? 34 : 36);
-    layoutNetworkInfo();
-    m_previousValid = false;
-    lv_obj_invalidate(m_scr);
+    layoutScreen();
 }
 
 void DisplayUI::drawMeterEvent(lv_event_t* e) {
@@ -724,16 +727,22 @@ void DisplayUI::drawMeterFace(lv_draw_ctx_t* draw_ctx, const lv_area_t& bounds) 
     const int arm = m_geometry.radius;
     const int fwdPx = m_geometry.forwardPivot.x + ox, fwdPy = m_geometry.forwardPivot.y + oy;
     const int refPx = m_geometry.reflectedPivot.x + ox, refPy = m_geometry.reflectedPivot.y + oy;
+    lv_draw_label_dsc_t caption;
+    lv_draw_label_dsc_init(&caption);
+    caption.font = &ldg_font_10;
+    caption.color = lv_color_hex(muted);
+    const lv_area_t captionArea{lv_coord_t(ox+14),lv_coord_t(oy+9),lv_coord_t(ox+60),lv_coord_t(oy+24)};
+    lv_draw_label(draw_ctx, &caption, &captionArea, "SWR", nullptr);
     // ----- Scale arcs (one per pivot, each spanning the full 90° sweep) -----
     // Forward arc: upper-left quarter around fwd pivot (LVGL 180° → 270°, clockwise = left→up)
     // Reflected arc: upper-right quarter around ref pivot (LVGL 270° → 360°, clockwise = up→right)
     lv_draw_arc_dsc_t arc_dsc;
     lv_draw_arc_dsc_init(&arc_dsc);
-    arc_dsc.width = 2;
-    arc_dsc.color = lv_color_hex(0x22c55e);
+    arc_dsc.width = 1;
+    arc_dsc.color = lv_color_hex(forwardColor);
     lv_point_t fwd_ctr = {(lv_coord_t)fwdPx, (lv_coord_t)fwdPy};
     lv_draw_arc(draw_ctx, &arc_dsc, &fwd_ctr, arm, 180, 270);
-    arc_dsc.color = lv_color_hex(0xef4444);
+    arc_dsc.color = lv_color_hex(reflectedColor);
     lv_point_t ref_ctr = {(lv_coord_t)refPx, (lv_coord_t)refPy};
     lv_draw_arc(draw_ctx, &arc_dsc, &ref_ctr, arm, 270, 360);
 
@@ -744,7 +753,7 @@ void DisplayUI::drawMeterFace(lv_draw_ctx_t* draw_ctx, const lv_area_t& bounds) 
                std::max(y1, y2) + padding >= clip->y1 && std::min(y1, y2) - padding <= clip->y2;
     };
     for (int side = 0; side < 2; ++side) {
-        const uint32_t color = side == 0 ? 0x22c55e : 0xef4444;
+        const uint32_t color = side == 0 ? forwardColor : reflectedColor;
         for (int i = 0; i <= 8; ++i) {
             const auto& tick = m_geometry.ticks[side][i];
             const bool major = i % 2 == 0;
@@ -752,18 +761,18 @@ void DisplayUI::drawMeterFace(lv_draw_ctx_t* draw_ctx, const lv_area_t& bounds) 
             lv_point_t p2 = {lv_coord_t(tick.line.to.x + ox), lv_coord_t(tick.line.to.y + oy)};
             lv_draw_line_dsc_t tick_dsc;
             lv_draw_line_dsc_init(&tick_dsc);
-            tick_dsc.color = major ? lv_color_hex(color) : lv_color_hex(0x666666);
-            tick_dsc.width = major ? 2 : 1;
+            tick_dsc.color = major ? lv_color_hex(color) : lv_color_hex(border);
+            tick_dsc.width = 1;
             if (visible(p1.x, p1.y, p2.x, p2.y, 3)) lv_draw_line(draw_ctx, &tick_dsc, &p1, &p2);
             if (major && i > 0) {
                 lv_draw_label_dsc_t ld;
                 lv_draw_label_dsc_init(&ld);
                 ld.color = lv_color_hex(color);
-                ld.font  = &lv_font_montserrat_14;
+                ld.font  = &ldg_font_10;
                 ld.align = LV_TEXT_ALIGN_CENTER;
                 const int lx = tick.label.x + ox, ly = tick.label.y + oy;
-                lv_area_t la = {(lv_coord_t)(lx-16),(lv_coord_t)(ly-8),
-                                (lv_coord_t)(lx+16),(lv_coord_t)(ly+8)};
+                lv_area_t la = {(lv_coord_t)(lx-20),(lv_coord_t)(ly-7),
+                                (lv_coord_t)(lx+20),(lv_coord_t)(ly+7)};
                 if (visible(la.x1, la.y1, la.x2, la.y2, 0))
                     lv_draw_label(draw_ctx, &ld, &la, m_tickLabels[i / 2], NULL);
             }
@@ -771,13 +780,12 @@ void DisplayUI::drawMeterFace(lv_draw_ctx_t* draw_ctx, const lv_area_t& bounds) 
     }
 
     // ----- SWR iso-curves -----
-    static const uint32_t swrColors[] = {0x84cc16, 0xeab308, 0xf97316, 0xef4444, 0xa855f7};
     lv_draw_line_dsc_t curve_dsc;
     lv_draw_line_dsc_init(&curve_dsc);
     curve_dsc.width = 1;
-    curve_dsc.opa   = LV_OPA_60;
+    curve_dsc.opa   = LV_OPA_COVER;
     for (int si = 0; si < 5; si++) {
-        curve_dsc.color = lv_color_hex(swrColors[si]);
+        curve_dsc.color = lv_color_hex(border);
         const auto& curve = m_geometry.curves[si];
         for (int i = 0; i < curve.count; ++i) {
             const auto& line = curve.lines[i];
@@ -871,17 +879,17 @@ void DisplayUI::drawMeterForeground(lv_draw_ctx_t* draw_ctx, const lv_area_t& bo
     // ----- Needles -----
     lv_draw_line_dsc_t needle_dsc;
     lv_draw_line_dsc_init(&needle_dsc);
-    needle_dsc.width     = 3;
+    needle_dsc.width     = 2;
     needle_dsc.round_end = true;
     if (m_fastNeedles) {
-        rasterNeedle(draw_ctx,{lv_coord_t(fwdPx),lv_coord_t(fwdPy)},fwdTip,lv_color_hex(0x00ff00));
-        rasterNeedle(draw_ctx,{lv_coord_t(refPx),lv_coord_t(refPy)},refTip,lv_color_hex(0xff0000));
+        rasterNeedle(draw_ctx,{lv_coord_t(fwdPx),lv_coord_t(fwdPy)},fwdTip,lv_color_hex(forwardColor));
+        rasterNeedle(draw_ctx,{lv_coord_t(refPx),lv_coord_t(refPy)},refTip,lv_color_hex(reflectedColor));
     } else {
-    needle_dsc.color = lv_color_hex(0x00ff00);
+    needle_dsc.color = lv_color_hex(forwardColor);
     { lv_point_t p1={(lv_coord_t)fwdPx,(lv_coord_t)fwdPy},
                  p2={fwdTip.x, fwdTip.y};
       lv_draw_line(draw_ctx, &needle_dsc, &p1, &p2); }
-    needle_dsc.color = lv_color_hex(0xff0000);
+    needle_dsc.color = lv_color_hex(reflectedColor);
     { lv_point_t p1={(lv_coord_t)refPx,(lv_coord_t)refPy},
                  p2={refTip.x, refTip.y};
       lv_draw_line(draw_ctx, &needle_dsc, &p1, &p2); }
@@ -891,24 +899,22 @@ void DisplayUI::drawMeterForeground(lv_draw_ctx_t* draw_ctx, const lv_area_t& bo
     lv_draw_rect_dsc_t rd;
     lv_draw_rect_dsc_init(&rd);
     rd.radius = LV_RADIUS_CIRCLE;
-    rd.bg_color = lv_color_hex(0x00aa00);
-    lv_area_t fa={(lv_coord_t)(fwdPx-5),(lv_coord_t)(fwdPy-5),
-                  (lv_coord_t)(fwdPx+5),(lv_coord_t)(fwdPy+5)};
+    rd.bg_color = lv_color_hex(forwardColor);
+    lv_area_t fa={(lv_coord_t)(fwdPx-3),(lv_coord_t)(fwdPy-3),
+                  (lv_coord_t)(fwdPx+3),(lv_coord_t)(fwdPy+3)};
     lv_draw_rect(draw_ctx, &rd, &fa);
-    rd.bg_color = lv_color_hex(0xaa0000);
-    lv_area_t ra={(lv_coord_t)(refPx-5),(lv_coord_t)(refPy-5),
-                  (lv_coord_t)(refPx+5),(lv_coord_t)(refPy+5)};
+    rd.bg_color = lv_color_hex(reflectedColor);
+    lv_area_t ra={(lv_coord_t)(refPx-3),(lv_coord_t)(refPy-3),
+                  (lv_coord_t)(refPx+3),(lv_coord_t)(refPy+3)};
     lv_draw_rect(draw_ctx, &rd, &ra);
 
     // ----- SWR text -----
     lv_draw_label_dsc_t swr_dsc;
     lv_draw_label_dsc_init(&swr_dsc);
-    swr_dsc.color = !std::isfinite(swr) ? lv_color_hex(0x888888) : (swr > 2.0f) ? lv_color_hex(0xff4444) :
-                    (swr > 1.5f) ? lv_color_hex(0xffaa00) : lv_color_hex(0x00ff00);
-    swr_dsc.font  = &lv_font_montserrat_24;
+    swr_dsc.color = lv_color_hex(!std::isfinite(swr) ? muted : swr > 2.0f ? danger : swr > 1.5f ? warning : foreground);
+    swr_dsc.font = &ldg_font_32;
     swr_dsc.align = LV_TEXT_ALIGN_CENTER;
-    lv_area_t swr_a = {(lv_coord_t)(cx-50),(lv_coord_t)(cy-arm/2-12),
-                       (lv_coord_t)(cx+50),(lv_coord_t)(cy-arm/2+12)};
+    const auto swr_a = swrArea(bounds);
     lv_draw_label(draw_ctx, &swr_dsc, &swr_a, swrText, NULL);
 }
 
@@ -999,6 +1005,7 @@ void DisplayUI::displayFlush(lv_disp_drv_t* disp, const lv_area_t* area, lv_colo
         };
         oldLabel(self->m_fwdPowerLabel,self->m_previousForwardText);
         oldLabel(self->m_refPowerLabel,self->m_previousReflectedText);
+        oldLabel(self->m_scaleLabel,lv_label_get_text(self->m_scaleLabel));
         lv_draw_sw_deinit_ctx(disp, &software.base_draw);
         self->m_frameDrawUs += micros() - drawStarted;
         portENTER_CRITICAL(&self->m_diagnosticsMux);

@@ -40,6 +40,10 @@ static std::atomic<uint32_t> s_webLoopMs{0};
 static TaskHandle_t s_radioTask = nullptr;
 static TaskHandle_t s_webTask = nullptr;
 static TaskHandle_t s_tunerTask = nullptr;
+static TaskHandle_t s_mqttTask = nullptr;
+#ifdef BOARD_ESP32_3248S035C
+SET_LOOP_TASK_STACK_SIZE(7168);
+#endif
 
 #ifdef WITH_DISPLAY
 DisplayUI display;
@@ -476,7 +480,14 @@ void setup() {
 #ifdef WITH_DISPLAY
     s_remoteCommands = xQueueCreate(8, sizeof(CommandRequest));
 #endif
-    if (!s_commands || xTaskCreatePinnedToCore(tunerTask, "tuner", 8192, nullptr, 2, &s_tunerTask, 1) != pdPASS) {
+    // The display profile has a measured bounded command worker; other
+    // profiles retain their existing stack allocation.
+#ifdef BOARD_ESP32_3248S035C
+    constexpr unsigned tunerStack = 6144;
+#else
+    constexpr unsigned tunerStack = 8192;
+#endif
+    if (!s_commands || xTaskCreatePinnedToCore(tunerTask, "tuner", tunerStack, nullptr, 2, &s_tunerTask, 1) != pdPASS) {
         Serial.println("ERROR: tuner command task could not start");
         if (s_commands) vQueueDelete(s_commands);
         s_commands = nullptr;
@@ -501,7 +512,15 @@ void setup() {
     });
 
     setupWiFi();
-    if (xTaskCreatePinnedToCore(mqttTask, "mqtt", 6144, nullptr, 1, nullptr, 0) != pdPASS)
+#ifdef BOARD_ESP32_3248S035C
+    // A continuously connected panel favours prompt TCP ACKs over modem sleep.
+    // Avoid retaining several HTTP/WS frames through each DTIM sleep interval.
+    WiFi.setSleep(false);
+#endif
+    // Certificate verification can keep the worker runnable for seconds.
+    // Share idle priority so IDLE0 still services its watchdog during TLS;
+    // the web server and control tasks retain their higher priorities.
+    if (xTaskCreatePinnedToCore(mqttTask, "mqtt", 7168, nullptr, tskIDLE_PRIORITY, &s_mqttTask, 0) != pdPASS)
         Serial.println("ERROR: MQTT task could not start");
 
 #ifdef WITH_DISPLAY
@@ -532,7 +551,7 @@ void setup() {
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
         },
-        "webServer", TLS_ENABLED ? 16384 : 8192, NULL, 1, &s_webTask, 0) != pdPASS)
+        "webServer", TLS_ENABLED ? 16384 : 8704, NULL, 1, &s_webTask, 0) != pdPASS)
         Serial.println("ERROR: web task could not start");
 
     startConfiguredNetworkTasks();
@@ -558,10 +577,11 @@ void loop() {
                       unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
                       unsigned(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
                       unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
-        Serial.printf("[STACK] loop=%u web=%u tuner=%u tci=%u remote=%u\n",
+        Serial.printf("[STACK] loop=%u web=%u tuner=%u mqtt=%u tci=%u remote=%u\n",
                       unsigned(uxTaskGetStackHighWaterMark(nullptr)),
                       unsigned(s_webTask ? uxTaskGetStackHighWaterMark(s_webTask) : 0),
                       unsigned(s_tunerTask ? uxTaskGetStackHighWaterMark(s_tunerTask) : 0),
+                      unsigned(s_mqttTask ? uxTaskGetStackHighWaterMark(s_mqttTask) : 0),
                       unsigned(s_radioTask ? uxTaskGetStackHighWaterMark(s_radioTask) : 0),
 #ifdef WITH_DISPLAY
                       unsigned(s_remoteTask ? uxTaskGetStackHighWaterMark(s_remoteTask) : 0)

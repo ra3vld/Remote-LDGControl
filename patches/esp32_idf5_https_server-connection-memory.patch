@@ -5,19 +5,17 @@
 +#include <new>
 +#include <esp_heap_caps.h>
  
-@@ -161,3 +163,14 @@
+@@ -161,3 +163,12 @@
  int HTTPServer::createConnection(int idx) {
 -  HTTPConnection * newConnection = new HTTPConnection(this);
 +  // Arduino 3 leaves less internal heap on non-PSRAM boards. Reserve room
-+  // for parsing/JSON and reject a client instead of throwing std::bad_alloc.
++  // for parsing/JSON; leave a client in the TCP backlog while TLS uses RAM.
 +  HTTPConnection * newConnection = nullptr;
 +  const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-+  if (heap_caps_get_free_size(caps) >= 16384 && heap_caps_get_largest_free_block(caps) >= 8192) {
++  if (heap_caps_get_free_size(caps) >= 16384 && heap_caps_get_largest_free_block(caps) >= 4096) {
 +    newConnection = new (std::nothrow) HTTPConnection(this);
 +  }
 +  if (newConnection == nullptr) {
-+    int rejected = accept(_socket, nullptr, nullptr);
-+    if (rejected >= 0) close(rejected);
 +    return -1;
 +  }
    _connections[idx] = newConnection;

@@ -1,13 +1,14 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
-struct DeviceConfig {
+template<size_t MqttUserBytes, size_t MqttPasswordBytes> struct DeviceConfigLayout {
     char wifiSSID[33];     // 802.11 SSID max 32 bytes + NUL
     char wifiPassword[65]; // WPA2-PSK max 63 bytes + NUL (plus room for paste)
     char mqttBroker[64];
-    char mqttUsername[32];
-    char mqttPassword[64];
+    char mqttUsername[MqttUserBytes];
+    char mqttPassword[MqttPasswordBytes];
     char webUsername[32];
     char webPassword[64];
     float meterPsuVoltage;
@@ -25,7 +26,10 @@ struct DeviceConfig {
     char staticDNS[16];
     // Display-build only: hostname/IP of remote unit to subscribe to
     char remoteHost[64];
-    // Occupies existing tail padding; the object and stored record do not grow.
+    // V2 used tail padding for orientation; keep that legacy layout readable.
     uint8_t displayOrientation = 0;
 };
-static_assert(sizeof(DeviceConfig) == 560, "Display orientation must not grow DeviceConfig");
+using DeviceConfigV2 = DeviceConfigLayout<32, 64>;
+using DeviceConfig = DeviceConfigLayout<65, 129>;
+static_assert(sizeof(DeviceConfigV2) == 560, "Keep the legacy NVS layout readable");
+static_assert(sizeof(DeviceConfig) == 656, "Check configuration layout changes");

@@ -48,9 +48,9 @@ void test_failed_config_write_preserves_previous_snapshot() {
 }
 
 void test_display_orientation_uses_padding_and_migrates_v1_without_reading_padding() {
-    TEST_ASSERT_EQUAL_UINT(560, sizeof(DeviceConfig));
-    TEST_ASSERT_EQUAL_UINT(558, offsetof(DeviceConfig, displayOrientation));
-    TEST_ASSERT_EQUAL_UINT(564, sizeof(ldg::StoredConfig));
+    TEST_ASSERT_EQUAL_UINT(560, sizeof(DeviceConfigV2));
+    TEST_ASSERT_EQUAL_UINT(558, offsetof(DeviceConfigV2, displayOrientation));
+    TEST_ASSERT_EQUAL_UINT(564, sizeof(ldg::StoredConfigV2));
     Storage store;
     auto original = config();
     original.displayOrientation = 15;
@@ -65,13 +65,68 @@ void test_display_orientation_uses_padding_and_migrates_v1_without_reading_paddi
     TEST_ASSERT_TRUE(ldg::readConfig(store, loaded));
     TEST_ASSERT_EQUAL_UINT8(15, loaded.displayOrientation);
     // Legacy record: bytes at the new field offset were arbitrary padding.
-    store.bytes[0] = 1;
-    store.bytes[sizeof(uint32_t) + offsetof(DeviceConfig, displayOrientation)] = 0xff;
+    ldg::StoredConfigV2 legacy{};
+    legacy.version = 1;
+    strcpy(legacy.value.webUsername, "admin");
+    strcpy(legacy.value.webPassword, "test-password");
+    legacy.value.mqttPort = 1883;
+    legacy.value.meterPsuVoltage = 13.8;
+    legacy.value.displayOrientation = 0xff;
+    store.putBytes("configV1", &legacy, sizeof(legacy));
     TEST_ASSERT_TRUE(ldg::readConfig(store, loaded));
     TEST_ASSERT_EQUAL_UINT8(0, loaded.displayOrientation);
     TEST_ASSERT_EQUAL_STRING(config().webPassword, loaded.webPassword);
     store.bytes[0] = 99;
     TEST_ASSERT_FALSE(ldg::readConfig(store, loaded));
+}
+
+void test_v2_migration_preserves_network_auth_and_settings_then_saves_long_mqtt_credentials() {
+    Storage store;
+    ldg::StoredConfigV2 old{};
+    old.version = 2;
+    auto& v = old.value;
+    strcpy(v.wifiSSID, "test-network"); strcpy(v.wifiPassword, "test-network-secret");
+    strcpy(v.webUsername, "operator"); strcpy(v.webPassword, "test-web-secret");
+    strcpy(v.mqttBroker, "mqtt.example.org"); strcpy(v.mqttUsername, "old-user");
+    strcpy(v.mqttPassword, "old-secret"); v.mqttPort = 8883; v.mqttDiscoveryEnabled = true;
+    v.meterPsuVoltage = 12.5; v.configured = true; v.remoteUnitId = 7;
+    strcpy(v.ant1Name, "DIPOLE"); strcpy(v.ant2Name, "YAGI");
+    v.useStaticIP = true; strcpy(v.staticIP, "192.0.2.10"); strcpy(v.staticGateway, "192.0.2.1");
+    strcpy(v.staticNetmask, "255.255.255.0"); strcpy(v.staticDNS, "192.0.2.2");
+    strcpy(v.remoteHost, "remote.example.org"); v.displayOrientation = 15;
+    store.putBytes("configV1", &old, sizeof(old));
+    DeviceConfig loaded{};
+    TEST_ASSERT_TRUE(ldg::readConfig(store, loaded));
+    TEST_ASSERT_EQUAL_STRING(v.wifiSSID, loaded.wifiSSID);
+    TEST_ASSERT_EQUAL_STRING(v.wifiPassword, loaded.wifiPassword);
+    TEST_ASSERT_EQUAL_STRING(v.webUsername, loaded.webUsername);
+    TEST_ASSERT_EQUAL_STRING(v.webPassword, loaded.webPassword);
+    TEST_ASSERT_EQUAL_STRING(v.mqttBroker, loaded.mqttBroker);
+    TEST_ASSERT_EQUAL_STRING(v.mqttUsername, loaded.mqttUsername);
+    TEST_ASSERT_EQUAL_STRING(v.mqttPassword, loaded.mqttPassword);
+    TEST_ASSERT_EQUAL_UINT(v.mqttPort, loaded.mqttPort);
+    TEST_ASSERT_TRUE(loaded.mqttDiscoveryEnabled && loaded.configured && loaded.useStaticIP);
+    TEST_ASSERT_EQUAL_DOUBLE(v.meterPsuVoltage, loaded.meterPsuVoltage);
+    TEST_ASSERT_EQUAL_UINT(v.remoteUnitId, loaded.remoteUnitId);
+    TEST_ASSERT_EQUAL_UINT(v.displayOrientation, loaded.displayOrientation);
+    TEST_ASSERT_EQUAL_STRING(v.ant1Name, loaded.ant1Name); TEST_ASSERT_EQUAL_STRING(v.ant2Name, loaded.ant2Name);
+    TEST_ASSERT_EQUAL_STRING(v.staticIP, loaded.staticIP); TEST_ASSERT_EQUAL_STRING(v.staticGateway, loaded.staticGateway);
+    TEST_ASSERT_EQUAL_STRING(v.staticNetmask, loaded.staticNetmask); TEST_ASSERT_EQUAL_STRING(v.staticDNS, loaded.staticDNS);
+    TEST_ASSERT_EQUAL_STRING(v.remoteHost, loaded.remoteHost);
+    memset(loaded.mqttUsername, 'u', 64); loaded.mqttUsername[64] = 0;
+    memset(loaded.mqttPassword, 'p', 128); loaded.mqttPassword[128] = 0;
+    TEST_ASSERT_TRUE(ldg::writeConfig(store, loaded));
+    DeviceConfig roundtrip{};
+    TEST_ASSERT_TRUE(ldg::readConfig(store, roundtrip));
+    TEST_ASSERT_EQUAL_STRING(loaded.mqttUsername, roundtrip.mqttUsername);
+    TEST_ASSERT_EQUAL_STRING(loaded.mqttPassword, roundtrip.mqttPassword);
+    TEST_ASSERT_EQUAL_STRING(v.wifiPassword, roundtrip.wifiPassword);
+    TEST_ASSERT_EQUAL_UINT(3, store.bytes[0]);
+    // Old/corrupt records must never partially replace an active configuration.
+    old.value.mqttPassword[0] = 'x'; memset(old.value.mqttUsername, 'x', sizeof(old.value.mqttUsername));
+    store.putBytes("configV1", &old, sizeof(old));
+    TEST_ASSERT_FALSE(ldg::readConfig(store, roundtrip));
+    TEST_ASSERT_EQUAL_STRING(loaded.mqttUsername, roundtrip.mqttUsername);
 }
 
 void test_all_display_touch_transforms_invert_the_hardware_address_mapping() {
@@ -194,6 +249,7 @@ int main() {
     UNITY_BEGIN();
     RUN_TEST(test_failed_config_write_preserves_previous_snapshot);
     RUN_TEST(test_display_orientation_uses_padding_and_migrates_v1_without_reading_padding);
+    RUN_TEST(test_v2_migration_preserves_network_auth_and_settings_then_saves_long_mqtt_credentials);
     RUN_TEST(test_all_display_touch_transforms_invert_the_hardware_address_mapping);
     RUN_TEST(test_invalid_config_never_replaces_saved_credentials);
     RUN_TEST(test_remote_results_and_source_contract);

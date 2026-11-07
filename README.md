@@ -363,11 +363,52 @@ logged once until recovery. Publish/subscribe success means the request was sent
 it does not confirm broker ACL acceptance or Home Assistant discovery.
 Otherwise set the broker address, port (default `1883`), and optional credentials.
 Leaving the password field blank when saving settings preserves the stored password.
+MQTT usernames support 64 bytes and passwords 128 bytes; longer API values
+are rejected rather than silently truncated. Older saved configurations remain
+readable and are written as version 3 on the next save. Re-enter credentials
+that an older firmware already truncated; their missing characters cannot be
+recovered from storage. Downgrading to firmware without version 3 storage
+requires reconfiguration.
 Settings are saved in NVS and applied by the MQTT worker without restarting
 the device. **Refresh status** reads diagnostics; **Reconnect MQTT** requests
 a new broker connection without rewriting settings or resetting the LCD.
 The hostname passed to PubSubClient belongs to the handler for the full
-connection lifetime. The transport is plain MQTT; MQTT TLS is not implemented.
+connection lifetime. Port **8883** selects verified MQTT TLS; other ports use
+plain MQTT. TLS requires NTP synchronization and trusts the bundled ISRG Root
+X1/X2 certificates. It never falls back to plaintext or skips certificate checks.
+The ESP32-3248S035C profile rebuilds the pinned ESP-IDF 5.5.5 TLS record
+library from hash-verified upstream sources with 4 KiB input/output records.
+It requests RFC 6066 maximum-fragment-length negotiation; the broker must
+support 4096-byte records. Oversized records fail closed;
+there is no insecure fallback. Other boards and optional web HTTPS retain
+16 KiB input records and use 4 KiB output records. The additional build source
+archive is cached under `.pio/compact-tls`.
+
+For `rotator.r3v.ru`, the full ISRG Root X2 certificate anchors the broker's
+ECC chain before its optional RSA cross-sign. Other brokers use the compact
+Root X1/X2 bundle. The managed broker's handshake requires 44 KiB free internal
+byte-addressable RAM with compact records (52 KiB with 16 KiB input); other
+brokers require 64 KiB. The largest block must be at least 8/20 KiB respectively.
+Diagnostics report a deferred handshake and retry when memory is available.
+The 30-second handshake limit covers certificate verification on the original
+ESP32. The MQTT worker shares idle priority so the idle watchdog can run.
+
+HTTP responses with a known Content-Length stream without a full response
+cache and reuse connections. Idle keep-alive expires after three seconds;
+unknown-length responses close to preserve HTTP framing. The plain HTTP server
+has six on-demand slots, allowing two WebSockets, two ongoing HTTP clients and
+short command requests. Sunton HTTP output waits for ACKs once a socket has
+3 KiB queued, without changing lwIP bookkeeping. Slow/failed writes abort
+abandoned TCP queues.
+The Sunton profile bounds dynamic Wi-Fi RX/TX buffers to eight each and disables
+AMPDU aggregation through the public ESP-IDF initialization API. Modem sleep
+is disabled on this continuously connected panel to avoid delaying TCP ACKs.
+The Sunton display redraws the same vector face without its face/delta caches, reserving
+about 12 KiB for network traffic instead. Other display profiles keep caching.
+Concurrent HTTP polling can still fail or return truncated responses, including
+without WebSockets or forced TLS reconnects and with ample free RAM. HTTP
+reliability remains unresolved; the network load test must check it separately
+from heap failures and successful broker login.
 
 Enable the MQTT integration in Home Assistant against the same broker, with its
 default discovery prefix `homeassistant`. **Home Assistant auto discovery** is

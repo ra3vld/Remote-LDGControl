@@ -1,29 +1,34 @@
 --- a/src/HTTPConnection.cpp
 +++ b/src/HTTPConnection.cpp
-@@ -1,3 +1,5 @@
+@@ -1,3 +1,6 @@
  #include "HTTPConnection.hpp"
++#include "http_transport_memory.h"
 +#include <errno.h>
 +#include <esp_heap_caps.h>
  #include "mbedtls/base64.h"
  #include "mbedtls/sha1.h"
-@@ -261,5 +262,32 @@
+@@ -261,5 +262,37 @@
  
  size_t HTTPConnection::writeBuffer(byte* buffer, size_t length) {
 -  return send(_socket, buffer, length, 0);
 +  // A slow/disconnected browser must not block the single HTTP server task.
-+  // Retry partial writes for at most one second; a truncated frame closes
++  // Retry partial writes for at most four seconds; a truncated frame closes
 +  // the transport instead of leaving the next response on a corrupt stream.
 +  if (isClosed()) return 0;
 +  const uint32_t started = millis();
 +  size_t written = 0;
-+  while (written < length && uint32_t(millis() - started) < 1000) {
++  while (written < length && uint32_t(millis() - started) < 4000) {
 +    // send() allocates lwIP/Wi-Fi buffers. Leave working memory for MQTT
 +    // and HTTP serialization while a queued transmission drains.
-+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 12288) {
++    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 16384 ||
++        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 4096) {
 +      delay(1);
 +      continue;
 +    }
-+    int result = send(_socket, buffer + written, length - written, MSG_DONTWAIT);
++    const size_t allowance = httpSendAllowance(_socket);
++    if (!allowance) { delay(1); continue; }
++    const size_t remaining = length - written;
++    int result = send(_socket, buffer + written, remaining < allowance ? remaining : allowance, MSG_DONTWAIT);
 +    if (result > 0) {
 +      written += result;
 +    } else if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ENOMEM || errno == ENOBUFS)) {
@@ -33,6 +38,7 @@
 +    }
 +  }
 +  if (written != length) {
++    abortHttpTransport(_socket);
 +    _connectionState = STATE_ERROR;
 +    closeConnection();
 +    return 0;

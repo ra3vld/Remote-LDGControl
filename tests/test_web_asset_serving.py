@@ -14,14 +14,17 @@ HARNESS = r'''
 #include <map>
 #include <string>
 #include "web_asset_request.h"
+OUTPUT_BUFFER
+unsigned readCalls=0,closeCalls=0;
 namespace fs {
 struct File {
  std::string data; size_t offset=0; bool valid=false;
  explicit operator bool() const {return valid;}
  size_t size() const {return data.size();}
- int read(uint8_t* out,size_t length) {length=std::min(length,data.size()-offset);
+ bool setBufferSize(size_t size){assert(offset==0 && size<=256);return true;}
+ int read(uint8_t* out,size_t length) {++readCalls;length=std::min(length,data.size()-offset);
   memcpy(out,data.data()+offset,length);offset+=length;return length;}
- void close() {}
+ void close() {++closeCalls;}
 };
 }
 struct Files {
@@ -36,8 +39,10 @@ struct HTTPRequest {Params params;std::string encoding;bool authenticated=true;
  Params* getParams() {return &params;} std::string getHeader(const char*) {return encoding;}};
 struct HTTPResponse {
  std::map<std::string,std::string> headers;std::string body;int status=200;size_t largestWrite=0;
+ bool fail=false,failed=false;
  void setHeader(const char* name,const std::string& value) {headers[name]=value;}
- void write(const uint8_t* data,size_t count) {largestWrite=std::max(largestWrite,count);body.append((const char*)data,count);}
+ size_t write(const uint8_t* data,size_t count) {largestWrite=std::max(largestWrite,count);if(fail)return 0;body.append((const char*)data,count);return count;}
+ void error(){failed=true;}
  void print(const char* value) {body+=value;}
 };
 }
@@ -61,7 +66,7 @@ int main() {
   assert(response.headers["Content-Encoding"]==(gzip?"gzip":""));
   assert(response.headers["Cache-Control"]==(asset?"private, max-age=31536000, immutable":"no-store"));
   assert(response.headers["Content-Type"]==(asset?"text/javascript; charset=utf-8":"text/html; charset=utf-8"));
-  assert(response.largestWrite<=512);
+  assert(response.largestWrite<=sizeof(s_httpOutput));
  }
  for(auto name:{"../cert.pem","settings.0123456789ab.js"}) {
   hsv::HTTPRequest request;request.params={name,true};hsv::HTTPResponse response;h_root(&request,&response);
@@ -75,6 +80,10 @@ int main() {
  request.encoding="gzip";LittleFS.files.erase("/index.html.gz");
  hsv::HTTPResponse fallback;h_root(&request,&fallback);
  assert(fallback.body==LittleFS.files["/index.html"] && !fallback.headers.count("Content-Encoding"));
+ // A disconnected transport must stop file reads and release the file.
+ hsv::HTTPResponse broken;broken.fail=true;readCalls=closeCalls=0;
+ h_root(&request,&broken);
+ assert(broken.failed && broken.body.empty() && readCalls==1 && closeCalls==1);
 }
 '''
 
@@ -83,9 +92,11 @@ class WebAssetServingTests(unittest.TestCase):
     def test_production_handler_streams_negotiated_files_and_protects_paths(self):
         source = (ROOT / 'src/web_server.cpp').read_text()
         handler = source[source.index('static void h_root('):source.index('static void h_status(')]
+        start = source.index('static uint8_t s_httpOutput[')
+        output = source[start:source.index(';',start)+1]
         with tempfile.TemporaryDirectory(prefix='ldg-web-serving-') as directory:
             root = Path(directory)
-            (root / 'main.cpp').write_text(HARNESS.replace('HANDLER', handler))
+            (root / 'main.cpp').write_text(HARNESS.replace('HANDLER', handler).replace('OUTPUT_BUFFER',output))
             subprocess.run(['c++', '-std=c++17', '-I', str(ROOT / 'include'), str(root / 'main.cpp'),
                             '-o', str(root / 'check')], check=True, capture_output=True)
             result = subprocess.run([str(root / 'check')], capture_output=True)

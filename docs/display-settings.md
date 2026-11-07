@@ -1,5 +1,21 @@
 # Meter and backlight settings
 
+## LCD layout
+
+The LCD uses the G5500 panel's dark blue palette and DejaVu Sans lettering.
+The crossed needles show forward power in blue and reflected power in amber.
+Large digital readings below the meter place FWD on the left and REF on the
+right. SWR appears above the needles, turning amber above 1.5 and red above 2.0.
+Missing readings show `--`, separately from measured zero.
+
+The header shows frequency and band when TCI is enabled, or the Wi-Fi network
+name and tuner band otherwise. `last` marks a retained tuner band; the TCI
+connection state and antenna-selection source remain visible beside the mode.
+MEM TUNE, FULL TUNE, ANT 1/2, BYPASS and mode switching remain available.
+Long antenna names use an ellipsis. Command feedback temporarily occupies the
+antenna-status row; the antenna status returns after feedback expires.
+Portrait orientations place the commands below the meter.
+
 Settings in the browser apply to the local LCD and all connected browsers.
 Upload both the application and LittleFS (`uploadfs`) after installing this feature.
 
@@ -57,24 +73,27 @@ mirrors horizontally and bit 3 vertically. Invalid values, booleans and writes
 to a headless build return HTTP 400. Persistence failure leaves the active
 orientation unchanged. No new endpoint, task or polling loop is introduced.
 
-The byte occupies existing tail padding in `DeviceConfig`: its size stays
-560 bytes, and `StoredConfig` stays 564 bytes. Compile-time checks enforce this.
-The NVS blob advances from version 1 to 2; existing version-1 records migrate to
-0° without interpreting their former padding or changing credentials. Older
-firmware cannot read version-2 records, so export settings before downgrading.
+Orientation originally occupied tail padding in the 560-byte configuration
+(564-byte stored version-2 record). Current version 3 expands MQTT credential
+fields and uses 656/660 bytes. Both older layouts remain readable: version 1
+defaults to 0° without interpreting padding; version 2 preserves orientation.
+Migration preserves Wi-Fi, web credentials and other settings. Older firmware
+cannot read version-3 records; downgrading requires reconfiguration.
 
 Rotation and mirroring use the ST7796/ILI9488 MADCTL register. The existing TFT
 rotation byte holds the applied flags. There is no software pixel rotation,
 new framebuffer, extra draw buffer, task, timer, or orientation object. The
-existing five-row draw buffer and delta scratch allocation retain their sizes.
+draw buffer holds five rows. Profiles with delta caching also allocate a
+five-row scratch buffer; Sunton omits that allocation.
 LVGL uses its existing fixed memory pool. Saving still uses the existing
 HTTP/JSON/NVS path and stack; this is not a claim of literally executing without
 RAM or of an unchanged on-device free-heap reading.
 
-The before/after builds for this change have identical DRAM/IRAM section sizes
+The historical before/after builds for the orientation-only change had identical DRAM/IRAM section sizes
 on all three profiles: static RAM is 105,288 bytes (`esp32-display`), 62,760
-bytes (`esp32-remote`) and 105,520 bytes (`esp32-3248s035c`). This is a linker
-comparison, not a measurement of runtime HTTP/JSON allocation or stack use.
+bytes (`esp32-remote`) and 105,520 bytes (`esp32-3248s035c`). This was a linker
+comparison, not a measurement of runtime HTTP/JSON allocation or stack use;
+it does not describe the subsequent TLS/display memory profile.
 
 `node tests/test_orientation_web.cjs` covers all 16 settings, partial saves,
 reload, drafts, errors and unsupported firmware. `tests/test_orientation_browser.cjs`
@@ -128,12 +147,18 @@ Pin assignment reference: [Sunton BSP, CDS_ADC and TPC_LCD](https://github.com/a
 
 ### Needle renderer and smoothing
 
-The LCD keeps a lossless, row-indexed compressed RGB565 copy of the static
-scales and SWR curves (about 14 KiB for the default face, bounded to 48 KiB).
+Display profiles other than ESP32-3248S035C keep a lossless, row-indexed
+compressed RGB565 copy of the static scales and SWR curves, bounded to 48 KiB.
+The current allocation is reported by `lcd.face_bytes`.
 It is rebuilt when the range, mapping or widget geometry changes. Allocation
-failure falls back to vector rendering. An additional 9600-byte scratch buffer
+failure falls back to vector rendering. An additional five-row scratch buffer
 allows comparing old/new dial pixels and sending short changed rectangles over
 SPI. This is not a full-screen framebuffer and does not require PSRAM.
+
+The embedded LVGL pool is 16 KiB, leaving 16 KiB more internal RAM for MQTT TLS
+than the previous 32 KiB pool. The 64-bit host renderer uses 32 KiB because its
+object pointers are larger. Check `lcd.lvgl_free` alongside the internal heap
+and largest block when validating display changes with TLS enabled.
 
 The onboard Sunton ST7796 uses an 80 MHz SPI write clock (previously 40 MHz),
 matching the [ESP32-3248S035C BSP](https://github.com/ardnew/ESP32-3248S035/blob/main/include/ESP323248S035.hpp).
@@ -200,3 +225,8 @@ partial and full renders pixel-for-pixel for custom linear/log ranges and burst
 telemetry; browser tests cover shared updates, unsaved edits, rejected saves,
 calibration and duplicate submissions. Visual smoothness/artifact acceptance,
 sensor polarity and usable low-brightness levels remain user checks on the board.
+
+On ESP32-3248S035C, the vector renderer draws the same face without the
+compressed face cache or delta scratch buffer. This leaves about 12 KiB of
+internal RAM available for verified MQTT TLS and concurrent web traffic.
+The five-row LVGL drawing buffer and the screen geometry are unchanged.

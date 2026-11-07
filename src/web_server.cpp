@@ -48,6 +48,9 @@ namespace hsv = httpsserver;
 // ---------------------------------------------------------------------------
 
 static LdgWebServer* s_instance = nullptr;
+// Handlers execute serially on the web task. Reuse one packet-sized buffer
+// for file and JSON output instead of filling Wi-Fi queues with tiny writes.
+static uint8_t s_httpOutput[1400];
 
 struct MeterFeed {
     portMUX_TYPE mux;
@@ -185,8 +188,8 @@ static void wsAuthMiddleware(hsv::HTTPRequest* req, hsv::HTTPResponse* res,
             res->print("WS token missing or invalid");
             return;  // don't call next() → no WS handshake
         }
-        // Four transport slots are shared by telemetry and HTTP commands.
-        // Keep two available for HTTP; extra pages use the status fallback.
+        // Bound telemetry to two clients; leave HTTP capacity for status
+        // and commands. Extra pages use the status fallback.
         if (!MeterWebsocketHandler::canSubscribe()) {
             res->setStatusCode(503);
             res->setHeader("Retry-After", "3");
@@ -240,19 +243,10 @@ static std::string readRequestBody(hsv::HTTPRequest* req) {
     return body;
 }
 
-static void runtimeConnectionMiddleware(hsv::HTTPRequest* req, hsv::HTTPResponse* res,
-                                        std::function<void()> next) {
-    const auto path = req->getRequestString();
-    const bool websocket = path == "/api/ws" || path.compare(0, 8, "/api/ws?") == 0;
-    // Two WebSockets share four slots with commands/status. Idle HTTP
-    // keep-alive sockets must not hold the remaining slots for 20 seconds.
-    if (!websocket) res->setHeader("Connection", "close");
-    next();
-}
-
 static void sendJson(hsv::HTTPResponse* res, int code, const String& body) {
     res->setStatusCode(code);
     res->setHeader("Content-Type", "application/json");
+    res->setHeader("Content-Length", std::to_string(body.length()));
     res->print(body.c_str());
 }
 
@@ -266,22 +260,21 @@ public:
     size_t write(const uint8_t* data, size_t size) {
         size_t copied = 0;
         while (copied < size && !m_failed) {
-            if (m_used == sizeof(m_buffer) && !flush()) break;
-            const size_t count = std::min(size - copied, sizeof(m_buffer) - m_used);
-            memcpy(m_buffer + m_used, data + copied, count);
+            if (m_used == sizeof(s_httpOutput) && !flush()) break;
+            const size_t count = std::min(size - copied, sizeof(s_httpOutput) - m_used);
+            memcpy(s_httpOutput + m_used, data + copied, count);
             copied += count; m_used += count;
         }
         return copied;
     }
     bool flush() {
         if (!m_used) return !m_failed;
-        m_failed = m_response.write(m_buffer, m_used) != m_used;
+        m_failed = m_response.write(s_httpOutput, m_used) != m_used;
         m_used = 0;
         return !m_failed;
     }
 private:
     hsv::HTTPResponse& m_response;
-    uint8_t m_buffer[256];
     size_t m_used = 0;
     bool m_failed = false;
 };
@@ -325,13 +318,18 @@ static void h_root(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     if (LittleFS.exists(filename.c_str())) {
         fs::File f = LittleFS.open(filename.c_str(), "r");
         if (f) {
+            // Arduino defaults to a 4 KiB stdio buffer per open file. The
+            // shared output block already buffers sequential asset reads.
+            f.setBufferSize(256);
             res->setHeader("Content-Length", std::to_string(f.size()));
             res->setHeader("Cache-Control", isAsset ? "private, max-age=31536000, immutable" : "no-store");
             if (compressed) res->setHeader("Content-Encoding", "gzip");
-            uint8_t buf[512];
             int n;
-            while ((n = f.read(buf, sizeof(buf))) > 0) {
-                res->write(buf, n);
+            while ((n = f.read(s_httpOutput, sizeof(s_httpOutput))) > 0) {
+                if (res->write(s_httpOutput, n) != size_t(n)) {
+                    res->error();
+                    break;
+                }
             }
             f.close();
             return;
@@ -584,6 +582,12 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
 
     const DeviceConfig before = configManager.get();
     DeviceConfig cfg = before;
+    if ((doc["mqttUsername"].is<const char*>() &&
+         strlen(doc["mqttUsername"].as<const char*>()) >= sizeof(cfg.mqttUsername)) ||
+        (doc["mqttPassword"].is<const char*>() &&
+         strlen(doc["mqttPassword"].as<const char*>()) >= sizeof(cfg.mqttPassword))) {
+        sendJson(res, 400, "{\"error\":\"MQTT username or password too long\"}"); return;
+    }
     if (doc["mqttBroker"].is<const char*>())
         strlcpy(cfg.mqttBroker, doc["mqttBroker"], sizeof(cfg.mqttBroker));
     if (!doc["mqttPort"].isUnbound()) {
@@ -767,7 +771,7 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     // Leave room for a persistent WebSocket and one command connection.
     m_server = new hsv::HTTPSServer(m_sslCert, WEB_PORT, 2);
 #else
-    m_server = new hsv::HTTPServer(HTTP_PORT, 4);
+    m_server = new hsv::HTTPServer(HTTP_PORT, 6);
 #endif
 
     m_server->registerNode(new hsv::ResourceNode("/",                   "GET",  &h_root));
@@ -802,7 +806,6 @@ bool LdgWebServer::begin(TunerProtocol* tuner, command_handler_t cmdHandler,
     // the page fetches one and opens the WS at /api/ws?t=<token>. Browsers
     // don't reliably send Basic Auth on WS upgrades, hence the token dance.
     m_server->registerNode(new hsv::ResourceNode("/api/ws-token",            "GET",  &h_ws_token));
-    m_server->addMiddleware(&runtimeConnectionMiddleware);
     m_server->addMiddleware(&wsAuthMiddleware);
     m_server->registerNode(new hsv::WebsocketNode("/api/ws", &MeterWebsocketHandler::create));
 

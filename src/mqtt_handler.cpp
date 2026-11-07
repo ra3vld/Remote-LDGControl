@@ -3,10 +3,25 @@
 #include <new>
 #include <esp_mac.h>
 #include <WiFiClientSecure.h>
+#include <esp_crt_bundle.h>
 #include <time.h>
+#include <cctype>
+#include "managed_mqtt_ca.h"
 #ifdef ARDUINO_ARCH_ESP32
 #include <esp_heap_caps.h>
+extern "C" unsigned ldg_tls_in_content_len();
+extern "C" unsigned ldg_tls_out_content_len();
 #endif
+
+extern const uint8_t mqttCaStart[] asm("_binary_x509_crt_bundle_start");
+extern const uint8_t mqttCaEnd[] asm("_binary_x509_crt_bundle_end");
+
+static bool managedBroker(const char* host) {
+    for (const char* expected="rotator.r3v.ru"; ; ++host,++expected) {
+        if (std::tolower(static_cast<unsigned char>(*host)) != *expected) return false;
+        if (!*expected) return true;
+    }
+}
 
 ldg::MqttStatus MqttHandler::getStatus() const {
     portENTER_CRITICAL(&m_statusMux);
@@ -98,10 +113,28 @@ bool MqttHandler::configure() {
     // Port 8883 always uses verified TLS. Allocate it only for TLS brokers;
     // local MQTT on 1883 keeps its existing transport and RAM footprint.
     if (cfg.mqttPort == 8883) {
+#ifdef ARDUINO_ARCH_ESP32
+        Serial.printf("[MQTT] TLS records: input=%u output=%u bytes\n",
+                      ldg_tls_in_content_len(), ldg_tls_out_content_len());
+#endif
+        // esp_crt_bundle_attach returns positive ESP_ERR_* values. The Arduino
+        // wrapper checks only negative values, so validate the pinned bundle
+        // explicitly before any handshake or credential transmission.
+        if (esp_crt_bundle_set(mqttCaStart, size_t(mqttCaEnd-mqttCaStart)) != ESP_OK) {
+            setConnectionState(ldg::MqttConnection::Error);
+            reportError(ldg::MqttError::TlsCa);
+            return false;
+        }
         m_tlsClient = new (std::nothrow) NetworkClientSecure;
         if (!m_tlsClient) { setConnectionState(ldg::MqttConnection::Error); reportError(ldg::MqttError::Memory); return false; }
-        m_tlsClient->useBuiltinCACertBundle();
-        m_tlsClient->setHandshakeTimeout(3);
+        // A real X2 trust anchor terminates the managed broker's ECC path
+        // before its optional X2 -> X1 RSA-4096 cross-sign. The compact bundle
+        // callback otherwise verifies that extra signature and its MPI peak.
+        if (managedBroker(cfg.mqttBroker)) m_tlsClient->setCACert(ldg::managedMqttCa);
+        else m_tlsClient->useBuiltinCACertBundle();
+        // Verified certificate/curve work on a non-PSRAM ESP32 can exceed
+        // three seconds, especially while web traffic is being serviced.
+        m_tlsClient->setHandshakeTimeout(30);
         m_tlsClient->setTimeout(1);
         m_client = new (std::nothrow) PubSubClient(*m_tlsClient);
     } else m_client = new (std::nothrow) PubSubClient(*m_wifiClient);
@@ -155,6 +188,23 @@ bool MqttHandler::connect() {
             setConnectionState(ldg::MqttConnection::Disconnected);
             return false;
         }
+#ifdef ARDUINO_ARCH_ESP32
+        // The pinned TLS library reserves 4/4 or 16/4 KiB records plus certificate and
+        // crypto workspace. Keep room for Wi-Fi and HTTP during the handshake;
+        // total free RAM alone is insufficient if no record-sized block fits.
+        const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+        const bool compactInput = ldg_tls_in_content_len() == 4096;
+        const unsigned minimumKiB = managedBroker(cfg.mqttBroker) ? (compactInput ? 44U : 52U) : 64U;
+        if (heap_caps_get_free_size(caps) < minimumKiB * 1024U ||
+            heap_caps_get_largest_free_block(caps) < (compactInput ? 8U : 20U) * 1024U) {
+            portENTER_CRITICAL(&m_statusMux);
+            m_status.lastAttemptMs = millis();
+            portEXIT_CRITICAL(&m_statusMux);
+            reportError(ldg::MqttError::TlsMemory);
+            setConnectionState(ldg::MqttConnection::Disconnected);
+            return false;
+        }
+#endif
     }
     const std::string clientId = std::string(MQTT_CLIENT_PREFIX) + "-" + m_identity.mac;
     const std::string statusTopic = m_identity.base + "/status";

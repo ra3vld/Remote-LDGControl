@@ -74,3 +74,16 @@ Use an isolated test broker / HA installation for the following checks.
     unavailable instead of leaving a stale green indicator. Check narrow/mobile
     layout and that polling never overwrites unsaved MQTT form values. These
     checks require both firmware and LittleFS images from the same version.
+13. On a non-PSRAM display board, test port 8883 with a valid hostname and the
+    matching trusted certificate chain. Wait for NTP, then verify the physical
+    board reports connected. Hold two WebSockets and issue two concurrent HTTP
+    requests while reconnecting MQTT five times. Record firmware identity,
+    uptime, `lcd.free_heap`, `lcd.min_free_heap`, `lcd.largest_block`, and
+    `lcd.lvgl_free`, plus Serial allocation failures and watchdog resets.
+    A deferred low-memory handshake must show its reason and recover when RAM
+    is available; it must not fall back to insecure TLS. PC TLS success alone
+    does not validate the embedded handshake. Check the generated CA bundle
+    with `python scripts/build_mqtt_ca.py --check` and
+    `python -m unittest discover -s tests -p test_mqtt_ca_bundle.py` when updating
+    the pinned SDK: ESP-IDF 5.5.5 uses a little-endian offset table, unlike the
+    older count-prefixed format.
