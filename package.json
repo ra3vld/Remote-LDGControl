@@ -2,10 +2,14 @@
   "name": "remote-ldgcontrol-web-build",
   "private": true,
   "scripts": {
-    "build:web": "node scripts/build_web.cjs --out .pio/web-test-assets"
+    "build:web": "node scripts/build_web.cjs --out .pio/web-test-assets",
+    "build:web-flasher": "node scripts/build_web_flasher.mjs",
+    "test:web-flasher": "node tests/test_web_flasher_browser.cjs"
   },
   "devDependencies": {
     "acorn": "8.11.3",
+    "esp-web-tools": "10.4.0",
+    "playwright": "1.63.0",
     "postcss": "8.4.31",
     "terser": "5.19.2"
   }

@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -53,33 +55,45 @@ jobs:
           node tests/test_startup_web.cjs
           node tests/test_progressive_web.cjs
 
-      - name: Build all environments
-        run: |
-          pio test -e native -e native-display
-          pio run -e esp32-display -e esp32-remote -e esp32-3248s035c
-          pio run -e esp32-display -e esp32-remote -e esp32-3248s035c -t buildfs
+      - name: Native firmware tests
+        run: pio test -e native -e native-display
 
-      - name: Copy firmware binaries
+      - name: Build firmware and LittleFS
+        shell: bash
         run: |
-          # esp-web-tools needs the bootloader + partition table + boot_app0
-          # + application image at their proper offsets. PlatformIO produces
-          # only the application as firmware.bin; the others live alongside
-          # in .pio/build and in the framework's tools/partitions/ directory.
-          mkdir -p firmware
-          for variant in display remote 3248s035c; do
-            cp .pio/build/esp32-${variant}/bootloader.bin firmware/ldg-tuner-${variant}-bootloader.bin
-            cp .pio/build/esp32-${variant}/partitions.bin firmware/ldg-tuner-${variant}-partitions.bin
-            cp .pio/build/esp32-${variant}/firmware.bin   firmware/ldg-tuner-${variant}.bin
-            cp .pio/build/esp32-${variant}/littlefs.bin   firmware/ldg-tuner-${variant}-littlefs.bin
-          done
-          # boot_app0.bin is identical across builds; ship one copy.
-          cp ~/.platformio/packages-pioarduino-55.03.312-1/framework-arduinoespressif32/tools/partitions/boot_app0.bin firmware/boot_app0.bin
+          if [[ "${{ github.ref }}" == refs/tags/v* || "${{ github.event_name }}" == workflow_dispatch ]]; then
+            ENVS="-e esp32-3248s035c -e esp32-display -e esp32-remote"
+          else
+            ENVS="-e esp32-3248s035c"
+          fi
+          pio run $ENVS
+          pio run $ENVS -t buildfs
 
-      - name: Upload firmware artifacts
-        uses: actions/upload-artifact@v4
+      - name: Package verified USB manifests
+        run: node scripts/build_web_flasher.mjs --output dist/web-flasher --allow-missing
+
+      - name: Browser flasher and USB preconfiguration tests
+        run: |
+          npx playwright install --with-deps chromium
+          CHROMIUM_PATH="$(node -e "process.stdout.write(require('playwright').chromium.executablePath())")" node tests/test_web_flasher_browser.cjs
+
+      - name: Check release version and package artifacts
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 -c "import os,re,sys;sys.path.insert(0,'scripts');from firmware_identity import version;tag=os.environ['RELEASE_TAG'];assert re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',tag);assert version()==tag[1:]"
+          python3 scripts/web_flasher.py release --output dist/web-flasher
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: firmware
-          path: firmware/*.bin
+          name: web-flasher
+          path: dist/web-flasher
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: release
+          path: dist/release
 
   release:
     needs: build
@@ -88,87 +102,36 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download firmware
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: firmware
-          path: firmware
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+          name: release
+          path: release
+      - uses: softprops/action-gh-release@v2
         with:
-          files: firmware/*.bin
+          files: release/*
           generate_release_notes: true
 
   deploy-pages:
-    needs: build
-    if: github.ref == 'refs/heads/main'
+    needs: [build, release]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       pages: write
       id-token: write
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download firmware
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: firmware
-          path: firmware
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Build flasher page
-        run: |
-          mkdir -p dist
-          cp flash.html dist/index.html
-          cp firmware/*.bin dist/
-          # ESP32 image parts and their flash offsets (per partitions_custom.csv):
-          #   0x1000  bootloader.bin   (second-stage bootloader)
-          #   0x8000  partitions.bin   (partition table)
-          #   0xe000  boot_app0.bin    (OTA selector seed)
-          #   0x10000 firmware.bin     (application)
-          #   0x390000 littlefs.bin    (web UI)
-          # Previously the manifest listed only firmware.bin at offset 0,
-          # which clobbered the bootloader and left the chip unbootable
-          # after a long erase.
-          for variant in display remote 3248s035c; do
-            case $variant in
-              display)   pretty="LDG Tuner Controller (Display)" ;;
-              remote)    pretty="LDG Tuner Controller (Remote)" ;;
-              3248s035c) pretty="LDG Tuner Controller (Sunton ESP32-3248S035C)" ;;
-            esac
-            cat > dist/manifest-${variant}.json << EOF
-          {
-            "name": "${pretty}",
-            "version": "${{ github.sha }}",
-            "builds": [
-              {
-                "chipFamily": "ESP32",
-                "parts": [
-                  { "path": "ldg-tuner-${variant}-bootloader.bin", "offset": 4096 },
-                  { "path": "ldg-tuner-${variant}-partitions.bin", "offset": 32768 },
-                  { "path": "boot_app0.bin",                       "offset": 57344 },
-                  { "path": "ldg-tuner-${variant}.bin",            "offset": 65536 },
-                  { "path": "ldg-tuner-${variant}-littlefs.bin",   "offset": 3735552 }
-                ]
-              }
-            ]
-          }
-          EOF
-          done
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+          name: web-flasher
+          path: dist
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
+      - id: deployment
         uses: actions/deploy-pages@v4

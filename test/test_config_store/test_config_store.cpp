@@ -11,9 +11,11 @@ void tearDown() {}
 struct Storage {
     std::vector<uint8_t> bytes;
     bool fail = false;
+    bool corrupt = false;
     size_t putBytes(const char*, const void* data, size_t size) {
         if (fail) return 0;
         bytes.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+        if (corrupt && bytes.size()>8) bytes[8] ^= 1;
         return size;
     }
     size_t getBytesLength(const char*) { return bytes.size(); }
@@ -23,6 +25,11 @@ struct Storage {
         return size;
     }
 };
+void test_successful_write_length_does_not_hide_corrupt_readback() {
+    Storage store;DeviceConfig value{};
+    strcpy(value.webUsername,"admin");strcpy(value.webPassword,"secret");value.mqttPort=1883;value.meterPsuVoltage=13.8;
+    store.corrupt=true;TEST_ASSERT_FALSE(ldg::writeConfig(store,value));
+}
 static DeviceConfig config() {
     DeviceConfig value{};
     strcpy(value.webUsername, "admin");
@@ -247,6 +254,7 @@ void test_command_feedback_waits_for_real_completion_and_ignores_older_requests(
 
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_successful_write_length_does_not_hide_corrupt_readback);
     RUN_TEST(test_failed_config_write_preserves_previous_snapshot);
     RUN_TEST(test_display_orientation_uses_padding_and_migrates_v1_without_reading_padding);
     RUN_TEST(test_v2_migration_preserves_network_auth_and_settings_then_saves_long_mqtt_credentials);

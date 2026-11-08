@@ -39,11 +39,8 @@
 #endif
 
 #define LOAD_GLCD
-#define LOAD_FONT2
-#define LOAD_FONT4
-#define LOAD_FONT6
-#define LOAD_FONT7
-#define LOAD_FONT8
+// LVGL draws the interface with display_fonts.cpp. TFT_eSPI only transfers
+// its pixel buffers; keep the small GLCD fallback without duplicate fonts.
 
 #define SMOOTH_FONT
 

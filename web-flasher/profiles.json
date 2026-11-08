@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "id": "esp32-3248s035c",
+      "title": "Sunton ESP32-3248S035C",
+      "role": "Контроллер с дисплеем ST7796 и GT911",
+      "docs": "docs/boards/esp32-3248s035c.md",
+      "photo": "sunton"
+    },
+    {
+      "id": "esp32-display",
+      "title": "ESP32 + BTT TFT35-SPI",
+      "role": "Контроллер с отдельным дисплеем",
+      "docs": "WIRING.md",
+      "photo": "esp32"
+    },
+    {
+      "id": "esp32-remote",
+      "title": "ESP32 без дисплея",
+      "role": "Контроллер тюнера с веб-интерфейсом",
+      "docs": "WIRING.md",
+      "photo": "esp32"
+    }
+  ]
+}

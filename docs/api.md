@@ -81,3 +81,9 @@ three seconds; retained labels never authorize RF-sensitive operations.
 
 The USB console runs at 115200 baud and records connection transitions and
 command failures without printing saved passwords.
+
+## USB-преднастройка
+
+Для физической USB-консоли доступен отдельный [provisioning API 1](usb-provisioning.md).
+Его команды не передаются в UART тюнера. Пользовательский порядок установки
+описан в [веб-прошивальщике](web-flasher.md).

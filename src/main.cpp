@@ -23,6 +23,10 @@
 #include "web_server.h"
 #include "command_feedback.h"
 #include "tci_client.h"
+#include "usb_provisioning.h"
+#include "build_identity.h"
+#include "connection_config.h"
+#include <esp_app_desc.h>
 
 #ifdef WITH_DISPLAY
 #include "display_ui.h"
@@ -41,6 +45,12 @@ static TaskHandle_t s_radioTask = nullptr;
 static TaskHandle_t s_webTask = nullptr;
 static TaskHandle_t s_tunerTask = nullptr;
 static TaskHandle_t s_mqttTask = nullptr;
+static const char s_buildInfo[] = "LDG_METADATA_V1:" LDG_BUILD_METADATA "\n";
+static ldg::UsbProvisioning s_usb;
+static std::atomic<uint32_t> s_usbUntil{0};
+static uint32_t s_usbRestartAt = 0;
+static bool usbActive() { const auto until=s_usbUntil.load();return until && int32_t(until - millis()) > 0; }
+static void serviceUsb();
 #ifdef BOARD_ESP32_3248S035C
 SET_LOOP_TASK_STACK_SIZE(7168);
 #endif
@@ -295,6 +305,7 @@ static bool executeCommandNow(uint8_t cmd, bool remote, const ldg::BridgeRequest
 
 // Synchronous callers wait on their own completion, never on the UI task.
 static bool submitCommand(uint8_t command, bool wait, const ldg::BridgeRequest* bridge=nullptr, const char** bridgeResult=nullptr) {
+    if (usbActive()) {if (bridgeResult) *bridgeResult="busy";return false;}
     if (bridge) {
         const auto context=getBridgeState();
         const char* error=ldg::validateBridgeRequest(*bridge,context);
@@ -359,6 +370,7 @@ static void tunerTask(void*) {
         tuner.configureAntennas(configManager.antennaSettings());
         tuner.configureTuning(configManager.tuningSettings());
         tuner.process();
+        if (usbActive()) { vTaskDelay(pdMS_TO_TICKS(1)); continue; }
         CommandRequest request;
         if (xQueueReceive(s_commands, &request, 0) == pdTRUE) {
             completeCommand(request);
@@ -420,9 +432,85 @@ static void startConfiguredNetworkTasks() {
 // Setup
 // ============================================================
 
+static void usbRequest(const char* op, JsonVariantConst request, JsonDocument& reply) {
+    // Hello grants a short, renewable maintenance lease. A running command
+    // finishes normally; saving is rejected until it has completed.
+    s_usbUntil.store(millis() + 5000);
+    const auto cfg = configManager.get();
+    if (!strcmp(op,"hello")) {
+        JsonDocument build;deserializeJson(build,s_buildInfo+16);
+        for (JsonPairConst pair:build.as<JsonObjectConst>()) reply[pair.key()]=pair.value();
+        reply["device_id"]=ldg::mqttIdentity(WiFi.macAddress().c_str()).mac;
+        reply["role"]=cfg.remoteHost[0]?"display_proxy":"tuner_controller";
+        return;
+    }
+    if (!strcmp(op,"settings")) {
+        auto data=reply["settings"].to<JsonObject>();
+        data["wifiSSID"]=cfg.wifiSSID; data["hasWifiPassword"]=bool(cfg.wifiPassword[0]);
+        data["mqttBroker"]=cfg.mqttBroker; data["mqttPort"]=cfg.mqttPort;
+        data["mqttUsername"]=cfg.mqttUsername; data["hasMqttPassword"]=bool(cfg.mqttPassword[0]);
+        data["mqttTls"]=cfg.mqttPort==8883;
+        data["mqttDiscoveryEnabled"]=cfg.mqttDiscoveryEnabled;
+        data["useStaticIP"]=cfg.useStaticIP;
+        data["staticIP"]=cfg.staticIP; data["staticNetmask"]=cfg.staticNetmask;
+        data["staticGateway"]=cfg.staticGateway; data["staticDNS"]=cfg.staticDNS;
+        data["configured"]=cfg.configured;
+        reply["connected"]=WiFi.status()==WL_CONNECTED;
+        reply["ip"]=WiFi.localIP().toString();
+        reply["mqtt_connected"]=mqtt.isConnected();
+        return;
+    }
+    if (!strcmp(op,"apply") || !strcmp(op,"reboot")) {
+        const auto state=getActiveState();
+        if (s_pendingCommands.load() || state.radio.transmitting || state.radio.tuning ||
+            (state.meterValid && state.meter.forward_power_watts > 0)) {
+            reply["status"]=409; reply["error"]="tuner or transmitter busy"; return;
+        }
+        if (!strcmp(op,"reboot")) {s_usbRestartAt=millis()+500;reply["restart"]=true;return;}
+        const auto patch=request["settings"];
+        static const char* allowed[]={"wifiSSID","wifiPassword","clearWifiPassword","mqttBroker","mqttPort",
+            "mqttUsername","mqttPassword","clearMqttPassword","mqttDiscoveryEnabled","useStaticIP",
+            "staticIP","staticNetmask","staticGateway","staticDNS"};
+        if (!patch.is<JsonObjectConst>()) {reply["status"]=400;reply["error"]="settings object required";return;}
+        for (JsonPairConst pair:patch.as<JsonObjectConst>()) {
+            bool known=false;for (auto key:allowed) if (!strcmp(pair.key().c_str(),key)) known=true;
+            if (!known) {reply["status"]=400;reply["error"]="unsupported setting";return;}
+        }
+        auto candidate=cfg;
+        if (!ldg::patchConnectionConfig(patch,candidate,true)) {reply["status"]=400;reply["error"]="invalid settings";return;}
+        if (!configManager.update(candidate)) {reply["status"]=500;reply["error"]="settings save failed";return;}
+        reply["saved"]=true;reply["restart"]=ldg::networkSettingsChanged(cfg,candidate);
+        if (ldg::mqttSettingsChanged(cfg,candidate)) mqtt.requestReconfigure();
+        return;
+    }
+    reply["status"]=404;reply["error"]="unknown USB operation";
+}
+
+static void serviceUsb() {
+    static char input[ldg::UsbProvisioning::Limit+1],output[ldg::UsbProvisioning::Limit+2];
+    static size_t used=0;
+    static bool overflow=false;
+    for (unsigned count=0;count<128 && Serial.available();++count) {
+        const char c=char(Serial.read());
+        if (c=='\n') {
+            input[used]=0;
+            if (!overflow && used && s_usb.handle(input,output,sizeof(output)-1)) {
+                const size_t size=strlen(output);output[size]='\n';Serial.write(reinterpret_cast<uint8_t*>(output),size+1);
+            }
+            used=0;overflow=false;
+        } else if (c!='\r') {
+            if (used<ldg::UsbProvisioning::Limit && !overflow) input[used++]=c;
+            else overflow=true;
+        }
+    }
+    if (s_usbRestartAt && int32_t(millis()-s_usbRestartAt)>=0) {Serial.flush();ESP.restart();}
+}
+
 void setup() {
     esp_fill_random(s_bridgeBoot,sizeof(s_bridgeBoot));
     Serial.begin(115200);
+    char usbBoot[17];snprintf(usbBoot,sizeof(usbBoot),"%08lx%08lx",(unsigned long)s_bridgeBoot[0],(unsigned long)s_bridgeBoot[1]);
+    s_usb.begin(usbBoot,usbRequest);
     heap_caps_register_failed_alloc_callback([](size_t bytes, uint32_t caps, const char* operation) {
         static std::atomic<uint32_t> lastReport{0};
         const uint32_t now = millis();
@@ -502,6 +590,7 @@ void setup() {
     static WiFiClient mqttClient;
     mqtt.begin(mqttClient, executeCommand, getActiveState, getBridgeState, executeBridgeCommand);
     configManager.setPortalIdleCallback([]() {
+        serviceUsb();
         // UART is serviced independently, including during network setup.
 #ifdef WITH_DISPLAY
         display.updateState(getActiveState());
@@ -566,6 +655,7 @@ void setup() {
 // ============================================================
 
 void loop() {
+    serviceUsb();
     startConfiguredNetworkTasks();
     // WiFi reconnection — only manage STA when STA is actually configured.
     // In AP-only mode (captive portal still running, never configured) there

@@ -84,7 +84,11 @@ template<class Storage> bool writeConfig(Storage& storage, const DeviceConfig& c
     StoredConfig stored{};
     stored.version = 3;
     stored.value = config;
-    return storage.putBytes("configV1", &stored, sizeof(stored)) == sizeof(stored);
+    if (storage.putBytes("configV1", &stored, sizeof(stored)) != sizeof(stored)) return false;
+    StoredConfig readback{};
+    return storage.getBytesLength("configV1") == sizeof(stored) &&
+        storage.getBytes("configV1", &readback, sizeof(readback)) == sizeof(readback) &&
+        !memcmp(&stored,&readback,sizeof(stored));
 }
 
 template<class Storage> bool readConfig(Storage& storage, DeviceConfig& config) {

@@ -1,0 +1,73 @@
+name: Publish web flasher interface
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web-flasher/**'
+      - 'scripts/update_web_flasher_site.py'
+      - '.github/workflows/web-flasher-site.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: web-flasher-interface
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: python3 -m unittest discover -s tests -p test_web_flasher.py
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG=$(gh release view --json tagName --jq .tagName)
+          gh release view "$TAG" --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then error("Stable release required") else . end'
+          mkdir -p artifacts/release
+          gh release download "$TAG" --pattern web-flasher-site.zip --pattern SHA256SUMS --dir artifacts/release
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: python3 scripts/update_web_flasher_site.py --archive artifacts/release/web-flasher-site.zip --checksums artifacts/release/SHA256SUMS --tag "$RELEASE_TAG"
+      - run: |
+          npx playwright install --with-deps chromium
+          CHROMIUM_PATH="$(node -e "process.stdout.write(require('playwright').chromium.executablePath())")" node tests/test_web_flasher_browser.cjs
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/web-flasher
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: test "$(gh release view --json tagName --jq .tagName)" = "$RELEASE_TAG"
+      - uses: actions/configure-pages@v5
+      - id: deployment
+        uses: actions/deploy-pages@v4

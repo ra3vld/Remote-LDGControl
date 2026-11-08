@@ -11,6 +11,7 @@ extern DisplayUI display;
 #include "mqtt_crypto_budget.h"
 #include "security.h"
 #include "config_store.h"
+#include "connection_config.h"
 #include "remote_protocol.h"
 #include "operating_mode.h"
 #include <ArduinoJson.h>
@@ -592,27 +593,9 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
 
     const DeviceConfig before = configManager.get();
     DeviceConfig cfg = before;
-    if ((doc["mqttUsername"].is<const char*>() &&
-         strlen(doc["mqttUsername"].as<const char*>()) >= sizeof(cfg.mqttUsername)) ||
-        (doc["mqttPassword"].is<const char*>() &&
-         strlen(doc["mqttPassword"].as<const char*>()) >= sizeof(cfg.mqttPassword))) {
-        sendJson(res, 400, "{\"error\":\"MQTT username or password too long\"}"); return;
+    if (!ldg::patchConnectionConfig(doc.as<JsonVariantConst>(),cfg)) {
+        sendJson(res,400,"{\"error\":\"invalid network or MQTT configuration\"}"); return;
     }
-    if (doc["mqttBroker"].is<const char*>())
-        strlcpy(cfg.mqttBroker, doc["mqttBroker"], sizeof(cfg.mqttBroker));
-    if (!doc["mqttPort"].isUnbound()) {
-        if (!doc["mqttPort"].is<uint16_t>() || doc["mqttPort"].as<uint16_t>() == 0) {
-            sendJson(res, 400, "{\"error\":\"invalid MQTT port\"}"); return;
-        }
-        cfg.mqttPort = doc["mqttPort"];
-    }
-    if (doc["mqttUsername"].is<const char*>())
-        strlcpy(cfg.mqttUsername, doc["mqttUsername"], sizeof(cfg.mqttUsername));
-    // Passwords are never returned by GET; an empty form field preserves the secret.
-    if (doc["mqttPassword"].is<const char*>() && doc["mqttPassword"].as<const char*>()[0])
-        strlcpy(cfg.mqttPassword, doc["mqttPassword"], sizeof(cfg.mqttPassword));
-    if (doc["mqttDiscoveryEnabled"].is<bool>())
-        cfg.mqttDiscoveryEnabled = doc["mqttDiscoveryEnabled"].as<bool>();
     if (doc["webUsername"].is<const char*>()) strlcpy(cfg.webUsername, doc["webUsername"], sizeof(cfg.webUsername));
     if (doc["webPassword"].is<const char*>() && doc["webPassword"].as<const char*>()[0])
         strlcpy(cfg.webPassword, doc["webPassword"], sizeof(cfg.webPassword));
@@ -622,11 +605,6 @@ static void h_config_post(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     }
     if (doc["ant1Name"].is<const char*>()) strlcpy(cfg.ant1Name, doc["ant1Name"], sizeof(cfg.ant1Name));
     if (doc["ant2Name"].is<const char*>()) strlcpy(cfg.ant2Name, doc["ant2Name"], sizeof(cfg.ant2Name));
-    if (doc["useStaticIP"].is<bool>())  cfg.useStaticIP = doc["useStaticIP"];
-    if (doc["staticIP"].is<const char*>()) strlcpy(cfg.staticIP, doc["staticIP"], sizeof(cfg.staticIP));
-    if (doc["staticNetmask"].is<const char*>()) strlcpy(cfg.staticNetmask, doc["staticNetmask"], sizeof(cfg.staticNetmask));
-    if (doc["staticGateway"].is<const char*>()) strlcpy(cfg.staticGateway, doc["staticGateway"], sizeof(cfg.staticGateway));
-    if (doc["staticDNS"].is<const char*>()) strlcpy(cfg.staticDNS, doc["staticDNS"], sizeof(cfg.staticDNS));
 #ifdef WITH_DISPLAY
     if (doc["remoteHost"].is<const char*>()) strlcpy(cfg.remoteHost, doc["remoteHost"], sizeof(cfg.remoteHost));
 #endif

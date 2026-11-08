@@ -1,0 +1,18 @@
+{
+  "sunton": {
+    "file": "sunton.webp",
+    "alt": "Фото платы ESP32-3248S035",
+    "caption": "ESP32-3248S035. Выбирайте ёмкостную версию C с GT911. Фото: Shenzhen Jingcai.",
+    "source": "https://www.displaysmodule.com/sale-42712060-esp32-display-module-3-5-inch-product-weight-about-50g-for-affordable-display-solutions.html",
+    "original": "https://img.displaysmodule.com/photo/displaysmodule/editor/20240127113226_41560.png",
+    "sha256": "1e1de951fc08ae3d712b1e8eb7375c1fd1103e5b3779fd1bef1fc11f830a4097"
+  },
+  "esp32": {
+    "file": "esp32.webp",
+    "alt": "Фото платы ESP32-DevKitC",
+    "source": "https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32/esp32-devkitc/user_guide.html",
+    "original": "https://raw.githubusercontent.com/espressif/esp-dev-kits/bd4d4ac18657e73583af3d7c0b0a23c3cddf3735/docs/_static/esp32-devkitc/esp32-devkitc-board.png",
+    "caption": "Пример ESP32 DevKitC. Исполнение вашей платы может отличаться. Фото: Espressif.",
+    "sha256": "7541135c0504e9676d88fb6b1dc59319586c1f61fc81b8df6e0e0a5f496c438c"
+  }
+}
