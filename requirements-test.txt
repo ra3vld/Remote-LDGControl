@@ -1,0 +1,2 @@
+# Certificate-bundle validation in tests/test_mqtt_ca_bundle.py
+cryptography==50.0.0

@@ -35,22 +35,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG=$(gh release view --json tagName --jq .tagName)
+          TAG=$(gh api "repos/$GH_REPO/releases?per_page=100" --jq '[.[] | select(.draft == false and .prerelease == false)][0].tag_name // ""')
+          if [ -z "$TAG" ]; then
+            echo "No stable firmware release yet; publish the first firmware tag before updating Pages."
+            exit 0
+          fi
           gh release view "$TAG" --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then error("Stable release required") else . end'
           mkdir -p artifacts/release
           gh release download "$TAG" --pattern web-flasher-site.zip --pattern SHA256SUMS --dir artifacts/release
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-      - env:
+      - if: steps.release.outputs.tag != ''
+        env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: python3 scripts/update_web_flasher_site.py --archive artifacts/release/web-flasher-site.zip --checksums artifacts/release/SHA256SUMS --tag "$RELEASE_TAG"
-      - run: |
+      - if: steps.release.outputs.tag != ''
+        run: |
           npx playwright install --with-deps chromium
           CHROMIUM_PATH="$(node -e "process.stdout.write(require('playwright').chromium.executablePath())")" node tests/test_web_flasher_browser.cjs
-      - uses: actions/upload-pages-artifact@v4
+      - if: steps.release.outputs.tag != ''
+        uses: actions/upload-pages-artifact@v4
         with:
           path: dist/web-flasher
   deploy:
     needs: build
+    if: needs.build.outputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       pages: write
