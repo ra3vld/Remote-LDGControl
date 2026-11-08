@@ -99,6 +99,12 @@ See the [soldering and wiring guide](WIRING.md),
 
 ## Installation
 
+Use the [browser flasher](https://ra3vld.github.io/Remote-LDGControl/) in Chrome
+or Edge to install a ready-made profile with its LittleFS web interface.
+Optional USB setup configures Wi-Fi, network settings and MQTT, including
+Home Assistant Discovery or a voluntary connection to rotator.r3v.ru.
+See the [flashing and USB setup guide](docs/web-flasher.md).
+
 Download the images for your board from
 [Releases](https://github.com/ra3vld/Remote-LDGControl/releases),
 or build from source with PlatformIO. Each board needs matching **application
