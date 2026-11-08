@@ -7,6 +7,9 @@ on:
       - 'scripts/update_web_flasher_site.py'
       - '.github/workflows/web-flasher-site.yml'
   workflow_dispatch:
+  workflow_run:
+    workflows: [Build Firmware]
+    types: [completed]
 permissions:
   contents: read
 concurrency:
@@ -14,6 +17,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.release.outputs.tag }}
@@ -34,12 +38,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          EXPECTED_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
         run: |
           TAG=$(gh api "repos/$GH_REPO/releases?per_page=100" --jq '[.[] | select(.draft == false and .prerelease == false)][0].tag_name // ""')
           if [ -z "$TAG" ]; then
             echo "No stable firmware release yet; publish the first firmware tag before updating Pages."
             exit 0
           fi
+          if [ -n "$EXPECTED_TAG" ]; then test "$TAG" = "$EXPECTED_TAG"; fi
           gh release view "$TAG" --json isDraft,isPrerelease --jq 'if .isDraft or .isPrerelease then error("Stable release required") else . end'
           mkdir -p artifacts/release
           gh release download "$TAG" --pattern web-flasher-site.zip --pattern SHA256SUMS --dir artifacts/release
@@ -47,7 +53,11 @@ jobs:
       - if: steps.release.outputs.tag != ''
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: python3 scripts/update_web_flasher_site.py --archive artifacts/release/web-flasher-site.zip --checksums artifacts/release/SHA256SUMS --tag "$RELEASE_TAG"
+          EXPECTED_COMMIT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
+        run: |
+          python3 scripts/update_web_flasher_site.py --archive artifacts/release/web-flasher-site.zip --checksums artifacts/release/SHA256SUMS --tag "$RELEASE_TAG"
+          python3 -c "import os,json;expected=os.environ['EXPECTED_COMMIT'];catalog=json.load(open('dist/web-flasher/catalog.json'));assert not expected or catalog['firmware_commit']==expected"
+
       - if: steps.release.outputs.tag != ''
         run: |
           npx playwright install --with-deps chromium
