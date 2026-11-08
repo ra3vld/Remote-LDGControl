@@ -68,18 +68,17 @@ static tuner_state_t measured(double forward = 100, double reflected = 1, double
     return state;
 }
 
-void test_idle_interval_including_zero() {
-    for (const auto& state : {measured(), measured(0, 0, 1.0), tuner_state_t{}}) {
+void test_live_interval_including_zero_and_idle_without_telemetry() {
+    for (const auto& state : {measured(), measured(0, 0, NAN), tuner_state_t{}}) {
         MqttStateSchedule schedule;
+        const uint32_t interval = state.meterValid ? 1000 : 30000;
         TEST_ASSERT_TRUE(schedule.due(0, state));
         schedule.published(0, state);
-        TEST_ASSERT_FALSE(schedule.due(999, state));
-        TEST_ASSERT_FALSE(schedule.due(1000, state));
-        TEST_ASSERT_FALSE(schedule.due(29999, state));
-        TEST_ASSERT_TRUE(schedule.due(30000, state));
-        schedule.published(30000, state);
-        TEST_ASSERT_FALSE(schedule.due(59999, state));
-        TEST_ASSERT_TRUE(schedule.due(60000, state));
+        TEST_ASSERT_FALSE(schedule.due(interval - 1, state));
+        TEST_ASSERT_TRUE(schedule.due(interval, state));
+        schedule.published(interval, state);
+        TEST_ASSERT_FALSE(schedule.due(2 * interval - 1, state));
+        TEST_ASSERT_TRUE(schedule.due(2 * interval, state));
     }
 }
 
@@ -133,13 +132,13 @@ void test_active_interval_accumulation_and_latest_snapshot() {
     state.meter.forward_power_watts = 105;
     TEST_ASSERT_TRUE(schedule.due(1100, state));
     schedule.published(1100, state);
-    TEST_ASSERT_FALSE(schedule.due(2100, state));
-    TEST_ASSERT_TRUE(schedule.due(31100, state));
+    TEST_ASSERT_FALSE(schedule.due(2099, state));
+    TEST_ASSERT_TRUE(schedule.due(2100, state));
 }
 
 void test_short_changes_are_latched_until_next_send() {
     MqttStateSchedule schedule;
-    const auto previous = measured();
+    const tuner_state_t previous;
     schedule.published(0, previous);
     auto changed = previous;
     changed.mode = MODE_MANUAL;
@@ -197,14 +196,14 @@ void test_failed_send_immediate_requests_and_millis_wrap() {
     // A failed write does not call published(): the change is still pending.
     TEST_ASSERT_TRUE(schedule.due(501, state));
     schedule.published(501, state);
-    TEST_ASSERT_FALSE(schedule.due(30500, state));
-    TEST_ASSERT_TRUE(schedule.due(30501, state));
-    schedule.published(30501, state);
+    TEST_ASSERT_FALSE(schedule.due(1500, state));
+    TEST_ASSERT_TRUE(schedule.due(1501, state));
+    schedule.published(1501, state);
     schedule.requestImmediate();
-    TEST_ASSERT_TRUE(schedule.due(30502, state));
-    TEST_ASSERT_TRUE(schedule.due(30503, state));
-    schedule.published(30503, state);
-    TEST_ASSERT_FALSE(schedule.due(30504, state));
+    TEST_ASSERT_TRUE(schedule.due(1502, state));
+    TEST_ASSERT_TRUE(schedule.due(1503, state));
+    schedule.published(1503, state);
+    TEST_ASSERT_FALSE(schedule.due(1504, state));
 }
 
 void test_identities_and_all_discovery_payloads() {
@@ -423,6 +422,52 @@ static void settle(MqttSession& session, uint32_t now, const tuner_state_t& stat
 }
 static void deliver(MqttSession& session, const std::string& topic, const std::string& payload) {
     session.message(topic.c_str(), reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+}
+
+void test_live_session_keeps_stable_power_and_zero_fresh_then_reports_meter_loss() {
+    TestBroker broker;
+    const auto id = mqttIdentity("aa:bb:cc:01:02:03");
+    MqttSession session(broker, id, execute);
+    TEST_ASSERT_TRUE(session.connected(false, "ESP32", ""));
+    auto state = measured(40, 1, 1.4);
+    settle(session, 0, state);
+    for (uint32_t now = 100; now <= 60000; now += 100) {
+        // SSB can have fresh zero-power frames during TX as well as during RX.
+        if (now == 10000) {
+            state.meter.forward_power_watts = state.meter.reflected_power_watts = 0;
+            state.meter.swr = NAN;
+            state.meter.band = BAND_UNKNOWN;
+        }
+        state.meterAgeMs = now % 100;
+        const auto count = broker.messages.size();
+        session.loop(now, state);
+        if (now % 1000) {
+            TEST_ASSERT_EQUAL_UINT(count, broker.messages.size());
+            continue;
+        }
+        TEST_ASSERT_EQUAL_UINT(count + 1, broker.messages.size());
+        TEST_ASSERT_EQUAL_STRING((id.base + "/state").c_str(), broker.messages.back().topic.c_str());
+        JsonDocument doc;
+        TEST_ASSERT_FALSE(deserializeJson(doc, broker.messages.back().payload));
+        TEST_ASSERT_TRUE(doc["telemetry_fresh"].as<bool>());
+        TEST_ASSERT_FALSE(doc["held"]["fwd_power"].as<bool>());
+        TEST_ASSERT_FALSE(doc["held"]["ref_power"].as<bool>());
+        TEST_ASSERT_EQUAL_DOUBLE(now < 10000 ? 40 : 0, doc["fwd_power"].as<double>());
+        // A retained SWR must remain explicitly historical when RF is zero.
+        TEST_ASSERT_EQUAL(now >= 10000, doc["held"]["swr"].as<bool>());
+    }
+    state.meterValid = false;
+    state.meterAgeMs = 3001;
+    session.loop(61000, state);
+    JsonDocument doc;
+    TEST_ASSERT_FALSE(deserializeJson(doc, broker.messages.back().payload));
+    TEST_ASSERT_FALSE(doc["telemetry_fresh"].as<bool>());
+    TEST_ASSERT_TRUE(doc["held"]["fwd_power"].as<bool>());
+    const auto count = broker.messages.size();
+    session.loop(62000, state);
+    TEST_ASSERT_EQUAL_UINT(count, broker.messages.size());
+    session.loop(91000, state);
+    TEST_ASSERT_EQUAL_UINT(count + 1, broker.messages.size());
 }
 
 void test_ha_keeps_last_readings_when_rf_stops_but_web_values_still_expire() {
@@ -671,9 +716,9 @@ void test_session_failed_publishes_retry_and_keep_newest_state() {
     deserializeJson(doc, broker.messages.back().payload);
     TEST_ASSERT_EQUAL_DOUBLE(102, doc["fwd_power"].as<double>());
     size_t count = broker.messages.size();
-    session.loop(31000, state);
+    session.loop(2000, state);
     TEST_ASSERT_EQUAL_UINT(count, broker.messages.size());
-    session.loop(31001, state);
+    session.loop(2001, state);
     TEST_ASSERT_EQUAL_UINT(count + 1, broker.messages.size());
 }
 
@@ -760,12 +805,12 @@ void test_bridge_state_radio_packets_and_separate_schedules_fit_1024() {
     }
     TEST_ASSERT_EQUAL_UINT(1,radios);TEST_ASSERT_EQUAL_UINT(1,states);
     size_t count=broker.messages.size();session.loop(999,state);TEST_ASSERT_EQUAL_UINT(count,broker.messages.size());
-    session.loop(1000,state);TEST_ASSERT_EQUAL_UINT(count+1,broker.messages.size());
+    session.loop(1000,state);TEST_ASSERT_EQUAL_UINT(count+2,broker.messages.size());
     TEST_ASSERT_EQUAL_STRING((id.base+"/radio/state").c_str(),broker.messages.back().topic.c_str());
     state.radio.provider=RadioProvider::None;state.radio.connection=RadioConnection::Disabled;
     session.loop(1001,state);
     TEST_ASSERT_EQUAL_UINT(count+3,broker.messages.size());
-    session.loop(2001,state);TEST_ASSERT_EQUAL_UINT(count+3,broker.messages.size());
+    session.loop(2001,state);TEST_ASSERT_EQUAL_UINT(count+4,broker.messages.size());
 }
 
 void test_bridge_drops_a_snapshot_captured_before_source_switch() {
@@ -791,7 +836,8 @@ int main() {
     RUN_TEST(test_bridge_deadline_busy_context_validation_and_uptime_wrap);
     RUN_TEST(test_bridge_state_radio_packets_and_separate_schedules_fit_1024);
     RUN_TEST(test_rf_state_serialization_does_not_grow_a_heap_string);
-    RUN_TEST(test_idle_interval_including_zero);
+    RUN_TEST(test_live_interval_including_zero_and_idle_without_telemetry);
+    RUN_TEST(test_live_session_keeps_stable_power_and_zero_fresh_then_reports_meter_loss);
     RUN_TEST(test_absolute_and_relative_threshold_boundaries);
     RUN_TEST(test_active_interval_accumulation_and_latest_snapshot);
     RUN_TEST(test_short_changes_are_latched_until_next_send);

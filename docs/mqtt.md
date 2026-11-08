@@ -59,9 +59,11 @@ valid value. Before the first reading it is unknown. A source change or reboot
 clears this in-memory history. Local antenna and mode retain acknowledged state
 when RF telemetry goes quiet; the serial protocol cannot read front-panel changes.
 
-State is published at most once per second during significant changes and
-every 30 seconds otherwise. Changes are compared with the last successful
-publication, so small changes accumulate.
+State is published once per second while tuner measurements are fresh,
+including stable or zero power. When measurements stop, significant changes
+are published at most once per second and unchanged state every 30 seconds.
+Changes are compared with the last successful publication, so small changes
+accumulate.
 
 | Measurement / state | Significant change |
 |---|---|

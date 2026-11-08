@@ -40,6 +40,8 @@ inline bool significantChange(const tuner_state_t& previous, const tuner_state_t
 
 // Only a successful transport write commits the baseline and advances the clock.
 // Latch changes until the next send so a short event is not lost to throttling.
+// Fresh UART telemetry needs a heartbeat even when RF is stable or zero:
+// consumers expire measurements after three seconds without a state update.
 class MqttStateSchedule {
 public:
     static constexpr uint32_t ACTIVE_MS = 1000;
@@ -50,7 +52,7 @@ public:
         if (m_hasPublished && significantChange(m_previous, state)) m_pending = true;
         const uint32_t elapsed = now - m_lastPublished;
         return m_immediate || !m_hasPublished || elapsed >= IDLE_MS ||
-               (m_pending && elapsed >= ACTIVE_MS);
+               ((m_pending || state.meterValid) && elapsed >= ACTIVE_MS);
     }
     void published(uint32_t now, const tuner_state_t& state) {
         m_previous = state;
