@@ -7,6 +7,7 @@
 #include <time.h>
 #include <cctype>
 #include "managed_mqtt_ca.h"
+#include "mqtt_crypto_budget.h"
 #ifdef ARDUINO_ARCH_ESP32
 #include <esp_heap_caps.h>
 extern "C" unsigned ldg_tls_in_content_len();
@@ -217,8 +218,22 @@ bool MqttHandler::connect() {
     portEXIT_CRITICAL(&m_statusMux);
     Serial.printf("[MQTT] Connecting to %s:%u (attempt %lu)...\n",
                   cfg.mqttBroker, cfg.mqttPort, (unsigned long)attempt);
-    if (!m_client->connect(clientId.c_str(), user, password,
-                           statusTopic.c_str(), 0, true, "offline", true)) {
+    const uint32_t started = millis();
+    const auto cryptoBefore = ldg::mqttCryptoStats();
+    bool connected;
+    {
+        ldg::MqttCryptoScope crypto(m_tlsClient != nullptr);
+        connected = m_client->connect(clientId.c_str(), user, password,
+                                     statusTopic.c_str(), 0, true, "offline", true);
+    }
+    if (m_tlsClient) {
+        const auto cryptoAfter = ldg::mqttCryptoStats();
+        Serial.printf("[MQTT] TLS connect=%lu ms; crypto checkpoints=%lu yields=%lu\n",
+                      (unsigned long)(millis() - started),
+                      (unsigned long)(cryptoAfter.checkpoints - cryptoBefore.checkpoints),
+                      (unsigned long)(cryptoAfter.yields - cryptoBefore.yields));
+    }
+    if (!connected) {
         reportError(ldg::MqttError::Connect, m_client->state());
         setConnectionState(ldg::MqttConnection::Disconnected);
         return false;

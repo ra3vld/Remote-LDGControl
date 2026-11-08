@@ -1,0 +1,14 @@
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -528,6 +528,11 @@
+             res.setHeader((*header)->_name, (*header)->_value);
+           }
+ 
++          // A length-framed HTTP/1.1 response is persistent by default. Tell
++          // clients before the handler writes headers if this socket will close.
++          if (!websocketRequested && !_isKeepAlive)
++            res.setHeader("Connection", "close");
++
+           // Find the request handler callback
+           HTTPSCallbackFunction * resourceCallback;
+           if (websocketRequested) {

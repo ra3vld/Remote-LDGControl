@@ -1,0 +1,134 @@
+--- a/src/ConnectionContext.hpp
++++ b/src/ConnectionContext.hpp
+@@ -28,6 +28,10 @@
+   virtual size_t pendingBufferSize() = 0;
+ 
+   virtual size_t writeBuffer(byte* buffer, size_t length) = 0;
++  virtual int writeSome(byte* buffer, size_t length) {
++    const size_t count = writeBuffer(buffer, length);
++    return count <= length ? int(count) : -1;
++  }
+ 
+   virtual bool isSecure() = 0;
+   virtual void setWebsocketHandler(WebsocketHandler *wsHandler);
+--- a/src/HTTPConnection.hpp
++++ b/src/HTTPConnection.hpp
+@@ -56,6 +56,7 @@
+   friend class WebsocketInputStreambuf;
+ 
+   virtual size_t writeBuffer(byte* buffer, size_t length);
++  virtual int writeSome(byte* buffer, size_t length);
+   virtual size_t readBytesToBuffer(byte* buffer, size_t length);
+   virtual bool canReadData();
+   virtual size_t pendingByteCount();
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -304,6 +304,25 @@
+     return 0;
+   }
+   return written;
++}
++
++int HTTPConnection::writeSome(byte* buffer, size_t length) {
++  if (isClosed()) return -1;
++  // Preserve encryption for the optional HTTPS transport. Plain HTTP never
++  // waits here: the WebSocket owns the unsent tail across loop iterations.
++  if (isSecure()) {
++    const size_t count = writeBuffer(buffer, length);
++    return count <= length ? int(count) : -1;
++  }
++  if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 16384 ||
++      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) < 4096)
++    return 0;
++  const size_t allowance = httpSendAllowance(_socket);
++  if (!allowance) return 0;
++  const int count = send(_socket, buffer, length < allowance ? length : allowance, MSG_DONTWAIT);
++  if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ENOMEM || errno == ENOBUFS))
++    return 0;
++  return count > 0 ? count : -1;
+ }
+ 
+ size_t HTTPConnection::readBytesToBuffer(byte* buffer, size_t length) {
+@@ -658,6 +677,12 @@
+         _wsHandler->loop();
+       }
+ 
++      if (!_wsHandler->closed() && _clientState != CSTATE_CLOSED && !isClosed() && !_wsHandler->flushOutput()) {
++        abortHttpTransport(_socket);
++        _connectionState = STATE_ERROR;
++        closeConnection();
++        break;
++      }
+       // If the client closed the connection unexpectedly
+       if (_clientState == CSTATE_CLOSED) {
+         HTTPS_LOGI("WS lost client, calling onClose, FID=%d", _socket);
+--- a/src/WebsocketHandler.hpp
++++ b/src/WebsocketHandler.hpp
+@@ -5,6 +5,7 @@
+ #include <lwip/def.h>
+ 
+ #include <string>
++#include "websocket_output.h"
+ #undef min
+ #undef max
+ 
+@@ -68,8 +69,16 @@
+ 
+   void close(uint16_t status = CLOSE_NORMAL_CLOSURE, std::string message = "");
+   void send(std::string data, uint8_t sendType = SEND_TYPE_BINARY);
++  void sendLatest(std::string data, uint8_t sendType = SEND_TYPE_BINARY);
+   void send(uint8_t *data, uint16_t length, uint8_t sendType = SEND_TYPE_BINARY);
+   bool closed();
++  bool flushOutput() {
++    const bool ok = _output.flush(millis(), [this](const char* bytes, size_t size) {
++      return _con->writeSome((byte*)bytes, size);
++    });
++    if (!ok) _sentClose = true;
++    return ok;
++  }
+ 
+   void loop();
+   void initialize(ConnectionContext * con);
+@@ -77,6 +86,7 @@
+ private:
+   int read();
+ 
++  ldg::WebsocketOutput _output;
+   ConnectionContext * _con;
+   bool _receivedClose; // True when we have received a close request.
+   bool _sentClose; // True when we have sent a close request.
+--- a/src/WebsocketHandler.cpp
++++ b/src/WebsocketHandler.cpp
+@@ -169,6 +169,8 @@
+   HTTPS_LOGD("Websocket close()");
+ 
+   _sentClose = true;              // Flag that we have sent a close request.
++  // Do not insert a close frame into a partially emitted telemetry frame.
++  if (_output.pending()) { _con->signalClientClose(); return; }
+ 
+   WebsocketFrame frame;           // Build the web socket frame indicating a close request.
+   frame.fin    = 1;
+@@ -219,6 +221,23 @@
+  * @param [in] data The data to send down the WebSocket.
+  * @param [in] sendType The type of payload.  Either SEND_TYPE_TEXT or SEND_TYPE_BINARY.
+  */
++void WebsocketHandler::sendLatest(std::string data, uint8_t sendType) {
++  WebsocketFrame frame{};
++  frame.fin = 1;
++  frame.opCode = sendType == SEND_TYPE_TEXT ? OPCODE_TEXT : OPCODE_BINARY;
++  frame.len = data.length() < 126 ? data.length() : 126;
++  if (data.length() >= 126) {
++    const uint16_t length = htons((uint16_t)data.length());
++    data.insert(0, (const char*)&length, sizeof(length));
++  }
++  data.insert(0, (const char*)&frame, sizeof(frame));
++  // One bounded telemetry snapshot, with no interleaving of partial frames.
++  if (!_output.submit(std::move(data), millis())) {
++    _sentClose = true;
++    _con->signalClientClose();
++  }
++}
++
+ void WebsocketHandler::send(uint8_t* data, uint16_t length, uint8_t sendType) {
+   HTTPS_LOGD(">> Websocket.send(): length=%d", length);
+   WebsocketFrame frame;

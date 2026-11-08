@@ -34,7 +34,8 @@ int main(){
  }
  for(auto start:{0u,0xfffffff0u}){
   HTTPConnection c;c._lastTransmissionTS=start;c._connectionState=STATE_INITIAL;
-  now=start+3000;assert(!c.isTimeoutExceeded());now=start+3001;assert(c.isTimeoutExceeded());
+  now=start+3200;assert(!c.isTimeoutExceeded()); // 3s poll plus dispatch/network jitter.
+  now=start+10000;assert(!c.isTimeoutExceeded());now=start+10001;assert(c.isTimeoutExceeded());
   c._connectionState=7;assert(!c.isTimeoutExceeded());now=start+20001;assert(c.isTimeoutExceeded());
  }
  for(int client:{0,int(CSTATE_CLOSED)}){
@@ -55,4 +56,19 @@ class StreamKeepaliveTests(unittest.TestCase):
     return subprocess.run([str(root/'check')],capture_output=True)
    self.assertNotEqual(run().returncode,0)
    p=ROOT/'patches/esp32_idf5_https_server-stream-keepalive.patch';hook.apply_patch(p,root);hook.apply_patch(p,root)
+   result=run();self.assertEqual(result.returncode,0,result.stderr.decode())
+
+ def test_cached_three_second_timeout_reproduces_poll_expiry_then_upgrades(self):
+  with tempfile.TemporaryDirectory(prefix='ldg-keepalive-old-') as directory:
+   root=Path(directory);(root/'src').mkdir();(root/'src/HTTPConnection.hpp').write_text('')
+   shutil.copyfile(ROOT/'tests/fixtures/http_keepalive.cpp',root/'src/HTTPConnection.cpp')
+   (root/'check.cpp').write_text(HARNESS)
+   def run():
+    subprocess.run(['c++','-std=c++11',str(root/'check.cpp'),'-o',str(root/'check')],check=True,capture_output=True)
+    return subprocess.run([str(root/'check')],capture_output=True)
+   previous=ROOT/'patches/compat/esp32_idf5_https_server-stream-keepalive.patch'
+   current=ROOT/'patches/esp32_idf5_https_server-stream-keepalive.patch'
+   hook.apply_patch(previous,root)
+   self.assertNotEqual(run().returncode,0,'3s idle must reproduce expiry during a 3s poll with jitter')
+   hook.apply_patch(current,root,previous);hook.apply_patch(current,root,previous)
    result=run();self.assertEqual(result.returncode,0,result.stderr.decode())

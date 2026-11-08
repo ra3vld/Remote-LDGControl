@@ -95,7 +95,7 @@ def patched_content(content, hunks, reverse=False):
     return b"".join(lines)
 
 
-def apply_patch(patchfile, libdir):
+def apply_patch(patchfile, libdir, legacy_patchfile=None):
     """Validate every file before writing; reject partial or incompatible patches."""
     files = parse_patch(patchfile)
     root = Path(libdir).resolve()
@@ -113,13 +113,28 @@ def apply_patch(patchfile, libdir):
             for _, content, hunks in originals:
                 patched_content(content, hunks, reverse=True)
         except PatchMismatch:
-            raise RuntimeError(
-                f"[apply_patches] could not apply {Path(patchfile).name}: {error}. "
-                "Dependency sources differ from the expected version or are "
-                "partially patched."
-            ) from error
-        print(f"[apply_patches] skipping {Path(patchfile).name} (already applied)")
-        return
+            # Upgrade only an explicitly recorded, fully applied older patch.
+            # Prepare both reversal and replacement in memory before any write.
+            try:
+                if legacy_patchfile is None:
+                    raise error
+                legacy = dict(parse_patch(legacy_patchfile))
+                if set(legacy) != {relative for relative, _ in files}:
+                    raise ValueError("legacy patch must target exactly the same files")
+                updates = []
+                for (relative, _), (target, content, hunks) in zip(files, originals):
+                    restored = patched_content(content, legacy[relative], reverse=True)
+                    updates.append((target, patched_content(restored, hunks)))
+            except PatchMismatch:
+                raise RuntimeError(
+                    f"[apply_patches] could not apply {Path(patchfile).name}: {error}. "
+                    "Dependency sources differ from the expected version or are "
+                    "partially patched."
+                ) from error
+            print(f"[apply_patches] upgrading cached {Path(patchfile).name}")
+        else:
+            print(f"[apply_patches] skipping {Path(patchfile).name} (already applied)")
+            return
     for target, content in updates:
         target.write_bytes(content)
     print(f"[apply_patches] applying {Path(patchfile).name}")
@@ -136,7 +151,8 @@ def main(env):
                   f"(looked at {libdir}); skipping — PlatformIO may not have "
                   "installed it yet")
             continue
-        apply_patch(patchfile, libdir)
+        legacy = patches_dir / "compat" / patchfile.name
+        apply_patch(patchfile, libdir, legacy if legacy.is_file() else None)
 
 
 if "Import" in globals():

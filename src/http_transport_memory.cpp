@@ -28,6 +28,22 @@ template<class Action> bool withSocketPcb(int socket, Action action) {
 }
 }
 
+void configureHttpTransport(int socket) {
+#ifdef BOARD_ESP32_3248S035C
+    withSocketPcb(socket, [](tcp_pcb* pcb) {
+        // The pinned SDK has no TCP_MAXSEG socket option. Apply this only
+        // before the first response, under the same lwIP lock as queue reads.
+        // Short segments kept HTTP/WS progressing in the measured Sunton
+        // network where 1436-byte MSS repeatedly lost complete response bodies.
+        // Preserve smaller peer limits and all send-credit/window bookkeeping.
+        if (pcb->mss > 536 && pcb->snd_buf == TCP_SND_BUF && !pcb->snd_queuelen)
+            pcb->mss = 536;
+    });
+#else
+    (void)socket;
+#endif
+}
+
 // The pinned Arduino SDK has LWIP_SO_LINGER=0, so close() alone can
 // retain an abandoned send queue through minutes of TCP retransmissions.
 void abortHttpTransport(int socket) {

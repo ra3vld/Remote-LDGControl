@@ -5,7 +5,7 @@
  bool HTTPConnection::isTimeoutExceeded() {
 -  return _lastTransmissionTS + HTTPS_CONNECTION_TIMEOUT < millis();
 +  const uint32_t limit = _isKeepAlive && _connectionState == STATE_INITIAL
-+      ? 3000 : HTTPS_CONNECTION_TIMEOUT;
++      ? 10000 : HTTPS_CONNECTION_TIMEOUT;
 +  return uint32_t(millis() - _lastTransmissionTS) > limit;
  }
  

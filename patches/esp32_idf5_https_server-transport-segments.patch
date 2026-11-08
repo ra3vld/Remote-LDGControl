@@ -1,0 +1,7 @@
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -47,3 +47,4 @@
+       _httpHeaders = new HTTPHeaders();
+       refreshTimeout();
++      configureHttpTransport(_socket);
+       return _socket;

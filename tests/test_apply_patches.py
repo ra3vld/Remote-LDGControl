@@ -147,6 +147,43 @@ class ApplyPatchesTests(unittest.TestCase):
                 runpy.run_path(str(SCRIPT), init_globals={"Import": lambda name: None, "env": env})
         self.assertEqual(self.target.read_bytes(), b"begin\nnew\nadded\nend\n")
 
+    def test_explicit_legacy_upgrade_is_atomic_and_idempotent_with_crlf(self):
+        legacy = self.root / "previous.patch"
+        legacy.write_bytes(DIFF.replace(b"+new", b"+previous"))
+        self.target.write_bytes(b"unrelated\r\nbegin\r\nprevious\r\nadded\r\nend\r\n")
+        for _ in range(2):
+            hook.apply_patch(self.diff, self.lib, legacy)
+        self.assertEqual(self.target.read_bytes(), b"unrelated\r\nbegin\r\nnew\r\nadded\r\nend\r\n")
+
+    def test_incomplete_legacy_upgrade_leaves_all_files_untouched(self):
+        other = self.lib / "src" / "other.cpp"
+        self.target.write_bytes(b"begin\nprevious\nadded\nend\n")
+        other.write_bytes(b"begin\nold\nend\n")
+        legacy = self.root / "previous.patch"
+        legacy.write_bytes((DIFF + DIFF.replace(b"example.cpp", b"other.cpp")).replace(b"+new", b"+previous"))
+        self.diff.write_bytes(DIFF + DIFF.replace(b"example.cpp", b"other.cpp"))
+        before = [self.target.read_bytes(), other.read_bytes()]
+        with self.assertRaises(RuntimeError):
+            hook.apply_patch(self.diff, self.lib, legacy)
+        self.assertEqual([self.target.read_bytes(), other.read_bytes()], before)
+
+    def test_scons_upgrades_known_cached_patch_without_external_tools(self):
+        compat = self.root / "patches" / "compat"
+        compat.mkdir()
+        (compat / self.diff.name).write_bytes(DIFF.replace(b"+new", b"+previous"))
+        self.target.write_bytes(b"begin\nprevious\nadded\nend\n")
+
+        class Env(dict):
+            def subst(inner, value):
+                return str(self.root / "libdeps")
+
+        env = Env(PROJECT_DIR=str(self.root), PIOENV="windows")
+        with patch.dict(os.environ, {"PATH": ""}):
+            for _ in range(2):
+                runpy.run_path(str(SCRIPT), init_globals={"Import": lambda name: None, "env": env})
+        self.assertEqual(self.target.read_bytes(), b"begin\nnew\nadded\nend\n")
+        self.assertIn("upgrading cached", self.output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

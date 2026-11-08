@@ -1,0 +1,23 @@
+--- a/src/HTTPConnection.cpp
++++ b/src/HTTPConnection.cpp
+@@ -92,5 +92,7 @@
+  */
+ bool HTTPConnection::isTimeoutExceeded() {
+-  return _lastTransmissionTS + HTTPS_CONNECTION_TIMEOUT < millis();
++  const uint32_t limit = _isKeepAlive && _connectionState == STATE_INITIAL
++      ? 3000 : HTTPS_CONNECTION_TIMEOUT;
++  return uint32_t(millis() - _lastTransmissionTS) > limit;
+ }
+ 
+@@ -605,8 +607,8 @@
+               }
+             } else {
+-              if (res.isResponseBuffered()) {
+-                // If the response could be buffered:
++              if (res.isResponseBuffered() || !res.getHeader("Content-Length").empty()) {
++                // Known-length streams can be reused without a response cache:
+                 res.setHeader("Connection", "keep-alive");
+                 res.finalize();
+-                if (_clientState != CSTATE_CLOSED) {
++                if (!isClosed() && _clientState != CSTATE_CLOSED) {
+                   // Refresh the timeout for the new request

@@ -8,6 +8,7 @@ extern DisplayUI display;
 #endif
 #include "config.h"
 #include "mqtt_protocol.h"
+#include "mqtt_crypto_budget.h"
 #include "security.h"
 #include "config_store.h"
 #include "remote_protocol.h"
@@ -103,7 +104,7 @@ public:
     static void broadcastMeter(const char* json) {
         for (auto* h : s_subs) {
             if (!h->closed()) {
-                h->send(std::string(json), SEND_TYPE_TEXT);
+                h->sendLatest(std::string(json), SEND_TYPE_TEXT);
             }
         }
     }
@@ -395,6 +396,15 @@ static void h_status(hsv::HTTPRequest* req, hsv::HTTPResponse* res) {
     const DeviceConfig& cfg = configManager.get();
     mqtt["broker"] = cfg.mqttBroker;
     mqtt["port"] = cfg.mqttPort;
+    if (cfg.mqttPort == 8883) {
+        const auto crypto = ldg::mqttCryptoStats();
+        JsonObject tls = mqtt["tls"].to<JsonObject>();
+        tls["active"] = crypto.active;
+        tls["cryptoCheckpoints"] = crypto.checkpoints;
+        tls["cryptoYields"] = crypto.yields;
+        // Includes waits between checkpoints, not just accelerator CPU time.
+        tls["cryptoMaxGapUs"] = crypto.maxGapUs;
+    }
     sendJsonDocument(res, doc);
 }
 

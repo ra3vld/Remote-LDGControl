@@ -517,10 +517,10 @@ void setup() {
     // Avoid retaining several HTTP/WS frames through each DTIM sleep interval.
     WiFi.setSleep(false);
 #endif
-    // Certificate verification can keep the worker runnable for seconds.
-    // Share idle priority so IDLE0 still services its watchdog during TLS;
-    // the web server and control tasks retain their higher priorities.
-    if (xTaskCreatePinnedToCore(mqttTask, "mqtt", 7168, nullptr, tskIDLE_PRIORITY, &s_mqttTask, 0) != pdPASS)
+    // Share CPU0 with web/TCI instead of waiting behind every runnable network
+    // task. TLS yields after releasing the MPI accelerator so IDLE0 can still
+    // service its watchdog; UART metering keeps priority 2 on CPU1.
+    if (xTaskCreatePinnedToCore(mqttTask, "mqtt", 7168, nullptr, 1, &s_mqttTask, 0) != pdPASS)
         Serial.println("ERROR: MQTT task could not start");
 
 #ifdef WITH_DISPLAY
@@ -548,7 +548,9 @@ void setup() {
             for (;;) {
                 webServer.loop();
                 s_webLoopMs.store(millis());
-                vTaskDelay(pdMS_TO_TICKS(1));
+                // Socket polling every millisecond consumes CPU even with no
+                // clients. Leave time for the Wi-Fi/TCP workers and MQTT.
+                vTaskDelay(pdMS_TO_TICKS(5));
             }
         },
         "webServer", TLS_ENABLED ? 16384 : 8704, NULL, 1, &s_webTask, 0) != pdPASS)
