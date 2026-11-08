@@ -15,7 +15,8 @@ class CaBundleTests(unittest.TestCase):
         pem=header.split('R"CA(',1)[1].split(')CA"',1)[0].encode()
         direct=x509.load_pem_x509_certificate(pem).public_bytes(serialization.Encoding.DER)
         self.assertEqual((ROOT/'certs/mqtt/ISRG_Root_X2.der').read_bytes(),direct)
-        self.assertEqual((ROOT/'certs/mqtt/ISRG_Root_X2.pem').read_bytes(),pem)
+        expected=x509.load_der_x509_certificate((ROOT/'certs/mqtt/ISRG_Root_X2.der').read_bytes()).public_bytes(serialization.Encoding.PEM)
+        self.assertEqual(expected,pem)
 
     def test_sdk_offsets_lengths_and_keys_match_the_pinned_roots(self):
         paths=sorted((ROOT/'certs/mqtt').glob('*.der'))

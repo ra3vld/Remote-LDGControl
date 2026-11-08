@@ -21,11 +21,23 @@ class WebFlasher(unittest.TestCase):
     def tearDown(self):self.temp.cleanup()
     def test_real_parts_include_littlefs_and_preserve_nvs(self):
         wf.assemble(self.args);catalog=wf.check_catalog(self.output);parts=catalog['profiles'][0]['build']['parts']
+        with zipfile.ZipFile(self.output/'sources.zip') as z:
+            self.assertIn('certs/mqtt/ISRG_Root_X2.der',z.namelist());self.assertNotIn('certs/mqtt/ISRG_Root_X2.pem',z.namelist())
         self.assertEqual([p['offset'] for p in parts],[0x1000,0x8000,0xe000,0x10000,0x390000]);self.assertEqual(parts[-1]['path'],'littlefs.bin')
         manifest=json.loads((self.output/'firmware/esp32-3248s035c/manifest.json').read_text())
         self.assertIs(manifest['new_install_prompt_erase'],True);self.assertEqual(manifest['new_install_improv_wait_time'],0)
         self.output.joinpath('firmware/esp32-3248s035c/littlefs.bin').write_bytes(b'tampered')
         with self.assertRaisesRegex(ValueError,'checksum'):wf.check_catalog(self.output)
+    def test_publishable_sources_must_be_tracked(self):
+        self.args.allow_dirty=False
+        original=wf.git
+        def controlled(*args):
+            if args[0]=='ls-files':return original(*args).replace('src/main.cpp\0','')
+            if args[0]=='status':return ''
+            return original(*args)
+        with patch.object(wf,'git',side_effect=controlled):
+            with self.assertRaisesRegex(ValueError,'Untracked firmware'):wf.assemble(self.args)
+
     def test_bin_size_not_only_platformio_summary_is_enforced(self):
         self.folder.joinpath('firmware.bin').write_bytes(b'x'*(0x1c0000+1))
         with self.assertRaisesRegex(ValueError,'oversized'):wf.assemble(self.args)

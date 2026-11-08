@@ -48,7 +48,9 @@ def assemble(args):
     shutil.copytree(ROOT/'web-flasher/images',output/'images',dirs_exist_ok=True)
     digest=source_digest();head=git('rev-parse','HEAD')
     firmware_paths=[str(p.relative_to(ROOT)) for p in source_inputs()]+['web-flasher/profiles.json']
-    dirty=bool(git('status','--porcelain','--',*firmware_paths))
+    tracked=set(git('ls-files','-z').split('\0')) if (ROOT/'.git').exists() else None
+    if tracked is not None and not args.allow_dirty and not set(firmware_paths)<=tracked:raise ValueError('Untracked firmware inputs cannot be published')
+    dirty=bool(git('status','--porcelain','--',*firmware_paths,'scripts','web-flasher','certs/mqtt','package.json','LICENSE'))
     if dirty and not args.allow_dirty:raise ValueError('Commit firmware inputs before packaging a publishable catalog')
     catalog=dict(schema=1,firmware_commit=head,firmware_source_digest=digest,preview=dirty,profiles=[])
     for name in ('index.html','app.js','provisioning.js','serial-api.js','style.css','photos.json'):shutil.copy2(ROOT/'web-flasher'/name,output/name)
@@ -87,7 +89,8 @@ def assemble(args):
     for directory in ('scripts','web-flasher','certs/mqtt'):
         inputs.extend(p for p in (ROOT/directory).rglob('*') if p.is_file() and '__pycache__' not in p.parts)
     with zipfile.ZipFile(output/'sources.zip','w',zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(set(inputs)):archive.write(path,path.relative_to(ROOT))
+        for path in sorted(set(inputs)):
+            if tracked is None or path.relative_to(ROOT).as_posix() in tracked:archive.write(path,path.relative_to(ROOT))
         archive.writestr('SOURCE_IDENTITY.json',json.dumps(dict(commit=head,source_digest=digest,version=version(),preview=dirty),indent=2))
     (output/'catalog.json').write_text(json.dumps(catalog,ensure_ascii=False,indent=2)+'\n')
     (output/'website-provenance.json').write_text(json.dumps(dict(commit=head,source_digest=digest),indent=2)+'\n')
