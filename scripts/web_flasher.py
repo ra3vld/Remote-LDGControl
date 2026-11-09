@@ -43,6 +43,39 @@ def check_parts(parts,table):
         if any(start<b and a<end for a,b in ranges):raise ValueError('Overlapping image parts')
         ranges.append((start,end))
 
+def build_files(profile, folder, boot_app0=None):
+    """Validate a complete build before moving it between CI jobs."""
+    meta=embedded_metadata(folder/'firmware.elf')
+    if meta['profile']!=profile or meta['source_digest']!=source_digest() or meta['commit']!=git('rev-parse','HEAD') or meta['version']!=version() or meta['family']!='tuner':raise ValueError('Build/source identity mismatch: '+profile)
+    table=partitions(folder/'partitions.bin');app=table['app0'];fs=table['spiffs']
+    boot=Path(boot_app0) if boot_app0 else folder/'boot_app0.bin'
+    if not boot_app0 and not boot.exists():boot=Path(os.environ.get('PLATFORMIO_CORE_DIR',Path.home()/'.platformio'))/'packages-pioarduino-55.03.312-1/framework-arduinoespressif32/tools/partitions/boot_app0.bin'
+    specs=[('bootloader.bin',folder/'bootloader.bin',0x1000,0x7000),('partitions.bin',folder/'partitions.bin',0x8000,0x1000),('boot_app0.bin',boot,table['otadata']['offset'],table['otadata']['size']),('firmware.bin',folder/'firmware.bin',app['offset'],app['size']),('littlefs.bin',folder/'littlefs.bin',fs['offset'],fs['size'])]
+    parts=[]
+    for name,source,offset,limit in specs:
+        if not source.is_file() or not 0<source.stat().st_size<=limit:raise ValueError('Missing or oversized '+str(source))
+        parts.append(dict(path=name,offset=offset,size=source.stat().st_size,sha256=sha(source)))
+    check_parts(parts,table)
+    return meta,table,specs,parts
+
+def stage_profile(profile, build_root, output, boot_app0=None):
+    if profile not in {p['id'] for p in profiles()}:raise ValueError('Unknown firmware profile')
+    folder=Path(build_root)/profile
+    _,_,specs,_=build_files(profile,folder,boot_app0)
+    destination=Path(output)/profile;destination.mkdir(parents=True,exist_ok=True)
+    for name,source,_,_ in specs:shutil.copy2(source,destination/name)
+    shutil.copy2(folder/'firmware.elf',destination/'firmware.elf')
+    return destination
+
+def build_matrix(profile='all'):
+    ids=[p['id'] for p in profiles()]
+    if profile!='all' and profile not in ids:raise ValueError('Unknown firmware profile')
+    return dict(include=[dict(profile=p) for p in ids if profile=='all' or p==profile])
+
+def check_release_tag(tag):
+    if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',tag):raise ValueError('Stable release tag required')
+    if git('rev-parse',tag+'^{commit}')!=git('rev-parse','HEAD') or version()!=tag[1:]:raise ValueError('Release tag does not match the checked-out firmware')
+
 def assemble(args):
     output=Path(args.output).resolve();output.mkdir(parents=True,exist_ok=True)
     shutil.copytree(ROOT/'web-flasher/images',output/'images',dirs_exist_ok=True)
@@ -64,16 +97,9 @@ def assemble(args):
         except ValueError:
             if not args.allow_missing:raise
             item['build']=None;catalog['profiles'].append(item);continue
-        if meta['profile']!=profile['id'] or meta['source_digest']!=digest or meta['commit']!=head or meta['version']!=version() or meta['family']!='tuner':raise ValueError('Build/source identity mismatch: '+profile['id'])
-        table=partitions(folder/'partitions.bin');app=table['app0'];fs=table['spiffs']
+        meta,table,specs,parts=build_files(profile['id'],folder,args.boot_app0);app=table['app0']
         destination=output/'firmware'/profile['id'];destination.mkdir(parents=True,exist_ok=True)
-        boot=Path(args.boot_app0) if args.boot_app0 else Path(os.environ.get('PLATFORMIO_CORE_DIR',Path.home()/'.platformio'))/'packages-pioarduino-55.03.312-1/framework-arduinoespressif32/tools/partitions/boot_app0.bin'
-        specs=[('bootloader.bin',folder/'bootloader.bin',0x1000,0x7000),('partitions.bin',folder/'partitions.bin',0x8000,0x1000),('boot_app0.bin',boot,table['otadata']['offset'],table['otadata']['size']),('firmware.bin',folder/'firmware.bin',app['offset'],app['size']),('littlefs.bin',folder/'littlefs.bin',fs['offset'],fs['size'])]
-        parts=[]
-        for name,source,offset,limit in specs:
-            if not source.exists() or not 0<source.stat().st_size<=limit:raise ValueError('Missing or oversized '+str(source))
-            shutil.copy2(source,destination/name);parts.append(dict(path=name,offset=offset,size=source.stat().st_size,sha256=sha(source)))
-        check_parts(parts,table)
+        for name,source,_,_ in specs:shutil.copy2(source,destination/name)
         manifest=dict(name='LDG · '+profile['title'],version=meta['version'],new_install_prompt_erase=True,new_install_improv_wait_time=0,builds=[dict(chipFamily=meta['chipFamily'],parts=[dict(path=p['path'],offset=p['offset']) for p in parts])])
         (destination/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
         (destination/'build-metadata.json').write_text(json.dumps(dict(meta,parts=parts,partitions=table),ensure_ascii=False,indent=2)+'\n')
@@ -114,8 +140,11 @@ def check_catalog(root):
     return catalog
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['assemble','check','release']);parser.add_argument('--output',default='dist/web-flasher');parser.add_argument('--build-root',default='.pio/build');parser.add_argument('--boot-app0');parser.add_argument('--allow-missing',action='store_true');parser.add_argument('--allow-dirty',action='store_true');args=parser.parse_args()
-    if args.command=='assemble':assemble(args)
+    parser=argparse.ArgumentParser();parser.add_argument('command',choices=['assemble','check','release','matrix','stage','check-tag']);parser.add_argument('--profile',default='all');parser.add_argument('--tag');parser.add_argument('--output',default='dist/web-flasher');parser.add_argument('--build-root',default='.pio/build');parser.add_argument('--boot-app0');parser.add_argument('--allow-missing',action='store_true');parser.add_argument('--allow-dirty',action='store_true');args=parser.parse_args()
+    if args.command=='matrix':print(json.dumps(build_matrix(args.profile)))
+    elif args.command=='stage':print(stage_profile(args.profile,args.build_root,args.output,args.boot_app0))
+    elif args.command=='check-tag':check_release_tag(args.tag or '');print('Release tag identity: PASS')
+    elif args.command=='assemble':assemble(args)
     elif args.command=='check':check_catalog(args.output);print('Catalog checksums and NVS ranges: PASS')
     else:
         catalog=check_catalog(args.output)

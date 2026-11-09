@@ -1,4 +1,4 @@
-import argparse,hashlib,importlib.util,json,struct,sys,tempfile,unittest,zipfile
+import argparse,hashlib,importlib.util,json,shutil,struct,sys,tempfile,unittest,zipfile
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
@@ -58,6 +58,45 @@ class WebFlasher(unittest.TestCase):
 
     def test_nvs_overlap_is_rejected(self):
         with self.assertRaisesRegex(ValueError,'NVS'):wf.check_parts([dict(offset=0x9000,size=1)],wf.partitions(self.folder/'partitions.bin'))
+    def test_ci_artifact_packages_without_original_build_or_sdk(self):
+        staged=self.root/'downloaded-artifacts'
+        wf.stage_profile('esp32-3248s035c',self.build,staged,self.boot)
+        expected={p.name:wf.sha(p) for p in (staged/'esp32-3248s035c').iterdir()}
+        self.assertEqual(set(expected),{'firmware.elf','firmware.bin','littlefs.bin','bootloader.bin','partitions.bin','boot_app0.bin'})
+        shutil.rmtree(self.build);self.boot.unlink()
+        self.args.build_root=str(staged);self.args.boot_app0=None
+        with patch.dict(wf.os.environ,{'PLATFORMIO_CORE_DIR':str(self.root/'no-sdk-installed')}):wf.assemble(self.args)
+        wf.check_catalog(self.output)
+        for name,digest in expected.items():self.assertEqual(wf.sha(self.output/'firmware/esp32-3248s035c'/name),digest)
+
+    def test_ci_artifact_rejects_wrong_identity_and_missing_files(self):
+        output=self.root/'artifacts'
+        self.meta['profile']='esp32-display'
+        (self.folder/'firmware.elf').write_bytes(b'LDG_METADATA_V1:'+json.dumps(self.meta).encode()+b'\n')
+        with self.assertRaisesRegex(ValueError,'identity mismatch'):wf.stage_profile('esp32-3248s035c',self.build,output,self.boot)
+        self.assertFalse(output.exists())
+        self.meta['profile']='esp32-3248s035c'
+        (self.folder/'firmware.elf').write_bytes(b'LDG_METADATA_V1:'+json.dumps(self.meta).encode()+b'\n')
+        (self.folder/'littlefs.bin').unlink()
+        with self.assertRaisesRegex(ValueError,'Missing'):wf.stage_profile('esp32-3248s035c',self.build,output,self.boot)
+        self.assertFalse(output.exists())
+        with self.assertRaisesRegex(ValueError,'Unknown'):wf.stage_profile('../unknown',self.build,output,self.boot)
+
+    def test_ci_matrix_uses_catalog_profiles_and_rejects_unknown(self):
+        expected=[dict(profile=p['id']) for p in wf.profiles()]
+        self.assertEqual(wf.build_matrix(),dict(include=expected))
+        for profile in expected:self.assertEqual(wf.build_matrix(profile['profile']),dict(include=[profile]))
+        with self.assertRaisesRegex(ValueError,'Unknown'):wf.build_matrix('not-a-board')
+
+    def test_release_tag_must_be_stable_and_point_to_current_build(self):
+        for tag in ['v1.2.3-dev.1','1.2.3','v01.2.3']:
+            with self.assertRaisesRegex(ValueError,'Stable'):wf.check_release_tag(tag)
+        with patch.object(wf,'git',side_effect=['tag-commit','different-head']):
+            with self.assertRaisesRegex(ValueError,'does not match'):wf.check_release_tag('v1.2.3')
+        with patch.object(wf,'git',side_effect=['same-commit','same-commit']):wf.check_release_tag('v1.2.3')
+        with patch.object(wf,'git',side_effect=['same-commit','same-commit']):
+            with self.assertRaisesRegex(ValueError,'does not match'):wf.check_release_tag('v1.2.4')
+
     def test_ui_update_preserves_all_released_firmware_bytes(self):
         wf.assemble(self.args);catalog=json.loads((self.output/'catalog.json').read_text());catalog['preview']=False;catalog['profiles']=catalog['profiles'][:1];(self.output/'catalog.json').write_text(json.dumps(catalog))
         archive=self.root/'web-flasher-site.zip'

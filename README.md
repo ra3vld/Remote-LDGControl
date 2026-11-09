@@ -1,5 +1,10 @@
 # LDG Tuner Remote Controller
 
+[![CI: Firmware](https://github.com/ra3vld/Remote-LDGControl/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ra3vld/Remote-LDGControl/actions/workflows/build.yml)
+[![CD: Web flasher](https://github.com/ra3vld/Remote-LDGControl/actions/workflows/web-flasher-site.yml/badge.svg?branch=main)](https://github.com/ra3vld/Remote-LDGControl/actions/workflows/web-flasher-site.yml)
+
+[![Upload firmware](docs/images/upload-firmware.svg)](https://ra3vld.github.io/Remote-LDGControl/)
+
 ESP32 controller for LDG AT-1000ProII / AT-600ProII tuners, with a touchscreen,
 a browser interface, MQTT and Home Assistant integration. Use one board beside
 the tuner or a separate display connected over the local network.

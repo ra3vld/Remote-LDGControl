@@ -1,24 +1,35 @@
-name: Publish web flasher interface
+name: 'CD: Web flasher'
 on:
   push:
     branches: [main]
     paths:
-      - 'web-flasher/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'flash.html'
+      - 'web-flasher/index.html'
+      - 'web-flasher/app.js'
+      - 'web-flasher/provisioning.js'
+      - 'web-flasher/serial-api.js'
+      - 'web-flasher/style.css'
+      - 'web-flasher/photos.json'
+      - 'web-flasher/images/**'
       - 'scripts/update_web_flasher_site.py'
+      - 'tests/test_web_flasher_browser.cjs'
       - '.github/workflows/web-flasher-site.yml'
   workflow_dispatch:
   workflow_run:
-    workflows: [Build Firmware]
+    workflows: ['CI: Firmware']
     types: [completed]
 permissions:
   contents: read
 concurrency:
-  group: web-flasher-interface
+  group: web-flasher-website-${{ github.event_name }}-${{ github.event.workflow_run.id || github.ref }}
   cancel-in-progress: true
 jobs:
   build:
-    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'v')))
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     steps:
@@ -66,10 +77,12 @@ jobs:
         uses: actions/upload-pages-artifact@v4
         with:
           path: dist/web-flasher
+          retention-days: 1
   deploy:
     needs: build
     if: needs.build.outputs.tag != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       pages: write
       id-token: write
@@ -81,11 +94,14 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - env:
+      - name: Prevent publishing an older website or firmware catalog
+        env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.build.outputs.tag }}
-        run: test "$(gh release view --json tagName --jq .tagName)" = "$RELEASE_TAG"
+        run: |
+          test "$(gh release view --json tagName --jq .tagName)" = "$RELEASE_TAG"
+          test "$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
       - uses: actions/configure-pages@v5
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="80" viewBox="0 0 400 80" role="img" aria-labelledby="title">
+  <title id="title">Upload firmware</title>
+  <rect x="2" y="2" width="396" height="76" rx="16" fill="#9be6b4" stroke="#315c40" stroke-width="3"/>
+  <path d="M34 24v20a10 10 0 0 0 20 0V24m-24 0h28m-20-9v9m12-9v9M44 54v13" fill="none" stroke="#10261a" stroke-width="4" stroke-linecap="round"/>
+  <text x="230" y="51" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="29" font-weight="700" fill="#10261a">Upload firmware</text>
+</svg>

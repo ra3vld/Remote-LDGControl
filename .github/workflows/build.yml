@@ -1,43 +1,66 @@
-name: Build Firmware
+name: 'CI: Firmware'
 
 on:
   push:
     branches: [main]
     tags: ['v*']
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'flash.html'
+      - 'web-flasher/index.html'
+      - 'web-flasher/app.js'
+      - 'web-flasher/provisioning.js'
+      - 'web-flasher/serial-api.js'
+      - 'web-flasher/style.css'
+      - 'web-flasher/photos.json'
+      - 'web-flasher/images/**'
+      - 'scripts/update_web_flasher_site.py'
+      - 'tests/test_web_flasher_browser.cjs'
+      - '.github/workflows/web-flasher-site.yml'
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Build all boards or one selected profile
+        type: choice
+        default: all
+        options: [all, esp32-3248s035c, esp32-display, esp32-remote]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+      full: ${{ steps.matrix.outputs.full }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
+          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
-
-      - name: Install web build tools
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build production web assets
-        run: node scripts/build_web.cjs --out .pio/web-test-assets
-
-      - name: Install PlatformIO
-        run: python -m pip install -r requirements-platformio.txt -r requirements-test.txt
-
-      - name: Test dependency patch hook
+        run: npm run build:web
+      - name: Install pinned test tools
+        run: python3 -m pip install -r requirements-platformio.txt -r requirements-test.txt
+      - name: Python tests
         run: |
-          python - <<'PYTHON'
+          python3 - <<'PYTHON'
           import sys, unittest
           result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('tests', pattern='test_*.py'))
           for test, detail in result.errors + result.failures:
@@ -45,8 +68,7 @@ jobs:
               print(f'::error title={test.id()}::{detail}')
           sys.exit(not result.wasSuccessful())
           PYTHON
-
-      - name: Test browser meter scale synchronization
+      - name: Browser control and settings tests
         run: |
           node tests/test_web_assets.cjs
           node tests/test_meter_scale_web.cjs
@@ -62,51 +84,131 @@ jobs:
           node tests/test_live_status_web.cjs
           node tests/test_startup_web.cjs
           node tests/test_progressive_web.cjs
-
       - name: Native firmware tests
         run: pio test -e native -e native-display
-
-      - name: Build firmware and LittleFS
-        shell: bash
+      - name: Verify the release tag before building
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/web_flasher.py check-tag --tag "$RELEASE_TAG"
+      - id: matrix
+        env:
+          FULL_BUILD: ${{ startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.profile == 'all') }}
+          SINGLE_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'esp32-3248s035c' }}
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* || "${{ github.event_name }}" == workflow_dispatch ]]; then
-            ENVS="-e esp32-3248s035c -e esp32-display -e esp32-remote"
+          PROFILE="$SINGLE_PROFILE"
+          if [ "$FULL_BUILD" = true ]; then PROFILE=all; fi
+          echo "value=$(python3 scripts/web_flasher.py matrix --profile "$PROFILE")" >> "$GITHUB_OUTPUT"
+          echo "full=$FULL_BUILD" >> "$GITHUB_OUTPUT"
+
+  firmware:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UV_CONSTRAINT: ${{ github.workspace }}/requirements-platformio.txt
+      PIP_CONSTRAINT: ${{ github.workspace }}/requirements-platformio.txt
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.check.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Cache the pinned toolchains and SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/platforms
+            ~/.platformio/packages-pioarduino-55.03.312-1
+            .pio/compact-tls
+          key: ldg-pio-sdk-${{ runner.os }}-${{ hashFiles('platformio.ini', 'requirements-platformio.txt', 'scripts/build_compact_tls.py') }}-v1
+      - run: python3 -m pip install -r requirements-platformio.txt
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build matching application and LittleFS
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          pio run -e "$PROFILE" -j 4
+          pio run -e "$PROFILE" -t buildfs
+          python3 scripts/web_flasher.py stage --profile "$PROFILE" --output artifacts/firmware
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.profile }}
+          path: artifacts/firmware/
+          if-no-files-found: error
+          retention-days: 1
+
+  site:
+    needs: [check, firmware]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          path: artifacts/firmware
+          merge-multiple: true
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Package the transferred builds without an installed SDK
+        env:
+          FULL_BUILD: ${{ needs.check.outputs.full }}
+        run: |
+          if [ "$FULL_BUILD" = true ]; then
+            node scripts/build_web_flasher.mjs --build-root artifacts/firmware
           else
-            ENVS="-e esp32-3248s035c"
+            node scripts/build_web_flasher.mjs --build-root artifacts/firmware --allow-missing
           fi
-          pio run $ENVS
-          pio run $ENVS -t buildfs
-
-      - name: Package verified USB manifests
-        run: node scripts/build_web_flasher.mjs --output dist/web-flasher --allow-missing
-
+          python3 scripts/web_flasher.py check
       - name: Browser flasher and USB preconfiguration tests
         run: |
           npx playwright install --with-deps chromium
-          CHROMIUM_PATH="$(node -e "process.stdout.write(require('playwright').chromium.executablePath())")" node tests/test_web_flasher_browser.cjs
-
-      - name: Check release version and package artifacts
+          CHROMIUM_PATH="$(node -e "process.stdout.write(require('playwright').chromium.executablePath())")" npm run test:web-flasher
+      - name: Package the verified release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          python3 -c "import os,re,sys;sys.path.insert(0,'scripts');from firmware_identity import version;tag=os.environ['RELEASE_TAG'];assert re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',tag);assert version()==tag[1:]"
-          python3 scripts/web_flasher.py release --output dist/web-flasher
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web-flasher
-          path: dist/web-flasher
+          python3 scripts/web_flasher.py check-tag --tag "$RELEASE_TAG"
+          python3 scripts/web_flasher.py release
       - uses: actions/upload-artifact@v4
         if: startsWith(github.ref, 'refs/tags/')
         with:
           name: release
-          path: dist/release
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        with:
+          name: web-flasher
+          path: dist/web-flasher/
+          if-no-files-found: error
+          retention-days: 1
 
   release:
-    needs: build
+    needs: site
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -114,7 +216,21 @@ jobs:
         with:
           name: release
           path: release
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          generate_release_notes: true
+      - name: Verify and publish the complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        working-directory: release
+        run: |
+          sha256sum --check SHA256SUMS
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > ../release-is-draft; then
+            if [ "$(cat ../release-is-draft)" != true ]; then
+              echo 'This release is already published; its assets will stay unchanged.'
+              exit 0
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" ./*.zip SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest
